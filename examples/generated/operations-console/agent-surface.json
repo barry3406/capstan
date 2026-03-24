@@ -1,0 +1,197 @@
+{
+  "domain": {
+    "key": "operations",
+    "title": "Operations Console",
+    "description": "A simple example graph used to validate the first Capstan loop."
+  },
+  "summary": {
+    "capabilityCount": 1,
+    "taskCount": 0,
+    "artifactCount": 0
+  },
+  "entrypoints": [
+    "search",
+    "execute",
+    "task",
+    "artifact",
+    "startTask",
+    "getTaskRun",
+    "listTaskRuns",
+    "getArtifactRecord",
+    "listArtifactRecords"
+  ],
+  "transport": {
+    "adapter": "local",
+    "projections": [
+      {
+        "key": "local",
+        "protocol": "in_process",
+        "status": "active",
+        "entrypoint": "handleAgentSurfaceRequest",
+        "methods": [
+          "call"
+        ]
+      },
+      {
+        "key": "http_rpc",
+        "protocol": "http",
+        "status": "preview",
+        "entrypoint": "/rpc",
+        "methods": [
+          "GET",
+          "POST"
+        ]
+      },
+      {
+        "key": "mcp",
+        "protocol": "mcp",
+        "status": "preview",
+        "entrypoint": "createAgentSurfaceMcpAdapter",
+        "methods": [
+          "tools/list",
+          "tools/call"
+        ]
+      },
+      {
+        "key": "a2a",
+        "protocol": "a2a",
+        "status": "preview",
+        "entrypoint": "createAgentSurfaceA2aAdapter",
+        "methods": [
+          "agent/card",
+          "message/send"
+        ]
+      }
+    ],
+    "auth": {
+      "mode": "hook_optional",
+      "effects": [
+        "allow",
+        "approve",
+        "deny",
+        "redact"
+      ]
+    },
+    "operations": [
+      {
+        "key": "manifest",
+        "kind": "query",
+        "params": []
+      },
+      {
+        "key": "search",
+        "kind": "query",
+        "params": [
+          "query"
+        ]
+      },
+      {
+        "key": "execute",
+        "kind": "mutation",
+        "params": [
+          "key",
+          "input"
+        ]
+      },
+      {
+        "key": "task",
+        "kind": "query",
+        "params": [
+          "key"
+        ]
+      },
+      {
+        "key": "artifact",
+        "kind": "query",
+        "params": [
+          "key"
+        ]
+      },
+      {
+        "key": "startTask",
+        "kind": "mutation",
+        "params": [
+          "key",
+          "input"
+        ]
+      },
+      {
+        "key": "getTaskRun",
+        "kind": "query",
+        "params": [
+          "id"
+        ]
+      },
+      {
+        "key": "listTaskRuns",
+        "kind": "query",
+        "params": [
+          "taskKey"
+        ]
+      },
+      {
+        "key": "getArtifactRecord",
+        "kind": "query",
+        "params": [
+          "id"
+        ]
+      },
+      {
+        "key": "listArtifactRecords",
+        "kind": "query",
+        "params": [
+          "artifactKey"
+        ]
+      }
+    ]
+  },
+  "semantics": {
+    "capabilityStatuses": [
+      "not_implemented",
+      "completed",
+      "failed",
+      "blocked",
+      "approval_required",
+      "input_required",
+      "cancelled"
+    ],
+    "taskRunStatuses": [
+      "pending",
+      "running",
+      "input_required",
+      "approval_required",
+      "completed",
+      "failed",
+      "cancelled",
+      "blocked"
+    ],
+    "taskStatuses": [
+      "ready",
+      "awaiting_execution",
+      "running",
+      "input_required",
+      "approval_required",
+      "completed",
+      "failed",
+      "cancelled",
+      "blocked"
+    ]
+  },
+  "capabilities": [
+    {
+      "key": "listTickets",
+      "title": "List Tickets",
+      "mode": "read",
+      "resources": [
+        "ticket"
+      ],
+      "searchTerms": [
+        "listTickets",
+        "List Tickets",
+        "ticket"
+      ]
+    }
+  ],
+  "tasks": [],
+  "artifacts": []
+}

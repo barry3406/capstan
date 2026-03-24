@@ -1,0 +1,33 @@
+{
+  "extends": "./tsconfig.base.json",
+  "files": [],
+  "references": [
+    {
+      "path": "./packages/app-graph"
+    },
+    {
+      "path": "./packages/packs-core"
+    },
+    {
+      "path": "./packages/surface-web"
+    },
+    {
+      "path": "./packages/surface-agent"
+    },
+    {
+      "path": "./packages/compiler"
+    },
+    {
+      "path": "./packages/feedback"
+    },
+    {
+      "path": "./packages/release"
+    },
+    {
+      "path": "./packages/harness"
+    },
+    {
+      "path": "./packages/cli"
+    }
+  ]
+}

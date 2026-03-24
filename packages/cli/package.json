@@ -1,0 +1,23 @@
+{
+  "name": "@capstan/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "capstan": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "dev": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "@capstan/app-graph": "0.1.0",
+    "@capstan/brief": "0.1.0",
+    "@capstan/compiler": "0.1.0",
+    "@capstan/feedback": "0.1.0",
+    "@capstan/harness": "0.1.0",
+    "@capstan/packs-core": "0.1.0",
+    "@capstan/release": "0.1.0"
+  }
+}

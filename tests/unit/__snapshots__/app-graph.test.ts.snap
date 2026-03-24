@@ -1,0 +1,51 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`app-graph > upgrades legacy graphs and exposes deterministic introspection metadata 1`] = `
+{
+  "artifacts": [],
+  "capabilities": [
+    {
+      "key": "listTickets",
+      "mode": "read",
+      "resources": [
+        "ticket",
+      ],
+      "title": "List Tickets",
+    },
+  ],
+  "domain": {
+    "description": "Legacy graph",
+    "key": "operations",
+    "title": "Operations Console",
+  },
+  "packs": [],
+  "policies": [],
+  "resources": [
+    {
+      "fields": {
+        "status": {
+          "required": true,
+          "type": "string",
+        },
+        "title": {
+          "required": true,
+          "type": "string",
+        },
+      },
+      "key": "ticket",
+      "title": "Ticket",
+    },
+  ],
+  "tasks": [],
+  "version": 1,
+  "views": [
+    {
+      "capability": "listTickets",
+      "key": "ticketList",
+      "kind": "list",
+      "resource": "ticket",
+      "title": "Ticket List",
+    },
+  ],
+}
+`;

@@ -1,0 +1,922 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Operations Console · Capstan Human Surface</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --capstan-bg: #f5f3ef;
+        --capstan-panel: rgba(255, 255, 255, 0.9);
+        --capstan-border: rgba(27, 31, 35, 0.12);
+        --capstan-text: #111827;
+        --capstan-muted: #5b6470;
+        --capstan-accent: #1356d7;
+        --capstan-accent-soft: rgba(19, 86, 215, 0.08);
+        --capstan-success: #0f8a5f;
+        --capstan-warning: #9a6700;
+        --capstan-danger: #a53d2d;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+        background:
+          radial-gradient(circle at top left, rgba(19, 86, 215, 0.08), transparent 28%),
+          linear-gradient(180deg, #faf7f2 0%, var(--capstan-bg) 100%);
+        color: var(--capstan-text);
+      }
+
+      .capstan-shell {
+        display: grid;
+        grid-template-columns: 280px minmax(0, 1fr);
+        min-height: 100vh;
+      }
+
+      .capstan-sidebar {
+        padding: 28px 22px;
+        border-right: 1px solid var(--capstan-border);
+        background: rgba(255, 255, 255, 0.72);
+        backdrop-filter: blur(18px);
+        position: sticky;
+        top: 0;
+        align-self: start;
+        min-height: 100vh;
+      }
+
+      .capstan-brand {
+        margin-bottom: 24px;
+      }
+
+      .capstan-eyebrow {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        border-radius: 999px;
+        background: var(--capstan-accent-soft);
+        color: var(--capstan-accent);
+        padding: 6px 10px;
+        font-size: 12px;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+
+      .capstan-brand h1 {
+        margin: 14px 0 10px;
+        font-size: 24px;
+        line-height: 1.1;
+      }
+
+      .capstan-brand p {
+        margin: 0;
+        color: var(--capstan-muted);
+        line-height: 1.6;
+      }
+
+      .capstan-nav {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      .capstan-nav-link {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        padding: 12px 14px;
+        border-radius: 16px;
+        border: 1px solid transparent;
+        color: inherit;
+        text-decoration: none;
+        background: rgba(255, 255, 255, 0.6);
+      }
+
+      .capstan-nav-link:hover {
+        border-color: var(--capstan-border);
+        background: white;
+      }
+
+      .capstan-nav-link.is-active {
+        border-color: rgba(19, 86, 215, 0.18);
+        background: rgba(19, 86, 215, 0.08);
+      }
+
+      .capstan-nav-path {
+        font-family: "IBM Plex Mono", "SFMono-Regular", monospace;
+        font-size: 11px;
+        color: var(--capstan-muted);
+      }
+
+      .capstan-main {
+        padding: 28px 28px 40px;
+      }
+
+      .capstan-summary {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
+        margin-bottom: 20px;
+      }
+
+      .capstan-summary-card,
+      .capstan-route,
+      .capstan-card {
+        border: 1px solid var(--capstan-border);
+        border-radius: 22px;
+        background: var(--capstan-panel);
+        box-shadow: 0 18px 50px rgba(15, 23, 42, 0.06);
+      }
+
+      .capstan-summary-card {
+        padding: 18px 20px;
+      }
+
+      .capstan-summary-card span {
+        display: block;
+        color: var(--capstan-muted);
+        font-size: 13px;
+        margin-bottom: 10px;
+      }
+
+      .capstan-summary-card strong {
+        font-size: 28px;
+      }
+
+      .capstan-route {
+        padding: 24px;
+        margin-bottom: 18px;
+      }
+
+      .capstan-route[hidden] {
+        display: none;
+      }
+
+      .capstan-route[data-runtime-state="loading"] .capstan-grid,
+      .capstan-route[data-runtime-state="empty"] .capstan-grid,
+      .capstan-route[data-runtime-state="error"] .capstan-grid {
+        opacity: 0.52;
+      }
+
+      .capstan-route header {
+        display: flex;
+        justify-content: space-between;
+        gap: 18px;
+        align-items: flex-start;
+        margin-bottom: 20px;
+      }
+
+      .capstan-route h2 {
+        margin: 0 0 8px;
+        font-size: 24px;
+      }
+
+      .capstan-route p {
+        margin: 0;
+        color: var(--capstan-muted);
+        line-height: 1.6;
+      }
+
+      .capstan-badges {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
+      .capstan-badge {
+        border-radius: 999px;
+        padding: 7px 10px;
+        font-size: 12px;
+        font-weight: 600;
+        border: 1px solid var(--capstan-border);
+        background: white;
+      }
+
+      .capstan-badge[data-tone="approval_required"] {
+        color: var(--capstan-warning);
+        background: rgba(154, 103, 0, 0.08);
+      }
+
+      .capstan-badge[data-tone="blocked"] {
+        color: var(--capstan-danger);
+        background: rgba(165, 61, 45, 0.08);
+      }
+
+      .capstan-badge[data-tone="redacted"] {
+        color: var(--capstan-accent);
+        background: var(--capstan-accent-soft);
+      }
+
+      .capstan-badge[data-tone="allowed"] {
+        color: var(--capstan-success);
+        background: rgba(15, 138, 95, 0.08);
+      }
+
+      .capstan-grid {
+        display: grid;
+        grid-template-columns: 1.5fr 1fr;
+        gap: 16px;
+      }
+
+      .capstan-card {
+        padding: 18px;
+      }
+
+      .capstan-card h3 {
+        margin: 0 0 14px;
+        font-size: 16px;
+      }
+
+      .capstan-table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+
+      .capstan-table th,
+      .capstan-table td {
+        text-align: left;
+        padding: 10px 0;
+        border-bottom: 1px solid var(--capstan-border);
+        font-size: 14px;
+      }
+
+      .capstan-table th {
+        color: var(--capstan-muted);
+        font-size: 12px;
+        letter-spacing: 0.03em;
+        text-transform: uppercase;
+      }
+
+      .capstan-form-grid,
+      .capstan-fields {
+        display: grid;
+        gap: 12px;
+      }
+
+      .capstan-field {
+        border: 1px solid var(--capstan-border);
+        border-radius: 16px;
+        padding: 14px;
+        background: rgba(255, 255, 255, 0.78);
+      }
+
+      .capstan-field strong {
+        display: block;
+        margin-bottom: 6px;
+      }
+
+      .capstan-field span,
+      .capstan-action-note,
+      .capstan-state-copy {
+        color: var(--capstan-muted);
+        font-size: 13px;
+        line-height: 1.5;
+      }
+
+      .capstan-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+      }
+
+      .capstan-action {
+        padding: 12px 14px;
+        border-radius: 16px;
+        border: 1px solid var(--capstan-border);
+        background: white;
+      }
+
+      .capstan-action strong {
+        display: block;
+        margin-bottom: 4px;
+      }
+
+      .capstan-action-button,
+      .capstan-state-toggle {
+        margin-top: 12px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        border: 1px solid transparent;
+        border-radius: 999px;
+        background: var(--capstan-text);
+        color: white;
+        padding: 9px 12px;
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+
+      .capstan-action-button:hover,
+      .capstan-state-toggle:hover {
+        background: #1f2937;
+      }
+
+      .capstan-action-button:disabled,
+      .capstan-state-toggle:disabled {
+        cursor: not-allowed;
+        opacity: 0.56;
+      }
+
+      .capstan-state-toggle {
+        background: white;
+        color: var(--capstan-text);
+        border-color: var(--capstan-border);
+      }
+
+      .capstan-state-toggle.is-active {
+        background: rgba(19, 86, 215, 0.08);
+        color: var(--capstan-accent);
+        border-color: rgba(19, 86, 215, 0.2);
+      }
+
+      .capstan-runtime-header {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        align-items: center;
+        margin-bottom: 14px;
+      }
+
+      .capstan-runtime-pill {
+        display: inline-flex;
+        align-items: center;
+        padding: 7px 10px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 600;
+        background: rgba(19, 86, 215, 0.08);
+        color: var(--capstan-accent);
+      }
+
+      .capstan-runtime-pill[data-route-result-state="idle"] {
+        background: rgba(17, 24, 39, 0.04);
+        color: var(--capstan-muted);
+      }
+
+      .capstan-runtime-pill[data-route-result-state="completed"] {
+        background: rgba(15, 138, 95, 0.08);
+        color: var(--capstan-success);
+      }
+
+      .capstan-runtime-pill[data-route-result-state="redacted"] {
+        background: var(--capstan-accent-soft);
+        color: var(--capstan-accent);
+      }
+
+      .capstan-runtime-pill[data-route-result-state="approval_required"],
+      .capstan-runtime-pill[data-route-result-state="not_implemented"] {
+        background: rgba(154, 103, 0, 0.08);
+        color: var(--capstan-warning);
+      }
+
+      .capstan-runtime-pill[data-route-result-state="blocked"],
+      .capstan-runtime-pill[data-route-result-state="error"] {
+        background: rgba(165, 61, 45, 0.08);
+        color: var(--capstan-danger);
+      }
+
+      .capstan-runtime-toggles {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-bottom: 12px;
+      }
+
+      .capstan-states {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .capstan-state {
+        border-radius: 18px;
+        padding: 16px;
+        background: rgba(17, 24, 39, 0.02);
+        border: 1px dashed var(--capstan-border);
+      }
+
+      .capstan-state strong {
+        display: block;
+        margin-bottom: 8px;
+      }
+
+      .capstan-state.is-active {
+        border-style: solid;
+        border-color: rgba(19, 86, 215, 0.25);
+        background: rgba(19, 86, 215, 0.06);
+      }
+
+      .capstan-state-bars {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        margin-top: 12px;
+      }
+
+      .capstan-state-bar {
+        height: 8px;
+        border-radius: 999px;
+        background: linear-gradient(90deg, rgba(19, 86, 215, 0.18), rgba(19, 86, 215, 0.05));
+      }
+
+      .capstan-input,
+      .capstan-textarea {
+        width: 100%;
+        margin-top: 10px;
+        border: 1px solid var(--capstan-border);
+        border-radius: 14px;
+        background: white;
+        color: var(--capstan-text);
+        padding: 10px 12px;
+        font: inherit;
+      }
+
+      .capstan-textarea {
+        min-height: 110px;
+        resize: vertical;
+      }
+
+      .capstan-console {
+        border: 1px solid var(--capstan-border);
+        border-radius: 22px;
+        background: rgba(17, 24, 39, 0.96);
+        color: #f8fafc;
+        padding: 20px 22px;
+        margin-bottom: 18px;
+        box-shadow: 0 18px 50px rgba(15, 23, 42, 0.16);
+      }
+
+      .capstan-console header {
+        display: flex;
+        justify-content: space-between;
+        gap: 14px;
+        align-items: flex-start;
+        margin-bottom: 14px;
+      }
+
+      .capstan-console h2 {
+        margin: 0 0 8px;
+        font-size: 18px;
+      }
+
+      .capstan-console p {
+        margin: 0;
+        color: rgba(248, 250, 252, 0.72);
+        line-height: 1.5;
+      }
+
+      .capstan-console-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+        margin-bottom: 14px;
+      }
+
+      .capstan-console-card {
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 18px;
+        padding: 14px;
+        background: rgba(255, 255, 255, 0.04);
+      }
+
+      .capstan-console-card span {
+        display: block;
+        font-size: 12px;
+        color: rgba(248, 250, 252, 0.68);
+        margin-bottom: 6px;
+      }
+
+      .capstan-console-card strong {
+        display: block;
+      }
+
+      .capstan-console pre {
+        margin: 0;
+        overflow: auto;
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.04);
+        padding: 16px;
+        font-family: "IBM Plex Mono", "SFMono-Regular", monospace;
+        font-size: 12px;
+        line-height: 1.6;
+      }
+
+      .capstan-route-result {
+        margin: 0;
+        overflow: auto;
+        border-radius: 18px;
+        background: rgba(17, 24, 39, 0.04);
+        border: 1px solid var(--capstan-border);
+        padding: 16px;
+        font-family: "IBM Plex Mono", "SFMono-Regular", monospace;
+        font-size: 12px;
+        line-height: 1.6;
+      }
+
+      @media (max-width: 1024px) {
+        .capstan-shell {
+          grid-template-columns: 1fr;
+        }
+
+        .capstan-sidebar {
+          position: static;
+          min-height: auto;
+          border-right: none;
+          border-bottom: 1px solid var(--capstan-border);
+        }
+
+        .capstan-grid,
+        .capstan-summary,
+        .capstan-console-grid,
+        .capstan-states {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="capstan-shell">
+      <aside class="capstan-sidebar">
+        <div class="capstan-brand">
+          <span class="capstan-eyebrow">Capstan Human Surface</span>
+          <h1>Operations Console</h1>
+          <p>A simple example graph used to validate the first Capstan loop.</p>
+        </div>
+        <nav class="capstan-nav">
+          <a class="capstan-nav-link is-active" href="#workspaceHome" data-route-nav="workspaceHome"><span>Workspace</span><span class="capstan-nav-path">/</span></a><a class="capstan-nav-link" href="#ticketDetail" data-route-nav="ticketDetail"><span>Ticket Detail</span><span class="capstan-nav-path">/resources/ticket/detail</span></a><a class="capstan-nav-link" href="#ticketForm" data-route-nav="ticketForm"><span>Ticket Form</span><span class="capstan-nav-path">/resources/ticket/form</span></a><a class="capstan-nav-link" href="#ticketList" data-route-nav="ticketList"><span>Ticket List</span><span class="capstan-nav-path">/resources/ticket/list</span></a>
+        </nav>
+      </aside>
+      <main class="capstan-main">
+        <section class="capstan-summary">
+          <article class="capstan-summary-card"><span>Resources</span><strong>1</strong></article>
+          <article class="capstan-summary-card"><span>Capabilities</span><strong>1</strong></article>
+          <article class="capstan-summary-card"><span>Projected Routes</span><strong>4</strong></article>
+        </section>
+        <section class="capstan-console" aria-live="polite">
+  <header>
+    <div>
+      <h2>Operator Console</h2>
+      <p>Navigate between projected routes, preview runtime states, and trigger generated actions without leaving the human surface shell.</p>
+    </div>
+    <span class="capstan-runtime-pill" data-console-mode>ready</span>
+  </header>
+  <div class="capstan-console-grid">
+    <article class="capstan-console-card">
+      <span>Active Route</span>
+      <strong data-console-route>Operations Console Workspace</strong>
+    </article>
+    <article class="capstan-console-card">
+      <span>Navigation</span>
+      <strong>4 projected entries</strong>
+    </article>
+    <article class="capstan-console-card">
+      <span>Action Reachability</span>
+      <strong>4 surfaced actions</strong>
+    </article>
+  </div>
+  <pre data-console-output>{
+  "event": "human_surface.ready",
+  "activeRoute": "workspaceHome",
+  "routes": 4
+}</pre>
+</section>
+        <section class="capstan-route" id="workspaceHome" data-route-key="workspaceHome">
+  <header>
+    <div>
+      <h2>Operations Console Workspace</h2>
+      <p>A simple example graph used to validate the first Capstan loop.</p>
+    </div>
+    <div class="capstan-badges">
+      <span class="capstan-badge">workspace</span><span class="capstan-badge">generated</span>
+      <span class="capstan-badge">/</span>
+    </div>
+  </header>
+  <div class="capstan-grid">
+    <div class="capstan-card">
+  <h3>Field Projection</h3>
+  <div class="capstan-fields"><div class="capstan-field"><strong>No fields projected</strong><span>This route is driven by higher-level graph semantics rather than a direct resource schema.</span></div></div>
+</div>
+    <div class="capstan-card">
+      <h3>Capability Actions</h3>
+      <div class="capstan-actions"><article class="capstan-action">
+  <strong>List Tickets</strong>
+  <div class="capstan-badges">
+    <span class="capstan-badge" data-tone="allowed">ready</span>
+    <span class="capstan-badge">run action</span>
+  </div>
+  <p class="capstan-action-note">Execute the &quot;listTickets&quot; capability from the projected human surface.</p>
+  <button type="button" class="capstan-action-button" data-route-action="workspaceHome" data-action-key="listTickets">run action · List Tickets</button>
+</article></div>
+    </div>
+  </div>
+  <div class="capstan-card" style="margin-top: 16px;">
+    <div class="capstan-runtime-header">
+      <h3>Route Runtime</h3>
+      <span class="capstan-runtime-pill" data-route-mode-label="workspaceHome">ready</span>
+    </div>
+    <div class="capstan-runtime-toggles">
+      <button type="button" class="capstan-state-toggle is-active" data-route-mode-target="workspaceHome" data-route-mode="ready">Ready</button>
+      <button type="button" class="capstan-state-toggle" data-route-mode-target="workspaceHome" data-route-mode="loading">Loading</button>
+      <button type="button" class="capstan-state-toggle" data-route-mode-target="workspaceHome" data-route-mode="empty">Empty</button>
+      <button type="button" class="capstan-state-toggle" data-route-mode-target="workspaceHome" data-route-mode="error">Error</button>
+    </div>
+    <p class="capstan-state-copy" data-route-state-copy="workspaceHome">Ready to operate operations console workspace from the generated human surface.</p>
+    <div class="capstan-states">
+      <article class="capstan-state is-active" data-state-card-route="workspaceHome" data-state-card-value="ready">
+  <strong>Ready</strong>
+  <p class="capstan-state-copy">Ready to operate operations console workspace from the generated human surface.</p>
+  
+</article>
+      <article class="capstan-state" data-state-card-route="workspaceHome" data-state-card-value="loading">
+  <strong>Loading</strong>
+  <p class="capstan-state-copy">Loading operations console workspace from the generated human surface runtime.</p>
+  <div class="capstan-state-bars"><div class="capstan-state-bar"></div><div class="capstan-state-bar" style="width: 74%;"></div><div class="capstan-state-bar" style="width: 56%;"></div></div>
+</article>
+      <article class="capstan-state" data-state-card-route="workspaceHome" data-state-card-value="empty">
+  <strong>Empty</strong>
+  <p class="capstan-state-copy">No operations console workspace data is available yet. Connect a capability handler or seed data to populate this route.</p>
+  
+</article>
+      <article class="capstan-state" data-state-card-route="workspaceHome" data-state-card-value="error">
+  <strong>Error</strong>
+  <p class="capstan-state-copy">This route is projected, but its backing runtime path has not been connected yet.</p>
+  
+</article>
+    </div>
+  </div>
+  <div class="capstan-card" style="margin-top: 16px;">
+    <div class="capstan-runtime-header">
+      <h3>Execution Result</h3>
+      <span class="capstan-runtime-pill" data-route-result-status="workspaceHome" data-route-result-state="idle">idle</span>
+    </div>
+    <p class="capstan-state-copy">The last execution payload for this route is captured here so the projected surface, the operator, and future agent consumers stay aligned.</p>
+    <pre class="capstan-route-result" data-route-result-output="workspaceHome">{
+  "event": "route.idle",
+  "routeKey": "workspaceHome",
+  "message": "No capability has been executed for this route yet."
+}</pre>
+  </div>
+</section><section class="capstan-route" id="ticketDetail" data-route-key="ticketDetail" hidden>
+  <header>
+    <div>
+      <h2>Ticket Detail</h2>
+      <p>A generated detail route derived from the &quot;ticket&quot; resource schema.</p>
+    </div>
+    <div class="capstan-badges">
+      <span class="capstan-badge">detail</span><span class="capstan-badge">generated</span><span class="capstan-badge">resource:ticket</span>
+      <span class="capstan-badge">/resources/ticket/detail</span>
+    </div>
+  </header>
+  <div class="capstan-grid">
+    <div class="capstan-card">
+  <h3>Detail Projection</h3>
+  <div class="capstan-fields"><div class="capstan-field">
+  <strong>Status</strong>
+  <span>string · required</span>
+  <div class="capstan-input" style="margin-top: 10px;" data-route-detail-value-route="ticketDetail" data-field-key="status">Status sample</div>
+</div><div class="capstan-field">
+  <strong>Title</strong>
+  <span>string · required</span>
+  <div class="capstan-input" style="margin-top: 10px;" data-route-detail-value-route="ticketDetail" data-field-key="title">Title sample</div>
+</div></div>
+</div>
+    <div class="capstan-card">
+      <h3>Capability Actions</h3>
+      <div class="capstan-actions"><article class="capstan-action">
+  <strong>List Tickets</strong>
+  <div class="capstan-badges">
+    <span class="capstan-badge" data-tone="allowed">ready</span>
+    <span class="capstan-badge">run action</span>
+  </div>
+  <p class="capstan-action-note">Execute the &quot;listTickets&quot; capability from the projected human surface.</p>
+  <button type="button" class="capstan-action-button" data-route-action="ticketDetail" data-action-key="listTickets">run action · List Tickets</button>
+</article></div>
+    </div>
+  </div>
+  <div class="capstan-card" style="margin-top: 16px;">
+    <div class="capstan-runtime-header">
+      <h3>Route Runtime</h3>
+      <span class="capstan-runtime-pill" data-route-mode-label="ticketDetail">ready</span>
+    </div>
+    <div class="capstan-runtime-toggles">
+      <button type="button" class="capstan-state-toggle is-active" data-route-mode-target="ticketDetail" data-route-mode="ready">Ready</button>
+      <button type="button" class="capstan-state-toggle" data-route-mode-target="ticketDetail" data-route-mode="loading">Loading</button>
+      <button type="button" class="capstan-state-toggle" data-route-mode-target="ticketDetail" data-route-mode="empty">Empty</button>
+      <button type="button" class="capstan-state-toggle" data-route-mode-target="ticketDetail" data-route-mode="error">Error</button>
+    </div>
+    <p class="capstan-state-copy" data-route-state-copy="ticketDetail">Ready to operate ticket detail from the generated human surface.</p>
+    <div class="capstan-states">
+      <article class="capstan-state is-active" data-state-card-route="ticketDetail" data-state-card-value="ready">
+  <strong>Ready</strong>
+  <p class="capstan-state-copy">Ready to operate ticket detail from the generated human surface.</p>
+  
+</article>
+      <article class="capstan-state" data-state-card-route="ticketDetail" data-state-card-value="loading">
+  <strong>Loading</strong>
+  <p class="capstan-state-copy">Loading ticket detail from the generated human surface runtime.</p>
+  <div class="capstan-state-bars"><div class="capstan-state-bar"></div><div class="capstan-state-bar" style="width: 74%;"></div><div class="capstan-state-bar" style="width: 56%;"></div></div>
+</article>
+      <article class="capstan-state" data-state-card-route="ticketDetail" data-state-card-value="empty">
+  <strong>Empty</strong>
+  <p class="capstan-state-copy">No ticket detail data is available yet. Connect a capability handler or seed data to populate this route.</p>
+  
+</article>
+      <article class="capstan-state" data-state-card-route="ticketDetail" data-state-card-value="error">
+  <strong>Error</strong>
+  <p class="capstan-state-copy">This route is projected, but its backing runtime path has not been connected yet.</p>
+  
+</article>
+    </div>
+  </div>
+  <div class="capstan-card" style="margin-top: 16px;">
+    <div class="capstan-runtime-header">
+      <h3>Execution Result</h3>
+      <span class="capstan-runtime-pill" data-route-result-status="ticketDetail" data-route-result-state="idle">idle</span>
+    </div>
+    <p class="capstan-state-copy">The last execution payload for this route is captured here so the projected surface, the operator, and future agent consumers stay aligned.</p>
+    <pre class="capstan-route-result" data-route-result-output="ticketDetail">{
+  "event": "route.idle",
+  "routeKey": "ticketDetail",
+  "message": "No capability has been executed for this route yet."
+}</pre>
+  </div>
+</section><section class="capstan-route" id="ticketForm" data-route-key="ticketForm" hidden>
+  <header>
+    <div>
+      <h2>Ticket Form</h2>
+      <p>A generated form route derived from the &quot;ticket&quot; resource schema.</p>
+    </div>
+    <div class="capstan-badges">
+      <span class="capstan-badge">form</span><span class="capstan-badge">generated</span><span class="capstan-badge">resource:ticket</span>
+      <span class="capstan-badge">/resources/ticket/form</span>
+    </div>
+  </header>
+  <div class="capstan-grid">
+    <div class="capstan-card">
+  <h3>Form Projection</h3>
+  <div class="capstan-form-grid"><label class="capstan-field">
+  <strong>Status</strong>
+  <span>string · required</span>
+  <input class="capstan-input" data-route-input-key="ticketForm" data-field-key="status" type="text" value="Status sample" />
+</label><label class="capstan-field">
+  <strong>Title</strong>
+  <span>string · required</span>
+  <input class="capstan-input" data-route-input-key="ticketForm" data-field-key="title" type="text" value="Title sample" />
+</label></div>
+</div>
+    <div class="capstan-card">
+      <h3>Capability Actions</h3>
+      <div class="capstan-actions"><article class="capstan-action">
+  <strong>List Tickets</strong>
+  <div class="capstan-badges">
+    <span class="capstan-badge" data-tone="allowed">ready</span>
+    <span class="capstan-badge">run action</span>
+  </div>
+  <p class="capstan-action-note">Execute the &quot;listTickets&quot; capability from the projected human surface.</p>
+  <button type="button" class="capstan-action-button" data-route-action="ticketForm" data-action-key="listTickets">run action · List Tickets</button>
+</article></div>
+    </div>
+  </div>
+  <div class="capstan-card" style="margin-top: 16px;">
+    <div class="capstan-runtime-header">
+      <h3>Route Runtime</h3>
+      <span class="capstan-runtime-pill" data-route-mode-label="ticketForm">ready</span>
+    </div>
+    <div class="capstan-runtime-toggles">
+      <button type="button" class="capstan-state-toggle is-active" data-route-mode-target="ticketForm" data-route-mode="ready">Ready</button>
+      <button type="button" class="capstan-state-toggle" data-route-mode-target="ticketForm" data-route-mode="loading">Loading</button>
+      <button type="button" class="capstan-state-toggle" data-route-mode-target="ticketForm" data-route-mode="empty">Empty</button>
+      <button type="button" class="capstan-state-toggle" data-route-mode-target="ticketForm" data-route-mode="error">Error</button>
+    </div>
+    <p class="capstan-state-copy" data-route-state-copy="ticketForm">Ready to operate ticket form from the generated human surface.</p>
+    <div class="capstan-states">
+      <article class="capstan-state is-active" data-state-card-route="ticketForm" data-state-card-value="ready">
+  <strong>Ready</strong>
+  <p class="capstan-state-copy">Ready to operate ticket form from the generated human surface.</p>
+  
+</article>
+      <article class="capstan-state" data-state-card-route="ticketForm" data-state-card-value="loading">
+  <strong>Loading</strong>
+  <p class="capstan-state-copy">Loading ticket form from the generated human surface runtime.</p>
+  <div class="capstan-state-bars"><div class="capstan-state-bar"></div><div class="capstan-state-bar" style="width: 74%;"></div><div class="capstan-state-bar" style="width: 56%;"></div></div>
+</article>
+      <article class="capstan-state" data-state-card-route="ticketForm" data-state-card-value="empty">
+  <strong>Empty</strong>
+  <p class="capstan-state-copy">No ticket form data is available yet. Connect a capability handler or seed data to populate this route.</p>
+  
+</article>
+      <article class="capstan-state" data-state-card-route="ticketForm" data-state-card-value="error">
+  <strong>Error</strong>
+  <p class="capstan-state-copy">This route is projected, but its backing runtime path has not been connected yet.</p>
+  
+</article>
+    </div>
+  </div>
+  <div class="capstan-card" style="margin-top: 16px;">
+    <div class="capstan-runtime-header">
+      <h3>Execution Result</h3>
+      <span class="capstan-runtime-pill" data-route-result-status="ticketForm" data-route-result-state="idle">idle</span>
+    </div>
+    <p class="capstan-state-copy">The last execution payload for this route is captured here so the projected surface, the operator, and future agent consumers stay aligned.</p>
+    <pre class="capstan-route-result" data-route-result-output="ticketForm">{
+  "event": "route.idle",
+  "routeKey": "ticketForm",
+  "message": "No capability has been executed for this route yet."
+}</pre>
+  </div>
+</section><section class="capstan-route" id="ticketList" data-route-key="ticketList" hidden>
+  <header>
+    <div>
+      <h2>Ticket List</h2>
+      <p>A generated list route derived from the &quot;ticket&quot; resource schema.</p>
+    </div>
+    <div class="capstan-badges">
+      <span class="capstan-badge">list</span><span class="capstan-badge">graph-defined</span><span class="capstan-badge">resource:ticket</span>
+      <span class="capstan-badge">/resources/ticket/list</span>
+    </div>
+  </header>
+  <div class="capstan-grid">
+    <div class="capstan-card">
+  <h3>List Projection</h3>
+  <table class="capstan-table">
+    <thead><tr><th>Status</th><th>Title</th></tr></thead>
+    <tbody data-route-table-body="ticketList"><tr><td>Status sample</td><td>Title sample</td></tr></tbody>
+  </table>
+</div>
+    <div class="capstan-card">
+      <h3>Capability Actions</h3>
+      <div class="capstan-actions"><article class="capstan-action">
+  <strong>List Tickets</strong>
+  <div class="capstan-badges">
+    <span class="capstan-badge" data-tone="allowed">ready</span>
+    <span class="capstan-badge">run action</span>
+  </div>
+  <p class="capstan-action-note">Execute the &quot;listTickets&quot; capability from the projected human surface.</p>
+  <button type="button" class="capstan-action-button" data-route-action="ticketList" data-action-key="listTickets">run action · List Tickets</button>
+</article></div>
+    </div>
+  </div>
+  <div class="capstan-card" style="margin-top: 16px;">
+    <div class="capstan-runtime-header">
+      <h3>Route Runtime</h3>
+      <span class="capstan-runtime-pill" data-route-mode-label="ticketList">ready</span>
+    </div>
+    <div class="capstan-runtime-toggles">
+      <button type="button" class="capstan-state-toggle is-active" data-route-mode-target="ticketList" data-route-mode="ready">Ready</button>
+      <button type="button" class="capstan-state-toggle" data-route-mode-target="ticketList" data-route-mode="loading">Loading</button>
+      <button type="button" class="capstan-state-toggle" data-route-mode-target="ticketList" data-route-mode="empty">Empty</button>
+      <button type="button" class="capstan-state-toggle" data-route-mode-target="ticketList" data-route-mode="error">Error</button>
+    </div>
+    <p class="capstan-state-copy" data-route-state-copy="ticketList">Ready to operate ticket list from the generated human surface.</p>
+    <div class="capstan-states">
+      <article class="capstan-state is-active" data-state-card-route="ticketList" data-state-card-value="ready">
+  <strong>Ready</strong>
+  <p class="capstan-state-copy">Ready to operate ticket list from the generated human surface.</p>
+  
+</article>
+      <article class="capstan-state" data-state-card-route="ticketList" data-state-card-value="loading">
+  <strong>Loading</strong>
+  <p class="capstan-state-copy">Loading ticket list from the generated human surface runtime.</p>
+  <div class="capstan-state-bars"><div class="capstan-state-bar"></div><div class="capstan-state-bar" style="width: 74%;"></div><div class="capstan-state-bar" style="width: 56%;"></div></div>
+</article>
+      <article class="capstan-state" data-state-card-route="ticketList" data-state-card-value="empty">
+  <strong>Empty</strong>
+  <p class="capstan-state-copy">No ticket list data is available yet. Connect a capability handler or seed data to populate this route.</p>
+  
+</article>
+      <article class="capstan-state" data-state-card-route="ticketList" data-state-card-value="error">
+  <strong>Error</strong>
+  <p class="capstan-state-copy">This route is projected, but its backing runtime path has not been connected yet.</p>
+  
+</article>
+    </div>
+  </div>
+  <div class="capstan-card" style="margin-top: 16px;">
+    <div class="capstan-runtime-header">
+      <h3>Execution Result</h3>
+      <span class="capstan-runtime-pill" data-route-result-status="ticketList" data-route-result-state="idle">idle</span>
+    </div>
+    <p class="capstan-state-copy">The last execution payload for this route is captured here so the projected surface, the operator, and future agent consumers stay aligned.</p>
+    <pre class="capstan-route-result" data-route-result-output="ticketList">{
+  "event": "route.idle",
+  "routeKey": "ticketList",
+  "message": "No capability has been executed for this route yet."
+}</pre>
+  </div>
+</section>
+      </main>
+    </div>
+    <script type="module">
+      import { mountHumanSurfaceBrowser } from "./dist/human-surface/index.js";
+
+      mountHumanSurfaceBrowser(document);
+    </script>
+  </body>
+</html>

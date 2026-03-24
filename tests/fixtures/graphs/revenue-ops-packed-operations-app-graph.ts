@@ -1,0 +1,57 @@
+import type { AppGraph } from "../../../packages/app-graph/src/index.ts";
+
+export const revenueOpsPackedOperationsAppGraph = {
+  version: 1,
+  domain: {
+    key: "operations",
+    title: "Operations Revenue Hub",
+    description: "A packed operations app that composes revenue operations starter primitives."
+  },
+  packs: [
+    {
+      key: "revenueOps",
+      options: {
+        entityName: "Revenue Ops Exception",
+        entityPlural: "Revenue Ops Exceptions",
+        resourceKey: "revenueOpsException",
+        artifactKey: "revenueOpsDigest"
+      }
+    }
+  ],
+  resources: [
+    {
+      key: "project",
+      title: "Project",
+      fields: {
+        name: {
+          type: "string",
+          required: true
+        },
+        status: {
+          type: "string",
+          required: true
+        }
+      }
+    }
+  ],
+  capabilities: [
+    {
+      key: "listProjects",
+      title: "List Projects",
+      mode: "read",
+      resources: ["project"],
+      policy: "tenantScoped"
+    }
+  ],
+  views: [
+    {
+      key: "projectList",
+      title: "Projects",
+      kind: "list",
+      resource: "project",
+      capability: "listProjects"
+    }
+  ]
+} satisfies AppGraph;
+
+export default revenueOpsPackedOperationsAppGraph;

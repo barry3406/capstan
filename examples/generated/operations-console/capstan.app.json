@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "domain": {
+    "key": "operations",
+    "title": "Operations Console",
+    "description": "A simple example graph used to validate the first Capstan loop."
+  },
+  "packs": [],
+  "resources": [
+    {
+      "key": "ticket",
+      "title": "Ticket",
+      "fields": {
+        "status": {
+          "type": "string",
+          "required": true
+        },
+        "title": {
+          "type": "string",
+          "required": true
+        }
+      }
+    }
+  ],
+  "capabilities": [
+    {
+      "key": "listTickets",
+      "title": "List Tickets",
+      "mode": "read",
+      "resources": [
+        "ticket"
+      ]
+    }
+  ],
+  "tasks": [],
+  "policies": [],
+  "artifacts": [],
+  "views": [
+    {
+      "key": "ticketList",
+      "title": "Ticket List",
+      "kind": "list",
+      "resource": "ticket",
+      "capability": "listTickets"
+    }
+  ]
+}

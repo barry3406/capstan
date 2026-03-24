@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "environments": [
+    {
+      "key": "preview",
+      "variables": {
+        "NODE_ENV": "production",
+        "PORT": "3000"
+      },
+      "secrets": []
+    },
+    {
+      "key": "release",
+      "variables": {
+        "NODE_ENV": "production"
+      },
+      "secrets": []
+    }
+  ]
+}

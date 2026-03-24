@@ -1,0 +1,30 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`surface-web > projects workspace and resource routes from graph semantics 1`] = `
+[
+  {
+    "actionCount": 1,
+    "key": "workspaceHome",
+    "kind": "workspace",
+    "path": "/",
+  },
+  {
+    "actionCount": 1,
+    "key": "ticketDetail",
+    "kind": "detail",
+    "path": "/resources/ticket/detail",
+  },
+  {
+    "actionCount": 1,
+    "key": "ticketForm",
+    "kind": "form",
+    "path": "/resources/ticket/form",
+  },
+  {
+    "actionCount": 1,
+    "key": "ticketList",
+    "kind": "list",
+    "path": "/resources/ticket/list",
+  },
+]
+`;
