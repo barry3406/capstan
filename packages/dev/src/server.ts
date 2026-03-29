@@ -11,6 +11,8 @@ import type { RouteManifest, RouteEntry } from "@zauso-ai/capstan-router";
 import {
   createContext,
   createApproval,
+  createRequestLogger,
+  csrfProtection,
   mountApprovalRoutes,
 } from "@zauso-ai/capstan-core";
 import type { APIDefinition, HttpMethod, CapstanContext, CapstanAuthContext } from "@zauso-ai/capstan-core";
@@ -220,6 +222,7 @@ async function buildApp(
   const app = new Hono<HonoEnv>();
 
   // Global middleware ---------------------------------------------------------
+  app.use("*", createRequestLogger());
   app.use("*", cors());
 
   // --- Auth middleware -------------------------------------------------------
@@ -262,6 +265,14 @@ async function buildApp(
     }
     await next();
   });
+
+  // --- CSRF middleware -------------------------------------------------------
+  // Only enable CSRF protection when cookie-based session auth is configured.
+  // API-key-only setups don't need CSRF because Bearer tokens are not sent
+  // automatically by browsers.
+  if (config.auth?.session) {
+    app.use("*", csrfProtection());
+  }
 
   // Route metadata accumulated for the agent manifest / OpenAPI spec.
   const routeRegistry: Array<{
@@ -949,7 +960,28 @@ export async function createDevServer(
 
   // --- HTTP server ----------------------------------------------------------
 
+  /** Track active connections so we can drain them during graceful shutdown. */
+  const activeConnections = new Set<import("node:net").Socket>();
+
+  /** Whether the server is shutting down (stop accepting new work). */
+  let shuttingDown = false;
+
   const server: Server = createServer(async (req, res) => {
+    // Track the underlying socket for graceful shutdown.
+    if (req.socket) {
+      activeConnections.add(req.socket);
+      req.socket.once("close", () => {
+        activeConnections.delete(req.socket);
+      });
+    }
+
+    // Reject new requests while shutting down.
+    if (shuttingDown) {
+      res.writeHead(503, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Server is shutting down" }));
+      return;
+    }
+
     try {
       const url = new URL(req.url ?? "/", `http://${req.headers.host ?? `${host}:${port}`}`);
 
@@ -1094,23 +1126,61 @@ export async function createDevServer(
     },
 
     stop(): Promise<void> {
-      return new Promise((resolve, reject) => {
+      if (shuttingDown) {
+        // Already shutting down — return a resolved promise.
+        return Promise.resolve();
+      }
+
+      shuttingDown = true;
+      // eslint-disable-next-line no-console
+      console.log("[capstan] Shutting down gracefully...");
+
+      return new Promise<void>((resolve) => {
+        // 1. Close the file watcher so no more rebuilds are triggered.
         watcher.close();
-        // Close all open SSE connections so they don't keep the server alive.
+
+        // 2. Close all open SSE connections so they don't keep the server alive.
         for (const client of sseClients) {
           try { client.end(); } catch { /* already closed */ }
         }
         sseClients.clear();
-        server.close((err) => {
-          if (err) {
-            reject(err);
-          } else {
-            resolve();
-          }
+
+        // 3. Stop accepting new connections.
+        server.close(() => {
+          resolve();
         });
+
+        // 4. Wait for active connections to drain (with a 5 s timeout).
+        const SHUTDOWN_TIMEOUT = 5_000;
+        const timer = setTimeout(() => {
+          // Force-close remaining connections after timeout.
+          for (const socket of activeConnections) {
+            try { socket.destroy(); } catch { /* already closed */ }
+          }
+          activeConnections.clear();
+        }, SHUTDOWN_TIMEOUT);
+
+        // Don't let the timer keep the process alive if all connections
+        // close before the timeout fires.
+        if (typeof timer === "object" && "unref" in timer) {
+          timer.unref();
+        }
       });
     },
   };
+
+  // --- Signal handlers -------------------------------------------------------
+  // Register SIGINT/SIGTERM so that `Ctrl-C` and container stop signals
+  // trigger a graceful shutdown instead of an abrupt process exit.
+
+  function onSignal(): void {
+    void instance.stop().then(() => {
+      process.exit(0);
+    });
+  }
+
+  process.on("SIGINT", onSignal);
+  process.on("SIGTERM", onSignal);
 
   return instance;
 }

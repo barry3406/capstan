@@ -1157,6 +1157,7 @@ import { pathToFileURL } from "node:url";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { serveStatic } from "@hono/node-server/serve-static";
+import { createRequestLogger, csrfProtection } from "@zauso-ai/capstan-core";
 
 const cwd = process.cwd();
 const distDir = resolve(cwd, "dist");
@@ -1171,6 +1172,7 @@ const MAX_BODY_SIZE = parseInt(process.env.CAPSTAN_MAX_BODY_SIZE ?? "1048576", 1
 
 async function main() {
   const app = new Hono();
+  app.use("*", createRequestLogger());
   app.use("*", cors());
 
   // --- Auth middleware -------------------------------------------------------
@@ -1240,6 +1242,12 @@ async function main() {
     }
     await next();
   });
+
+  // --- CSRF middleware -------------------------------------------------------
+  // Only enable CSRF protection when cookie-based session auth is configured.
+  if (authSessionConfig && authSessionConfig.secret) {
+    app.use("*", csrfProtection());
+  }
 
   // Helper: build a CapstanContext from Hono context, using resolved auth.
   function buildCtx(c) {
@@ -1618,6 +1626,14 @@ async function main() {
     }
   });
 
+  // Track active connections for graceful shutdown.
+  const activeConnections = new Set();
+
+  server.on("connection", (socket) => {
+    activeConnections.add(socket);
+    socket.once("close", () => activeConnections.delete(socket));
+  });
+
   server.listen(port, host, () => {
     console.log("");
     console.log("  Capstan production server running");
@@ -1628,6 +1644,35 @@ async function main() {
     if (policyRegistry.size > 0) console.log("  Policies: " + policyRegistry.size + " custom policies loaded");
     console.log("");
   });
+
+  // --- Graceful shutdown ---------------------------------------------------
+  let shuttingDown = false;
+
+  function gracefulShutdown() {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log("Shutting down gracefully...");
+
+    // Stop accepting new connections.
+    server.close(() => {
+      process.exit(0);
+    });
+
+    // Force-close remaining connections after 5 seconds.
+    const timer = setTimeout(() => {
+      for (const socket of activeConnections) {
+        try { socket.destroy(); } catch {}
+      }
+      process.exit(0);
+    }, 5000);
+
+    if (typeof timer === "object" && "unref" in timer) {
+      timer.unref();
+    }
+  }
+
+  process.on("SIGINT", gracefulShutdown);
+  process.on("SIGTERM", gracefulShutdown);
 }
 
 main().catch((err) => {

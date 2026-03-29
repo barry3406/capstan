@@ -1,5 +1,5 @@
 import type { AgentConfig, AgentManifest, RouteRegistryEntry } from "./types.js";
-import type { A2AAgentCard } from "./a2a.js";
+import type { A2AAgentCard, A2AStreamEvent } from "./a2a.js";
 import { generateAgentManifest } from "./manifest.js";
 import { generateOpenApiSpec } from "./openapi.js";
 import { createMcpServer } from "./mcp.js";
@@ -105,6 +105,9 @@ export class CapabilityRegistry {
     ) => Promise<unknown>,
   ): {
     handleRequest: (body: unknown) => Promise<unknown>;
+    handleStreamRequest: (
+      body: unknown,
+    ) => AsyncGenerator<A2AStreamEvent, void, unknown>;
     getAgentCard: () => A2AAgentCard;
   } {
     return createA2AHandler(this.config, this.routes, executeRoute);

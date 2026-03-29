@@ -2,6 +2,7 @@
 
 export { defineAPI, getAPIRegistry, clearAPIRegistry } from "./api.js";
 export { defineMiddleware } from "./middleware.js";
+export { csrfProtection } from "./csrf.js";
 export { definePolicy, enforcePolicies } from "./policy.js";
 export { defineConfig, env } from "./config.js";
 export { createCapstanApp } from "./server.js";
@@ -33,6 +34,8 @@ export type {
   PolicyEffect,
   RouteMetadata,
 } from "./types.js";
+
+export { createRequestLogger } from "./logger.js";
 
 export { verifyCapstanApp, renderRuntimeVerifyText } from "./verify.js";
 export type { VerifyReport, VerifyDiagnostic, VerifyStep } from "./verify.js";
