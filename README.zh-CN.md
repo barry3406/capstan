@@ -12,8 +12,8 @@
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Tests](https://img.shields.io/badge/tests-128%20passing-brightgreen?logo=bun&logoColor=white)](https://bun.sh)
-[![Version](https://img.shields.io/badge/version-0.2.0-orange)](https://github.com/barry3406/capstan)
+[![Tests](https://img.shields.io/badge/tests-177%20passing-brightgreen?logo=bun&logoColor=white)](https://bun.sh)
+[![Version](https://img.shields.io/badge/version-1.0.0--beta.3-orange)](https://github.com/barry3406/capstan)
 [![ESM](https://img.shields.io/badge/ESM-only-blue)](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Modules)
 
 [快速上手](#-快速上手) · [为什么选择 Capstan？](#-为什么选择-capstan) · [架构](#-架构) · [参与贡献](#-参与贡献)
@@ -76,8 +76,8 @@
 ## 🚀 快速上手
 
 ```bash
-# 1. 创建新项目
-npx create-capstan-app my-app
+# 1. 创建新项目（支持模板选择）
+npx create-capstan-app my-app --template tickets
 cd my-app
 
 # 2. 启动开发服务器
@@ -100,6 +100,13 @@ npx capstan add model ticket       # → app/models/ticket.model.ts
 npx capstan add api tickets        # → app/routes/tickets/index.api.ts (GET + POST)
 npx capstan add page tickets       # → app/routes/tickets/index.page.tsx
 npx capstan add policy requireAuth # → app/policies/index.ts
+```
+
+### 生产部署
+
+```bash
+npx capstan build    # 编译并优化应用
+npx capstan start    # 以生产模式启动
 ```
 
 ---
@@ -128,7 +135,7 @@ export const GET = defineAPI({
   description: "List all tickets",
   capability: "read",
   resource: "ticket",
-  async handler({ input }) {
+  async handler({ input, ctx, params }) {
     const tickets = await db.query.tickets.findMany();
     return { tickets };
   },
@@ -144,7 +151,7 @@ export const POST = defineAPI({
   capability: "write",
   resource: "ticket",
   policy: "requireAuth",  // ← 对人类和 Agent 统一执行策略
-  async handler({ input }) {
+  async handler({ input, ctx, params }) {
     return { id: crypto.randomUUID(), title: input.title };
   },
 });
@@ -155,8 +162,8 @@ export const POST = defineAPI({
 | 协议 | 端点 |
 |------|------|
 | REST API | `GET /tickets` · `POST /tickets` |
-| MCP Tool | `get_tickets` · `post_tickets` |
-| A2A Skill | `get_tickets` · `post_tickets` |
+| MCP Tool | `get_tickets` · `post_tickets`（带完整类型参数） |
+| A2A Skill | `get_tickets` · `post_tickets`（支持流式传输） |
 | OpenAPI | 自动收录至 `/openapi.json` |
 
 ### `defineModel` — 声明式数据模型，自动生成 CRUD
@@ -296,9 +303,9 @@ $ npx capstan verify --json
 |------|------|------|
 | `GET /.well-known/capstan.json` | Capstan | Agent 能力清单 |
 | `GET /.well-known/agent.json` | A2A | Google Agent-to-Agent 名片 |
-| `POST /.well-known/a2a` | A2A | JSON-RPC 处理程序，用于 Agent 任务 |
+| `POST /.well-known/a2a` | A2A | JSON-RPC 处理程序，支持流式传输 |
 | `GET /openapi.json` | OpenAPI 3.1 | 完整的 API 规范 |
-| `GET /capstan/approvals` | Capstan | 人机协同审批队列 |
+| `GET /capstan/approvals` | Capstan | 人机协同审批队列（需鉴权） |
 | `npx capstan mcp` | MCP (stdio) | 接入 Claude Desktop / Cursor |
 
 ### 接入 Claude Desktop
@@ -315,7 +322,20 @@ $ npx capstan verify --json
 }
 ```
 
-每个 `defineAPI()` 路由都会成为一个 MCP 工具。Claude 可以原生地与你的应用交互。
+每个 `defineAPI()` 路由都会成为一个带完整类型参数的 MCP 工具。Claude 可以原生地与你的应用交互。
+
+---
+
+## 🔒 安全
+
+Capstan 内置多层安全防护：
+
+- **CSRF 保护** — 自动防御跨站请求伪造攻击
+- **请求体大小限制** — 可配置的请求体上限，防止过大载荷
+- **审批端点鉴权** — `/capstan/approvals` 端点要求身份认证
+- **可配置 CORS** — 灵活的跨域资源共享策略
+- **Agent API Key 认证** — Agent 请求通过 API Key 鉴权
+- **权限策略系统** — `definePolicy()` 对人类和 Agent 统一执行访问控制
 
 ---
 
@@ -336,17 +356,18 @@ app/
     ticket.model.ts         ← Drizzle ORM + defineModel()
   policies/
     index.ts                ← definePolicy() 权限规则
+  public/                   ← 静态资源目录
 ```
 
 **技术栈：** [Hono](https://hono.dev)（HTTP）· [Drizzle](https://orm.drizzle.team)（ORM — 支持 SQLite、PostgreSQL、MySQL）· [React](https://react.dev)（SSR）· [Zod](https://zod.dev)（校验）· [Bun](https://bun.sh)（测试）
 
-**开发特性：** 热重载（SSE）、`app/public/` 静态资源托管、`capstan build` + `capstan start` 生产部署
+**开发特性：** 实时刷新（SSE）、`app/public/` 静态资源托管、结构化日志、`capstan build` + `capstan start` 生产部署
 
 ---
 
 ## 📦 包一览
 
-### 运行时框架
+### 运行时框架（9 个包）
 
 | 包名 | 说明 |
 |------|------|
@@ -357,35 +378,23 @@ app/
 | `@zauso-ai/capstan-agent` | `CapabilityRegistry`、MCP 服务器、A2A 适配器、OpenAPI 生成器 |
 | `@zauso-ai/capstan-react` | SSR + loader、布局组件、`Outlet`、客户端水合 |
 | `@zauso-ai/capstan-dev` | 开发服务器，支持文件监听、路由热重载、MCP/A2A 端点 |
-| `@zauso-ai/capstan-cli` | CLI 命令：`dev`、`build`、`verify`、`add`、`mcp`、`db:*` |
-| `create-capstan-app` | 项目脚手架（空白模板和 tickets 模板） |
+| `@zauso-ai/capstan-cli` | CLI 命令：`dev`、`build`、`start`、`verify`、`add`、`mcp`、`db:*` |
+| `create-capstan-app` | 项目脚手架（空白模板和 tickets 模板，支持 `--template` 参数） |
 
-### 编译系统（旧版）
-
-| 包名 | 说明 |
-|------|------|
-| `@zauso-ai/capstan-app-graph` | 应用图谱的 Schema 定义、校验与差异比对 |
-| `@zauso-ai/capstan-brief` | Brief 到图谱的编译 |
-| `@zauso-ai/capstan-compiler` | 图谱到应用代码的生成 |
-| `@zauso-ai/capstan-packs-core` | 可组合功能包（认证、多租户、工作流、计费、电商） |
-| `@zauso-ai/capstan-surface-web` | Web 表层投射 |
-| `@zauso-ai/capstan-surface-agent` | Agent 表层投射 |
-| `@zauso-ai/capstan-feedback` | 验证与诊断 |
-| `@zauso-ai/capstan-release` | 发布规划与回滚 |
-| `@zauso-ai/capstan-harness` | 持久化任务运行时 |
+> 遗留编译系统包已分离至独立仓库，不再包含在运行时发行版中。
 
 ---
 
 ## 🧑‍💻 参与贡献
 
-Capstan 目前处于早期开发阶段（`v0.2.0`），欢迎贡献！
+Capstan 目前处于 Beta 阶段（`v1.0.0-beta.3`），欢迎贡献！
 
 ```bash
 git clone https://github.com/barry3406/capstan.git
 cd capstan
 npm install
-npm run build        # 构建全部 18 个包
-npm run test:new     # Bun 测试（128 项，约 500ms）
+npm run build        # 构建所有包
+npm run test:new     # Bun 测试（177 项测试，全部通过）
 ```
 
 ### 开发规范
@@ -394,12 +403,12 @@ npm run test:new     # Bun 测试（128 项，约 500ms）
 - 严格模式 TypeScript（`exactOptionalPropertyTypes`、`verbatimModuleSyntax`）
 - 所有 API 处理函数使用 `defineAPI()` + Zod Schema
 - 写操作端点必须关联 `policy`
+- Handler 签名：`handler({ input, ctx, params })`
 
 ### 期待你的参与
 
-- A2A 流式传输支持
-- 更多脚手架模板
 - 文档站点建设
+- 更多脚手架模板
 - 更多集成测试
 
 ---

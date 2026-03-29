@@ -12,8 +12,8 @@
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Tests](https://img.shields.io/badge/tests-128%20passing-brightgreen?logo=bun&logoColor=white)](https://bun.sh)
-[![Version](https://img.shields.io/badge/version-0.2.0-orange)](https://github.com/barry3406/capstan)
+[![Tests](https://img.shields.io/badge/tests-177%20passing-brightgreen?logo=bun&logoColor=white)](https://bun.sh)
+[![Version](https://img.shields.io/badge/version-1.0.0--beta.3-orange)](https://github.com/barry3406/capstan)
 [![ESM](https://img.shields.io/badge/ESM-only-blue)](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Modules)
 
 [快速開始](#-快速開始) · [為什麼選擇 Capstan？](#-為什麼選擇-capstan) · [架構](#-架構) · [參與貢獻](#-參與貢獻)
@@ -68,6 +68,7 @@
 | **AI TDD 迴圈** | 無 | 無 | `capstan verify --json` 含修復清單 |
 | **自動 CRUD** | 無 | 無 | `defineModel()` 產生型別化路由檔案 |
 | **全端支援** | React SSR + API | 僅 API | React SSR + API + Agent 協定 |
+| **安全性** | 自行處理 | 自行處理 | CSRF 防護、請求主體限制、核准端點驗證、可設定 CORS |
 
 **核心理念：** 你建構的每個 API 本身就是一個 AI 工具。不需要包裝器、不需要轉接器、不需要第二套程式碼。
 
@@ -102,6 +103,13 @@ npx capstan add page tickets       # → app/routes/tickets/index.page.tsx
 npx capstan add policy requireAuth # → app/policies/index.ts
 ```
 
+### 正式部署
+
+```bash
+npx capstan build    # 建置正式版本
+npx capstan start    # 啟動正式伺服器
+```
+
 ---
 
 ## 📖 程式碼範例
@@ -128,7 +136,7 @@ export const GET = defineAPI({
   description: "List all tickets",
   capability: "read",
   resource: "ticket",
-  async handler({ input }) {
+  async handler({ input, ctx, params }) {
     const tickets = await db.query.tickets.findMany();
     return { tickets };
   },
@@ -144,7 +152,7 @@ export const POST = defineAPI({
   capability: "write",
   resource: "ticket",
   policy: "requireAuth",  // ← 人類與 Agent 皆會執行此策略
-  async handler({ input }) {
+  async handler({ input, ctx, params }) {
     return { id: crypto.randomUUID(), title: input.title };
   },
 });
@@ -155,8 +163,8 @@ export const POST = defineAPI({
 | 協定 | 端點 |
 |------|------|
 | REST API | `GET /tickets` · `POST /tickets` |
-| MCP 工具 | `get_tickets` · `post_tickets` |
-| A2A 技能 | `get_tickets` · `post_tickets` |
+| MCP 工具 | `get_tickets` · `post_tickets`（具有真實的型別參數） |
+| A2A 技能 | `get_tickets` · `post_tickets`（支援串流傳輸） |
 | OpenAPI | 記錄於 `/openapi.json` |
 
 ### `defineModel` — 宣告式資料模型搭配自動 CRUD
@@ -296,10 +304,10 @@ $ npx capstan verify --json
 |------|------|------|
 | `GET /.well-known/capstan.json` | Capstan | 包含所有能力的 Agent 清單 |
 | `GET /.well-known/agent.json` | A2A | Google Agent 間通訊的 Agent 名片 |
-| `POST /.well-known/a2a` | A2A | Agent 任務的 JSON-RPC 處理器 |
+| `POST /.well-known/a2a` | A2A | Agent 任務的 JSON-RPC 處理器（支援串流傳輸） |
 | `GET /openapi.json` | OpenAPI 3.1 | 完整 API 規格文件 |
 | `GET /capstan/approvals` | Capstan | 人機協作核准佇列 |
-| `npx capstan mcp` | MCP (stdio) | 供 Claude Desktop / Cursor 使用 |
+| `npx capstan mcp` | MCP (stdio) | 供 Claude Desktop / Cursor 使用（具有真實的型別參數） |
 
 ### 連接至 Claude Desktop
 
@@ -340,27 +348,31 @@ app/
 
 **技術堆疊：** [Hono](https://hono.dev)（HTTP）· [Drizzle](https://orm.drizzle.team)（ORM——SQLite、PostgreSQL、MySQL）· [React](https://react.dev)（SSR）· [Zod](https://zod.dev)（驗證）· [Bun](https://bun.sh)（測試）
 
-**開發功能：** 即時重載（SSE）、從 `app/public/` 提供靜態資源、`capstan build` + `capstan start` 用於正式環境
+**開發特性：** 即時重新載入（SSE）、從 `app/public/` 提供靜態資源、結構化日誌
+
+**正式部署：** `capstan build` + `capstan start`
+
+**安全性：** CSRF 防護、請求主體限制、核准端點驗證、可設定 CORS
 
 ---
 
 ## 📦 套件
 
-### 執行時框架
+### 執行時期套件（9 個）
 
 | 套件 | 說明 |
 |------|------|
 | `@zauso-ai/capstan-core` | Hono 伺服器、`defineAPI`、`defineMiddleware`、`definePolicy`、核准工作流程、驗證器 |
 | `@zauso-ai/capstan-router` | 檔案式路由（`.page.tsx`、`.api.ts`、`_layout.tsx`、`_middleware.ts`） |
-| `@zauso-ai/capstan-db` | Drizzle ORM、`defineModel`、欄位/關聯輔助函式、遷移、自動 CRUD |
+| `@zauso-ai/capstan-db` | Drizzle ORM、`defineModel`、欄位/關聯輔助函式、遷移、自動 CRUD（SQLite + PostgreSQL + MySQL） |
 | `@zauso-ai/capstan-auth` | JWT 工作階段、Agent 用 API 金鑰驗證、權限檢查 |
 | `@zauso-ai/capstan-agent` | `CapabilityRegistry`、MCP 伺服器、A2A 轉接器、OpenAPI 產生器 |
 | `@zauso-ai/capstan-react` | 搭配 loader 的 SSR、版面配置、`Outlet`、hydration |
-| `@zauso-ai/capstan-dev` | 開發伺服器，含檔案監看、熱路由重載、MCP/A2A 端點 |
-| `@zauso-ai/capstan-cli` | CLI：`dev`、`build`、`verify`、`add`、`mcp`、`db:*` |
+| `@zauso-ai/capstan-dev` | 開發伺服器，含檔案監看、即時重新載入、MCP/A2A 端點 |
+| `@zauso-ai/capstan-cli` | CLI：`dev`、`build`、`start`、`verify`、`add`、`mcp`、`db:*` |
 | `create-capstan-app` | 專案鷹架工具（空白與 tickets 範本） |
 
-### 編譯器系統（舊版）
+### 編譯器系統（舊版——已分離）
 
 | 套件 | 說明 |
 |------|------|
@@ -378,14 +390,14 @@ app/
 
 ## 🧑‍💻 參與貢獻
 
-Capstan 目前處於早期開發階段（`v0.2.0`）。歡迎參與貢獻！
+Capstan 目前為 `v1.0.0-beta.3`。歡迎參與貢獻！
 
 ```bash
 git clone https://github.com/barry3406/capstan.git
 cd capstan
 npm install
-npm run build        # 建置全部 18 個套件
-npm run test:new     # Bun 測試（128 項測試，約 500 毫秒）
+npm run build        # 建置所有套件
+npm run test:new     # Bun 測試（177 項測試通過）
 ```
 
 ### 開發慣例
@@ -394,10 +406,10 @@ npm run test:new     # Bun 測試（128 項測試，約 500 毫秒）
 - 嚴格 TypeScript（`exactOptionalPropertyTypes`、`verbatimModuleSyntax`）
 - 所有 API 處理器皆使用 `defineAPI()` 搭配 Zod schema
 - 寫入端點必須引用 `policy`
+- Handler 接收 `{ input, ctx, params }`
 
 ### 歡迎協助
 
-- A2A 串流支援
 - 更多鷹架範本
 - 文件網站
 - 更多整合測試

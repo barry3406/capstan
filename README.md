@@ -12,11 +12,11 @@ One `defineAPI()` call. Four protocol surfaces. Humans and AI agents, served sim
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Tests](https://img.shields.io/badge/tests-128%20passing-brightgreen?logo=bun&logoColor=white)](https://bun.sh)
-[![Version](https://img.shields.io/badge/version-0.2.0-orange)](https://github.com/barry3406/capstan)
+[![Tests](https://img.shields.io/badge/tests-177%20passing-brightgreen?logo=bun&logoColor=white)](https://bun.sh)
+[![Version](https://img.shields.io/badge/version-1.0.0--beta.3-orange)](https://github.com/barry3406/capstan)
 [![ESM](https://img.shields.io/badge/ESM-only-blue)](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Modules)
 
-[Quick Start](#-quick-start) · [Why Capstan?](#-why-capstan) · [Architecture](#-architecture) · [Contributing](#-contributing)
+[Quick Start](#-quick-start) · [Why Capstan?](#-why-capstan) · [Architecture](#-architecture) · [Docs](#-documentation) · [Contributing](#-contributing)
 
 </div>
 
@@ -24,7 +24,9 @@ One `defineAPI()` call. Four protocol surfaces. Humans and AI agents, served sim
 
 ## What is Capstan?
 
-**Capstan** is a full-stack TypeScript framework where every API you write is automatically accessible to both humans (via REST) and AI agents (via MCP, A2A, and OpenAPI) — with zero extra code. It combines file-based routing, Zod-validated endpoints, Drizzle ORM models, and a built-in verification system that AI coding agents use as a self-correcting TDD loop.
+**Capstan** is a full-stack TypeScript framework where every API you write is automatically accessible to both humans (via REST) and AI agents (via MCP, A2A, and OpenAPI) — with zero extra code. It combines file-based routing, Zod-validated endpoints, Drizzle ORM models (SQLite, PostgreSQL, or MySQL), and a built-in verification system that AI coding agents use as a self-correcting TDD loop.
+
+Production-ready: `capstan build` compiles your app, `capstan start` serves it — with CSRF protection, configurable CORS, request body limits, and structured JSON logging out of the box.
 
 Think of it as **Next.js if it were designed from day one for a world where half your consumers are LLMs**.
 
@@ -49,9 +51,10 @@ Think of it as **Next.js if it were designed from day one for a world where half
                    │           │          │            │           │
                 Browsers    Claude     Agent         Swagger    Agent
                  & apps    Desktop    networks       & SDKs   discovery
+                                    (SSE stream)
 ```
 
-**Write once. Serve everywhere.** Your `defineAPI()` call becomes an HTTP endpoint, an MCP tool for Claude Desktop, an A2A skill for Google's agent-to-agent protocol, and an OpenAPI spec — all automatically.
+**Write once. Serve everywhere.** Your `defineAPI()` call becomes an HTTP endpoint, an MCP tool with typed Zod parameters for Claude Desktop, an A2A skill with SSE streaming for Google's agent-to-agent protocol, and an OpenAPI spec — all automatically.
 
 ---
 
@@ -63,10 +66,13 @@ Think of it as **Next.js if it were designed from day one for a world where half
 | **API definition** | Route handlers | Decorators | `defineAPI()` with Zod schemas |
 | **Agent protocols** | Manual integration | Manual integration | Auto-generated MCP, A2A, OpenAPI |
 | **Agent discovery** | None | None | `/.well-known/capstan.json` manifest |
+| **Auth model** | DIY | DIY | `"human"` / `"agent"` / `"anonymous"` built-in |
 | **Policy enforcement** | DIY middleware | Depends middleware | `definePolicy()` with approve / deny / redact |
 | **Human-in-the-loop** | Build it yourself | Build it yourself | Built-in approval workflow for agent write ops |
 | **AI TDD loop** | None | None | `capstan verify --json` with repair checklist |
 | **Auto CRUD** | None | None | `defineModel()` generates typed route files |
+| **Database** | BYO | SQLAlchemy | Drizzle ORM (SQLite, PostgreSQL, MySQL) |
+| **Production** | `next build` / `next start` | Uvicorn | `capstan build` / `capstan start` |
 | **Full stack** | React SSR + API | API only | React SSR + API + Agent protocols |
 
 **The key insight:** every API you build is already an AI tool. No wrappers, no adapters, no second codebase.
@@ -80,7 +86,10 @@ Think of it as **Next.js if it were designed from day one for a world where half
 npx create-capstan-app my-app
 cd my-app
 
-# 2. Start the dev server
+# Or start from a template
+npx create-capstan-app my-app --template tickets
+
+# 2. Start the dev server (live reload via SSE)
 npx capstan dev
 
 # 3. Your app is live with all protocol surfaces:
@@ -128,7 +137,7 @@ export const GET = defineAPI({
   description: "List all tickets",
   capability: "read",
   resource: "ticket",
-  async handler({ input }) {
+  async handler({ input, ctx }) {
     const tickets = await db.query.tickets.findMany();
     return { tickets };
   },
@@ -144,8 +153,29 @@ export const POST = defineAPI({
   capability: "write",
   resource: "ticket",
   policy: "requireAuth",  // ← enforced for both humans AND agents
-  async handler({ input }) {
+  async handler({ input, ctx }) {
     return { id: crypto.randomUUID(), title: input.title };
+  },
+});
+```
+
+```typescript
+// app/routes/tickets/[id].api.ts — Dynamic route with params
+import { defineAPI } from "@zauso-ai/capstan-core";
+import { z } from "zod";
+
+export const GET = defineAPI({
+  input: z.object({}),
+  output: z.object({ id: z.string(), title: z.string(), status: z.string() }),
+  description: "Get a ticket by ID",
+  capability: "read",
+  resource: "ticket",
+  async handler({ input, ctx, params }) {
+    //                         ^^^^^^ typed route params
+    const ticket = await db.query.tickets.findFirst({
+      where: { id: params.id },
+    });
+    return ticket;
   },
 });
 ```
@@ -154,9 +184,9 @@ That single file gives you **all of this** — no extra code:
 
 | Protocol | Endpoint |
 |----------|----------|
-| REST API | `GET /tickets` · `POST /tickets` |
-| MCP Tool | `get_tickets` · `post_tickets` |
-| A2A Skill | `get_tickets` · `post_tickets` |
+| REST API | `GET /tickets` · `POST /tickets` · `GET /tickets/:id` |
+| MCP Tool | `get_tickets` · `post_tickets` · `get_tickets_by_id` (with typed Zod parameters) |
+| A2A Skill | `get_tickets` · `post_tickets` · `get_tickets_by_id` (with SSE streaming) |
 | OpenAPI | Documented in `/openapi.json` |
 
 ### `defineModel` — Declarative data models with auto CRUD
@@ -178,7 +208,7 @@ export const Ticket = defineModel("ticket", {
 });
 ```
 
-Run `capstan add api tickets` and Capstan generates fully typed CRUD route files with Zod validation, policy enforcement, and agent metadata — ready to customize.
+Run `capstan add api tickets` and Capstan generates fully typed CRUD route files with Zod validation, policy enforcement, and agent metadata — ready to customize. Database provider (SQLite, PostgreSQL, or MySQL) is configured in `capstan.config.ts` — all three are optional peer dependencies.
 
 ### `definePolicy` — Permission policies with agent-aware effects
 
@@ -194,6 +224,7 @@ export const requireAuth = definePolicy({
     if (!ctx.auth.isAuthenticated) {
       return { effect: "deny", reason: "Authentication required" };
     }
+    // ctx.auth.type is "human" | "agent" | "anonymous"
     return { effect: "allow" };
   },
 });
@@ -213,7 +244,7 @@ export const agentApproval = definePolicy({
 
 Policy effects: **`allow`** | **`deny`** | **`approve`** (human-in-the-loop) | **`redact`** (filter sensitive fields)
 
-When a policy returns `approve`, the request enters the **approval workflow** — agents get a `202` with a `pollUrl`, and humans review at `/capstan/approvals`.
+When a policy returns `approve`, the request enters the **approval workflow** — agents get a `202` with a `pollUrl`, and humans review at the authenticated `/capstan/approvals` endpoint.
 
 ---
 
@@ -296,9 +327,9 @@ When you run `capstan dev`, these endpoints are auto-generated:
 |----------|----------|---------|
 | `GET /.well-known/capstan.json` | Capstan | Agent manifest with all capabilities |
 | `GET /.well-known/agent.json` | A2A | Google Agent-to-Agent agent card |
-| `POST /.well-known/a2a` | A2A | JSON-RPC handler for agent tasks |
+| `POST /.well-known/a2a` | A2A | JSON-RPC handler with SSE streaming |
 | `GET /openapi.json` | OpenAPI 3.1 | Full API specification |
-| `GET /capstan/approvals` | Capstan | Human-in-the-loop approval queue |
+| `GET /capstan/approvals` | Capstan | Authenticated approval queue |
 | `npx capstan mcp` | MCP (stdio) | For Claude Desktop / Cursor |
 
 ### Connect to Claude Desktop
@@ -315,7 +346,7 @@ When you run `capstan dev`, these endpoints are auto-generated:
 }
 ```
 
-Every `defineAPI()` route becomes an MCP tool. Claude can now interact with your app natively.
+Every `defineAPI()` route becomes an MCP tool with real typed parameters derived from your Zod schemas. Claude can now interact with your app natively.
 
 ---
 
@@ -336,31 +367,53 @@ app/
     ticket.model.ts         ← Drizzle ORM + defineModel()
   policies/
     index.ts                ← definePolicy() permission rules
+  public/
+    favicon.ico             ← Static assets (served automatically)
+    logo.svg
 ```
 
 **Stack:** [Hono](https://hono.dev) (HTTP) · [Drizzle](https://orm.drizzle.team) (ORM — SQLite, PostgreSQL, MySQL) · [React](https://react.dev) (SSR) · [Zod](https://zod.dev) (validation) · [Bun](https://bun.sh) (testing)
 
-**Dev features:** live reload (SSE), static asset serving from `app/public/`, `capstan build` + `capstan start` for production
+**Dev features:** live reload (SSE), static asset serving from `app/public/`, structured JSON logging
+
+**Security:** CSRF protection, request body limits, configurable CORS, authenticated approval endpoints
+
+---
+
+## 🚢 Production Deployment
+
+```bash
+# Build for production
+npx capstan build
+
+# Start the production server
+npx capstan start
+```
+
+`capstan build` compiles your routes, models, and configuration into an optimized production bundle. `capstan start` launches the server with security defaults enabled. Configure the listen port, CORS origins, and database provider in `capstan.config.ts`.
 
 ---
 
 ## 📦 Packages
 
-### Runtime Framework
+Capstan ships 9 runtime packages:
 
 | Package | Description |
 |---------|-------------|
 | `@zauso-ai/capstan-core` | Hono server, `defineAPI`, `defineMiddleware`, `definePolicy`, approval workflow, verifier |
 | `@zauso-ai/capstan-router` | File-based routing (`.page.tsx`, `.api.ts`, `_layout.tsx`, `_middleware.ts`) |
-| `@zauso-ai/capstan-db` | Drizzle ORM, `defineModel`, field/relation helpers, migrations, auto CRUD |
-| `@zauso-ai/capstan-auth` | JWT sessions, API key auth for agents, permission checking |
-| `@zauso-ai/capstan-agent` | `CapabilityRegistry`, MCP server, A2A adapter, OpenAPI generator |
+| `@zauso-ai/capstan-db` | Drizzle ORM, `defineModel`, field/relation helpers, migrations, auto CRUD (SQLite, PostgreSQL, MySQL) |
+| `@zauso-ai/capstan-auth` | JWT sessions, API key auth for agents, permission checking (`"human"` / `"agent"` / `"anonymous"`) |
+| `@zauso-ai/capstan-agent` | `CapabilityRegistry`, MCP server (typed params), A2A adapter (SSE), OpenAPI generator |
 | `@zauso-ai/capstan-react` | SSR with loaders, layouts, `Outlet`, hydration |
 | `@zauso-ai/capstan-dev` | Dev server with file watching, hot route reload, MCP/A2A endpoints |
-| `@zauso-ai/capstan-cli` | CLI: `dev`, `build`, `verify`, `add`, `mcp`, `db:*` |
-| `create-capstan-app` | Project scaffolder (blank & tickets templates) |
+| `@zauso-ai/capstan-cli` | CLI: `dev`, `build`, `start`, `verify`, `add`, `mcp`, `db:*` |
+| `create-capstan-app` | Project scaffolder (`--template blank`, `--template tickets`) |
 
-### Compiler System (legacy)
+<details>
+<summary>Legacy compiler packages (in <code>packages-legacy/</code>)</summary>
+
+The original compiler system is preserved separately for backward compatibility. These packages are not required for new projects.
 
 | Package | Description |
 |---------|-------------|
@@ -374,18 +427,37 @@ app/
 | `@zauso-ai/capstan-release` | Release planning and rollback |
 | `@zauso-ai/capstan-harness` | Durable task runtime |
 
+</details>
+
+---
+
+## 📚 Documentation
+
+Detailed guides live in the [`docs/`](docs/) directory:
+
+- [Getting Started](docs/getting-started.md) — Installation, first project, dev workflow
+- [Core Concepts](docs/core-concepts.md) — `defineAPI`, `defineModel`, `definePolicy`, capabilities
+- [Architecture](docs/architecture/) — System design, multi-protocol registry, route scanning
+- [Authentication](docs/authentication.md) — JWT sessions, API keys, auth types
+- [Database](docs/database.md) — SQLite, PostgreSQL, MySQL setup and migrations
+- [Deployment](docs/deployment.md) — `capstan build`, `capstan start`, production configuration
+- [Testing Strategy](docs/testing-strategy.md) — Unit, integration, and verifier testing
+- [API Reference](docs/api-reference.md) — Full API surface documentation
+- [Comparison](docs/comparison.md) — Capstan vs Next.js, FastAPI, and others
+- [Roadmap](docs/roadmap.md) — What's coming next
+
 ---
 
 ## 🧑‍💻 Contributing
 
-Capstan is in early development (`v0.2.0`). Contributions are welcome!
+Capstan is in active beta (`v1.0.0-beta.3`). Contributions are welcome!
 
 ```bash
 git clone https://github.com/barry3406/capstan.git
 cd capstan
 npm install
-npm run build        # Build all 18 packages
-npm run test:new     # Bun tests (128 tests, ~500ms)
+npm run build        # Build 9 runtime packages
+npm run test:new     # Bun tests (177 tests, ~500ms)
 ```
 
 ### Conventions
@@ -397,10 +469,10 @@ npm run test:new     # Bun tests (128 tests, ~500ms)
 
 ### Help wanted
 
-- Streaming support for A2A
-- Additional scaffolder templates
-- Documentation site
-- More integration tests
+- Additional scaffolder templates (beyond `blank` and `tickets`)
+- More integration and end-to-end tests
+- CSS pipeline (Tailwind / vanilla-extract integration)
+- OAuth providers (Google, GitHub, etc.)
 
 ---
 
@@ -414,6 +486,6 @@ npm run test:new     # Bun tests (128 tests, ~500ms)
 
 **⚓ Capstan** — APIs that speak human and machine.
 
-[Get Started](#-quick-start) · [GitHub](https://github.com/barry3406/capstan) · [Report a Bug](https://github.com/barry3406/capstan/issues)
+[Get Started](#-quick-start) · [Documentation](#-documentation) · [GitHub](https://github.com/barry3406/capstan) · [Report a Bug](https://github.com/barry3406/capstan/issues)
 
 </div>
