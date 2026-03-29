@@ -1,5 +1,7 @@
 import { createServer } from "node:http";
-import type { IncomingMessage, Server } from "node:http";
+import type { IncomingMessage, Server, ServerResponse } from "node:http";
+import { readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import path from "node:path";
 
 import { Hono } from "hono";
@@ -19,6 +21,58 @@ import { loadApiHandlers, loadPageModule } from "./loader.js";
 import { watchRoutes } from "./watcher.js";
 import { printStartupBanner } from "./printer.js";
 import type { DevServerConfig, DevServerInstance } from "./types.js";
+
+// ---------------------------------------------------------------------------
+// Live Reload (SSE)
+// ---------------------------------------------------------------------------
+
+/**
+ * Set of active SSE connections for live reload. When routes are rebuilt the
+ * dev server sends an event to every connected client, which triggers a
+ * browser page reload.
+ */
+const sseClients = new Set<ServerResponse>();
+
+/**
+ * Notify all connected live-reload clients that routes have changed and the
+ * page should reload.
+ */
+function notifyLiveReloadClients(): void {
+  for (const res of sseClients) {
+    try {
+      res.write("data: reload\n\n");
+    } catch {
+      // Client disconnected — remove it.
+      sseClients.delete(res);
+    }
+  }
+}
+
+/**
+ * Small inline `<script>` tag injected before `</body>` in HTML pages served
+ * during development. It opens an SSE connection to the dev server and
+ * reloads the page when a "reload" event arrives.
+ */
+const LIVE_RELOAD_SCRIPT = `<script>
+(function(){
+  var es = new EventSource('/__capstan_livereload');
+  es.onmessage = function(e) { if (e.data === 'reload') location.reload(); };
+  es.onerror = function() { setTimeout(function(){ es.close(); es = new EventSource('/__capstan_livereload'); }, 1000); };
+})();
+</script>`;
+
+/**
+ * Inject the live-reload `<script>` into an HTML string by placing it
+ * immediately before `</body>`. If `</body>` is not found the script is
+ * appended at the end as a best-effort fallback.
+ */
+function injectLiveReload(html: string): string {
+  const idx = html.lastIndexOf("</body>");
+  if (idx !== -1) {
+    return html.slice(0, idx) + LIVE_RELOAD_SCRIPT + "\n" + html.slice(idx);
+  }
+  return html + LIVE_RELOAD_SCRIPT;
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -83,6 +137,38 @@ function buildStandaloneContext(
     honoCtx: {} as CapstanContext["honoCtx"],
   };
 }
+
+// ---------------------------------------------------------------------------
+// MIME types for static file serving
+// ---------------------------------------------------------------------------
+
+const MIME_TYPES: Record<string, string> = {
+  ".css": "text/css",
+  ".js": "application/javascript",
+  ".mjs": "application/javascript",
+  ".json": "application/json",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".svg": "image/svg+xml",
+  ".ico": "image/x-icon",
+  ".html": "text/html",
+  ".htm": "text/html",
+  ".txt": "text/plain",
+  ".woff": "font/woff",
+  ".woff2": "font/woff2",
+  ".ttf": "font/ttf",
+  ".otf": "font/otf",
+  ".eot": "application/vnd.ms-fontobject",
+  ".webp": "image/webp",
+  ".avif": "image/avif",
+  ".webm": "video/webm",
+  ".mp4": "video/mp4",
+  ".map": "application/json",
+  ".xml": "application/xml",
+  ".pdf": "application/pdf",
+};
 
 // ---------------------------------------------------------------------------
 // Route registration
@@ -481,7 +567,7 @@ async function buildApp(
           },
         });
 
-        return c.html(result.html, result.statusCode as 200);
+        return c.html(injectLiveReload(result.html), result.statusCode as 200);
       } catch {
         // @zauso-ai/capstan-react not available or render failed -- serve a
         // minimal HTML shell that exposes loader data.
@@ -497,6 +583,7 @@ async function buildApp(
     <p>Page: ${route.urlPattern}</p>
   </div>
   <script>window.__CAPSTAN_DATA__ = ${JSON.stringify({ loaderData, params })}</script>
+${LIVE_RELOAD_SCRIPT}
 </body>
 </html>`;
         return c.html(html);
@@ -826,6 +913,41 @@ async function buildApp(
     }
   });
 
+  // --- Static file serving (app/public/) ------------------------------------
+  // Serve files from publicDir as static assets at the root URL path.
+  // This is registered AFTER all API/page/framework routes so that named
+  // routes always take priority.
+
+  const publicDir = config.publicDir ?? path.join(config.rootDir, "app", "public");
+
+  if (existsSync(publicDir)) {
+    app.get("*", async (c) => {
+      const urlPath = new URL(c.req.url).pathname;
+
+      // Prevent directory traversal
+      const resolved = path.resolve(publicDir, `.${urlPath}`);
+      if (!resolved.startsWith(publicDir)) {
+        return c.json({ error: "Forbidden" }, 403);
+      }
+
+      if (!existsSync(resolved)) {
+        return c.notFound();
+      }
+
+      try {
+        const content = await readFile(resolved);
+        const ext = path.extname(resolved).toLowerCase();
+        const contentType = MIME_TYPES[ext] ?? "application/octet-stream";
+        return new Response(content, {
+          status: 200,
+          headers: { "Content-Type": contentType },
+        });
+      } catch {
+        return c.notFound();
+      }
+    });
+  }
+
   return { app, apiRouteCount, pageRouteCount, routeRegistry };
 }
 
@@ -849,6 +971,7 @@ export async function createDevServer(
   const port = config.port ?? 3000;
   const host = config.host ?? "0.0.0.0";
   const routesDir = path.join(config.rootDir, "app", "routes");
+  config.publicDir = config.publicDir ?? path.join(config.rootDir, "app", "public");
 
   // --- Initial route scan ---------------------------------------------------
 
@@ -926,6 +1049,26 @@ export async function createDevServer(
     try {
       const url = new URL(req.url ?? "/", `http://${req.headers.host ?? `${host}:${port}`}`);
 
+      // --- Live-reload SSE endpoint -----------------------------------------
+      // Intercept before Hono so the response stays open as a long-lived
+      // Server-Sent Events stream.
+      if (url.pathname === "/__capstan_livereload") {
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          "Connection": "keep-alive",
+        });
+        // Send an initial comment to flush headers / confirm connection.
+        res.write(": connected\n\n");
+        sseClients.add(res);
+
+        // Remove the client when the connection closes.
+        req.on("close", () => {
+          sseClients.delete(res);
+        });
+        return;
+      }
+
       // Build a Web API Request from the Node.js IncomingMessage.
       const headers = new Headers();
       for (const [key, value] of Object.entries(req.headers)) {
@@ -991,6 +1134,9 @@ export async function createDevServer(
       // Rebuild MCP server with updated routes.
       await buildMcpServer();
 
+      // Notify connected browsers to reload.
+      notifyLiveReloadClients();
+
       const totalRoutes = apiRouteCount + pageRouteCount;
       // eslint-disable-next-line no-console
       console.log(
@@ -1038,6 +1184,11 @@ export async function createDevServer(
     stop(): Promise<void> {
       return new Promise((resolve, reject) => {
         watcher.close();
+        // Close all open SSE connections so they don't keep the server alive.
+        for (const client of sseClients) {
+          try { client.end(); } catch { /* already closed */ }
+        }
+        sseClients.clear();
         server.close((err) => {
           if (err) {
             reject(err);

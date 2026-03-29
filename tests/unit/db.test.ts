@@ -279,6 +279,271 @@ describe("generateDrizzleSchema", () => {
     const schema = generateDrizzleSchema([model]);
     expect(schema).toContain('"categories"');
   });
+
+  // --- PostgreSQL schema generation ---
+
+  it("generates pg-core imports for postgres provider", () => {
+    const model = defineModel("Ticket", {
+      fields: {
+        id: field.id(),
+        title: field.string({ required: true }),
+      },
+    });
+
+    const schema = generateDrizzleSchema([model], "postgres");
+
+    expect(schema).toContain('from "drizzle-orm/pg-core"');
+    expect(schema).toContain("pgTable");
+    expect(schema).not.toContain("sqliteTable");
+  });
+
+  it("maps string fields to varchar for postgres", () => {
+    const model = defineModel("Item", {
+      fields: {
+        id: field.id(),
+        name: field.string({ required: true }),
+      },
+    });
+
+    const schema = generateDrizzleSchema([model], "postgres");
+    expect(schema).toContain('varchar("name"');
+    expect(schema).toContain("length: 255");
+    expect(schema).toContain(".notNull()");
+  });
+
+  it("maps integer fields to integer for postgres", () => {
+    const model = defineModel("Counter", {
+      fields: {
+        id: field.id(),
+        count: field.integer(),
+      },
+    });
+
+    const schema = generateDrizzleSchema([model], "postgres");
+    expect(schema).toContain('integer("count")');
+  });
+
+  it("maps boolean fields to native boolean for postgres", () => {
+    const model = defineModel("Flag", {
+      fields: {
+        id: field.id(),
+        active: field.boolean(),
+      },
+    });
+
+    const schema = generateDrizzleSchema([model], "postgres");
+    expect(schema).toContain('boolean("active")');
+    // Should NOT use integer with boolean mode (that is SQLite-specific)
+    expect(schema).not.toContain('mode: "boolean"');
+  });
+
+  it("maps number fields to doublePrecision for postgres", () => {
+    const model = defineModel("Measurement", {
+      fields: {
+        id: field.id(),
+        value: field.number(),
+      },
+    });
+
+    const schema = generateDrizzleSchema([model], "postgres");
+    expect(schema).toContain('doublePrecision("value")');
+  });
+
+  it("maps json fields to jsonb for postgres", () => {
+    const model = defineModel("Config", {
+      fields: {
+        id: field.id(),
+        data: field.json(),
+      },
+    });
+
+    const schema = generateDrizzleSchema([model], "postgres");
+    expect(schema).toContain('jsonb("data")');
+  });
+
+  it("maps datetime fields to timestamp for postgres", () => {
+    const model = defineModel("Event", {
+      fields: {
+        id: field.id(),
+        occurredAt: field.datetime(),
+      },
+    });
+
+    const schema = generateDrizzleSchema([model], "postgres");
+    expect(schema).toContain('timestamp("occurred_at")');
+  });
+
+  it("maps date fields to date for postgres", () => {
+    const model = defineModel("Holiday", {
+      fields: {
+        id: field.id(),
+        day: field.date(),
+      },
+    });
+
+    const schema = generateDrizzleSchema([model], "postgres");
+    expect(schema).toContain('date("day")');
+  });
+
+  it("uses now() for default timestamps in postgres", () => {
+    const model = defineModel("Log", {
+      fields: {
+        id: field.id(),
+        createdAt: field.datetime({ default: "now" }),
+      },
+    });
+
+    const schema = generateDrizzleSchema([model], "postgres");
+    expect(schema).toContain("now()");
+    expect(schema).not.toContain("datetime('now')");
+  });
+
+  it("generates text id primaryKey for postgres", () => {
+    const model = defineModel("Item", {
+      fields: { id: field.id() },
+    });
+    const schema = generateDrizzleSchema([model], "postgres");
+    expect(schema).toContain('text("id").primaryKey()');
+  });
+
+  // --- MySQL schema generation ---
+
+  it("generates mysql-core imports for mysql provider", () => {
+    const model = defineModel("Ticket", {
+      fields: {
+        id: field.id(),
+        title: field.string({ required: true }),
+      },
+    });
+
+    const schema = generateDrizzleSchema([model], "mysql");
+
+    expect(schema).toContain('from "drizzle-orm/mysql-core"');
+    expect(schema).toContain("mysqlTable");
+    expect(schema).not.toContain("sqliteTable");
+    expect(schema).not.toContain("pgTable");
+  });
+
+  it("maps string fields to varchar for mysql", () => {
+    const model = defineModel("Item", {
+      fields: {
+        id: field.id(),
+        name: field.string({ required: true }),
+      },
+    });
+
+    const schema = generateDrizzleSchema([model], "mysql");
+    expect(schema).toContain('varchar("name", { length: 255 })');
+    expect(schema).toContain(".notNull()");
+  });
+
+  it("maps text fields to text for mysql", () => {
+    const model = defineModel("Post", {
+      fields: {
+        id: field.id(),
+        body: field.text(),
+      },
+    });
+
+    const schema = generateDrizzleSchema([model], "mysql");
+    expect(schema).toContain('text("body")');
+  });
+
+  it("maps integer fields to int for mysql", () => {
+    const model = defineModel("Counter", {
+      fields: {
+        id: field.id(),
+        count: field.integer(),
+      },
+    });
+
+    const schema = generateDrizzleSchema([model], "mysql");
+    expect(schema).toContain('int("count")');
+  });
+
+  it("maps boolean fields to native boolean for mysql", () => {
+    const model = defineModel("Flag", {
+      fields: {
+        id: field.id(),
+        active: field.boolean(),
+      },
+    });
+
+    const schema = generateDrizzleSchema([model], "mysql");
+    expect(schema).toContain('boolean("active")');
+    expect(schema).not.toContain('mode: "boolean"');
+  });
+
+  it("maps number fields to double for mysql", () => {
+    const model = defineModel("Measurement", {
+      fields: {
+        id: field.id(),
+        value: field.number(),
+      },
+    });
+
+    const schema = generateDrizzleSchema([model], "mysql");
+    expect(schema).toContain('double("value")');
+  });
+
+  it("maps json fields to json for mysql", () => {
+    const model = defineModel("Config", {
+      fields: {
+        id: field.id(),
+        data: field.json(),
+      },
+    });
+
+    const schema = generateDrizzleSchema([model], "mysql");
+    expect(schema).toContain('json("data")');
+  });
+
+  it("maps datetime fields to datetime for mysql", () => {
+    const model = defineModel("Event", {
+      fields: {
+        id: field.id(),
+        occurredAt: field.datetime(),
+      },
+    });
+
+    const schema = generateDrizzleSchema([model], "mysql");
+    expect(schema).toContain('datetime("occurred_at")');
+  });
+
+  it("generates varchar id with length 36 for mysql", () => {
+    const model = defineModel("Item", {
+      fields: { id: field.id() },
+    });
+    const schema = generateDrizzleSchema([model], "mysql");
+    expect(schema).toContain('varchar("id", { length: 36 }).primaryKey()');
+  });
+
+  it("uses NOW() for default timestamps in mysql", () => {
+    const model = defineModel("Log", {
+      fields: {
+        id: field.id(),
+        createdAt: field.datetime({ default: "now" }),
+      },
+    });
+
+    const schema = generateDrizzleSchema([model], "mysql");
+    expect(schema).toContain("(NOW())");
+    expect(schema).not.toContain("datetime('now')");
+  });
+
+  it("handles multiple models for mysql", () => {
+    const ticket = defineModel("Ticket", {
+      fields: { id: field.id(), title: field.string() },
+    });
+    const comment = defineModel("Comment", {
+      fields: { id: field.id(), body: field.text() },
+    });
+
+    const schema = generateDrizzleSchema([ticket, comment], "mysql");
+    expect(schema).toContain("export const tickets");
+    expect(schema).toContain("export const comments");
+    expect(schema).toContain("mysqlTable");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -318,10 +583,12 @@ describe("createDatabase", () => {
     close();
   });
 
-  it.skip("throws for unsupported providers (better-sqlite3 unsupported in Bun)", () => {
+  it("throws helpful error when pg is not installed for postgres provider", () => {
+    // pg is not installed in the test environment, so this should throw
+    // a helpful error message about installing pg.
     expect(() =>
-      createDatabase({ provider: "postgres", url: "postgres://localhost" }),
-    ).toThrow("Unsupported");
+      createDatabase({ provider: "postgres" as const, url: "postgres://localhost" }),
+    ).toThrow("pg");
   });
 });
 

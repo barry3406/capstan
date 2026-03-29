@@ -9,6 +9,8 @@ export interface DevServerConfig {
   appName?: string;
   /** App description */
   appDescription?: string;
+  /** Directory for static assets (defaults to <rootDir>/app/public) */
+  publicDir?: string;
   /** Auth configuration — when set, session cookie / API key auth is enabled */
   auth?: {
     session: {

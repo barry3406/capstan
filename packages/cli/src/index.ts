@@ -1032,17 +1032,27 @@ async function runBuild(): Promise<void> {
   const { execFile } = await import("node:child_process");
   const { promisify } = await import("node:util");
   const exec = promisify(execFile);
-
-  console.log("Building project...");
-  await exec("npx", ["tsc", "-p", "tsconfig.json"], { cwd: process.cwd() });
-  console.log("TypeScript compilation complete.");
-
-  // Generate agent-manifest.json and openapi.json into dist/
-  const { mkdir, writeFile } = await import("node:fs/promises");
+  const { mkdir, writeFile, cp, access } = await import("node:fs/promises");
   const { join } = await import("node:path");
   const { scanRoutes } = await import("@zauso-ai/capstan-router");
   const { generateAgentManifest, generateOpenApiSpec } = await import("@zauso-ai/capstan-agent");
 
+  const cwd = process.cwd();
+  const distDir = join(cwd, "dist");
+
+  // Step 1: TypeScript compilation
+  console.log("[capstan] Compiling TypeScript...");
+  try {
+    await exec("npx", ["tsc", "-p", "tsconfig.json"], { cwd });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[capstan] TypeScript compilation failed:\n${message}`);
+    process.exitCode = 1;
+    return;
+  }
+  console.log("[capstan] TypeScript compilation complete.");
+
+  // Step 2: Load app config
   let appName = "capstan-app";
   let appDescription: string | undefined;
   try {
@@ -1050,17 +1060,50 @@ async function runBuild(): Promise<void> {
     if (configPath) {
       const configUrl = pathToFileURL(configPath).href;
       const mod = (await import(configUrl)) as {
-        default?: { name?: string; description?: string };
+        default?: { name?: string; description?: string; app?: { name?: string; description?: string } };
       };
-      if (mod.default?.name) appName = mod.default.name;
-      if (mod.default?.description) appDescription = mod.default.description;
+      if (mod.default?.app?.name) appName = mod.default.app.name;
+      else if (mod.default?.name) appName = mod.default.name;
+      if (mod.default?.app?.description) appDescription = mod.default.app.description;
+      else if (mod.default?.description) appDescription = mod.default.description;
     }
   } catch {
     // Config is optional.
   }
 
-  const routesDir = join(process.cwd(), "app", "routes");
+  // Step 3: Scan routes and build manifest with compiled paths
+  const routesDir = join(cwd, "app", "routes");
+  console.log("[capstan] Scanning routes...");
   const manifest = await scanRoutes(routesDir);
+
+  // Rewrite file paths from source .ts/.tsx to compiled .js/.jsx
+  // and make them relative to the dist directory
+  const rewrittenManifest = {
+    ...manifest,
+    rootDir: join(distDir, "app", "routes"),
+    routes: manifest.routes.map((route) => ({
+      ...route,
+      filePath: route.filePath
+        .replace(cwd, distDir)
+        .replace(/\.tsx$/, ".jsx")
+        .replace(/\.ts$/, ".js"),
+      layouts: route.layouts.map((l) =>
+        l.replace(cwd, distDir).replace(/\.tsx$/, ".jsx").replace(/\.ts$/, ".js"),
+      ),
+      middlewares: route.middlewares.map((m) =>
+        m.replace(cwd, distDir).replace(/\.tsx$/, ".jsx").replace(/\.ts$/, ".js"),
+      ),
+    })),
+  };
+
+  await mkdir(distDir, { recursive: true });
+  await writeFile(
+    join(distDir, "_capstan_manifest.json"),
+    JSON.stringify(rewrittenManifest, null, 2),
+  );
+  console.log("[capstan] Generated dist/_capstan_manifest.json");
+
+  // Step 4: Generate agent-manifest.json and openapi.json
   const registryEntries = manifest.routes
     .filter((r) => r.type === "api")
     .flatMap((r) => {
@@ -1075,27 +1118,327 @@ async function runBuild(): Promise<void> {
   const agentManifest = generateAgentManifest(agentConfig, registryEntries);
   const openApiSpec = generateOpenApiSpec(agentConfig, registryEntries);
 
-  const distDir = join(process.cwd(), "dist");
-  await mkdir(distDir, { recursive: true });
   await writeFile(join(distDir, "agent-manifest.json"), JSON.stringify(agentManifest, null, 2));
   await writeFile(join(distDir, "openapi.json"), JSON.stringify(openApiSpec, null, 2));
+  console.log("[capstan] Generated dist/agent-manifest.json");
+  console.log("[capstan] Generated dist/openapi.json");
 
-  console.log("Generated dist/agent-manifest.json");
-  console.log("Generated dist/openapi.json");
-  console.log("Build complete.");
+  // Step 5: Copy public/ assets to dist/public/ (if the directory exists)
+  const publicDir = join(cwd, "app", "public");
+  try {
+    await access(publicDir);
+    await cp(publicDir, join(distDir, "public"), { recursive: true });
+    console.log("[capstan] Copied app/public/ to dist/public/");
+  } catch {
+    // No public directory — skip.
+  }
+
+  // Step 6: Generate the production server entry file
+  const serverEntry = `import { createServer } from "node:http";
+import { readFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+import { Hono } from "hono";
+import { cors } from "hono/cors";
+import { serveStatic } from "@hono/node-server/serve-static";
+
+const cwd = process.cwd();
+const distDir = resolve(cwd, "dist");
+
+// Read the pre-built route manifest
+const manifestPath = join(distDir, "_capstan_manifest.json");
+const manifest = JSON.parse(readFileSync(manifestPath, "utf-8"));
+
+const port = parseInt(process.env.CAPSTAN_PORT ?? process.env.PORT ?? "3000", 10);
+const host = process.env.CAPSTAN_HOST ?? "0.0.0.0";
+
+async function main() {
+  const app = new Hono();
+  app.use("*", cors());
+
+  // Serve static assets from dist/public/ if present
+  try {
+    app.use("/public/*", serveStatic({ root: distDir }));
+  } catch {
+    // serveStatic not available or dist/public/ does not exist
+  }
+
+  // Route metadata for framework endpoints
+  const routeRegistry = [];
+
+  let apiRouteCount = 0;
+  let pageRouteCount = 0;
+
+  // Register API routes from the manifest
+  for (const route of manifest.routes) {
+    if (route.type !== "api") continue;
+
+    let handlers;
+    try {
+      const moduleUrl = pathToFileURL(route.filePath).href;
+      handlers = await import(moduleUrl);
+    } catch (err) {
+      console.error("[capstan] Failed to load API route " + route.filePath + ":", err?.message ?? err);
+      continue;
+    }
+
+    const methods = ["GET", "POST", "PUT", "DELETE", "PATCH"];
+    for (const method of methods) {
+      const handler = handlers[method];
+      if (handler === undefined) continue;
+
+      apiRouteCount++;
+
+      const isApiDef = handler !== null && typeof handler === "object" && "handler" in handler && typeof handler.handler === "function";
+      const meta = { method, path: route.urlPattern };
+      if (isApiDef && handler.description) meta.description = handler.description;
+      if (isApiDef && handler.capability) meta.capability = handler.capability;
+      routeRegistry.push(meta);
+
+      const honoMethod = method.toLowerCase();
+      app[honoMethod](route.urlPattern, async (c) => {
+        let input;
+        try {
+          if (method === "GET") {
+            input = Object.fromEntries(new URL(c.req.url).searchParams);
+          } else {
+            const ct = c.req.header("content-type") ?? "";
+            if (ct.includes("application/json")) {
+              input = await c.req.json();
+            } else {
+              input = {};
+            }
+          }
+        } catch {
+          input = {};
+        }
+
+        const ctx = {
+          auth: { isAuthenticated: false, type: "anonymous", permissions: [] },
+          request: c.req.raw,
+          env: process.env,
+          honoCtx: c,
+        };
+
+        try {
+          if (isApiDef) {
+            // Policy enforcement
+            if (handler.policy) {
+              if (handler.policy === "requireAuth" && !ctx.auth.isAuthenticated) {
+                return c.json({ error: "Unauthorized", policy: handler.policy }, 401);
+              }
+            }
+            const result = await handler.handler({ input, ctx });
+            return c.json(result);
+          }
+          if (typeof handler === "function") {
+            const result = await handler({ input, ctx });
+            return c.json(result);
+          }
+          return c.json({ error: "Invalid handler export" }, 500);
+        } catch (err) {
+          if (err && typeof err === "object" && "issues" in err && Array.isArray(err.issues)) {
+            return c.json({ error: "Validation Error", issues: err.issues }, 400);
+          }
+          const message = err instanceof Error ? err.message : "Internal Server Error";
+          console.error("[capstan] Error in " + method + " " + route.urlPattern + ":", message);
+          return c.json({ error: message }, 500);
+        }
+      });
+    }
+  }
+
+  // Register page routes from the manifest
+  for (const route of manifest.routes) {
+    if (route.type !== "page") continue;
+
+    let pageModule;
+    try {
+      const moduleUrl = pathToFileURL(route.filePath).href;
+      pageModule = await import(moduleUrl);
+    } catch (err) {
+      console.error("[capstan] Failed to load page " + route.filePath + ":", err?.message ?? err);
+      continue;
+    }
+
+    if (!pageModule.default) continue;
+    pageRouteCount++;
+
+    app.get(route.urlPattern, async (c) => {
+      const params = {};
+      for (const name of route.params) {
+        const value = c.req.param(name);
+        if (value !== undefined) params[name] = value;
+      }
+
+      let loaderData = null;
+      if (typeof pageModule.loader === "function") {
+        try {
+          loaderData = await pageModule.loader({
+            params,
+            request: c.req.raw,
+            ctx: { auth: { isAuthenticated: false, type: "anonymous", permissions: [] } },
+            fetch: { get: async () => null, post: async () => null, put: async () => null, delete: async () => null },
+          });
+        } catch (err) {
+          console.error("[capstan] Loader error in " + route.filePath + ":", err?.message ?? err);
+        }
+      }
+
+      // Attempt SSR via @zauso-ai/capstan-react
+      try {
+        const reactPkg = await import("@zauso-ai/capstan-react");
+        const result = await reactPkg.renderPage({
+          pageModule: { default: pageModule.default, loader: pageModule.loader },
+          layouts: [],
+          params,
+          request: c.req.raw,
+          loaderArgs: {
+            params,
+            request: c.req.raw,
+            ctx: { auth: { isAuthenticated: false, type: "anonymous", permissions: [] } },
+            fetch: { get: async () => null, post: async () => null, put: async () => null, delete: async () => null },
+          },
+        });
+        return c.html(result.html, result.statusCode);
+      } catch {
+        // Fallback minimal HTML
+        const html = \`<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" /><title>${appName.replace(/"/g, "&quot;")}</title></head>
+<body>
+  <div id="capstan-root"><p>Page: \${route.urlPattern}</p></div>
+  <script>window.__CAPSTAN_DATA__ = \${JSON.stringify({ loaderData, params })}</script>
+</body>
+</html>\`;
+        return c.html(html);
+      }
+    });
+  }
+
+  // Read pre-built agent-manifest.json and openapi.json
+  let agentManifestJson = null;
+  let openApiJson = null;
+  try { agentManifestJson = JSON.parse(readFileSync(join(distDir, "agent-manifest.json"), "utf-8")); } catch {}
+  try { openApiJson = JSON.parse(readFileSync(join(distDir, "openapi.json"), "utf-8")); } catch {}
+
+  // Framework endpoints
+  app.get("/.well-known/capstan.json", (c) => {
+    if (agentManifestJson) return c.json(agentManifestJson);
+    return c.json({ error: "Agent manifest not found" }, 404);
+  });
+  app.get("/openapi.json", (c) => {
+    if (openApiJson) return c.json(openApiJson);
+    return c.json({ error: "OpenAPI spec not found" }, 404);
+  });
+  app.get("/health", (c) => {
+    return c.json({ status: "ok", uptime: process.uptime(), timestamp: new Date().toISOString() });
+  });
+
+  // Start HTTP server
+  const server = createServer(async (req, res) => {
+    try {
+      const url = new URL(req.url ?? "/", "http://" + (req.headers.host ?? host + ":" + port));
+      const headers = new Headers();
+      for (const [key, value] of Object.entries(req.headers)) {
+        if (value === undefined) continue;
+        if (Array.isArray(value)) { for (const v of value) headers.append(key, v); }
+        else headers.set(key, value);
+      }
+
+      const hasBody = req.method !== "GET" && req.method !== "HEAD";
+      let body;
+      if (hasBody) {
+        body = await new Promise((resolve, reject) => {
+          const chunks = [];
+          req.on("data", (c) => chunks.push(c));
+          req.on("error", reject);
+          req.on("end", () => {
+            const raw = Buffer.concat(chunks).toString("utf-8");
+            resolve(raw.length > 0 ? raw : undefined);
+          });
+        });
+      }
+
+      const init = { method: req.method ?? "GET", headers };
+      if (body !== undefined) init.body = body;
+
+      const request = new Request(url.toString(), init);
+      const response = await app.fetch(request);
+
+      res.writeHead(response.status, Object.fromEntries(response.headers.entries()));
+      const responseBody = await response.text();
+      res.end(responseBody);
+    } catch (err) {
+      console.error("[capstan] Unhandled request error:", err);
+      if (!res.headersSent) res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Internal Server Error" }));
+    }
+  });
+
+  server.listen(port, host, () => {
+    console.log("");
+    console.log("  Capstan production server running");
+    console.log("  Local:  http://" + (host === "0.0.0.0" ? "localhost" : host) + ":" + port);
+    console.log("  Routes: " + (apiRouteCount + pageRouteCount) + " total (" + apiRouteCount + " API, " + pageRouteCount + " pages)");
+    console.log("");
+  });
+}
+
+main().catch((err) => {
+  console.error("[capstan] Fatal error starting production server:", err);
+  process.exit(1);
+});
+`;
+
+  await writeFile(join(distDir, "_capstan_server.js"), serverEntry);
+  console.log("[capstan] Generated dist/_capstan_server.js");
+  console.log("[capstan] Build complete.");
 }
 
 async function runStart(args: string[]): Promise<void> {
-  const { execFile } = await import("node:child_process");
-  const { promisify } = await import("node:util");
-  const exec = promisify(execFile);
-  const port = readFlagValue(args, "--port") ?? "3000";
+  const { spawn } = await import("node:child_process");
+  const { access } = await import("node:fs/promises");
+  const { join } = await import("node:path");
 
-  console.log(`Starting production server on port ${port}...`);
-  await exec("node", ["dist/index.js"], {
-    cwd: process.cwd(),
-    env: { ...process.env, PORT: port },
+  const cwd = process.cwd();
+  const serverEntry = join(cwd, "dist", "_capstan_server.js");
+
+  // Verify the production build exists
+  try {
+    await access(serverEntry);
+  } catch {
+    console.error("[capstan] dist/_capstan_server.js not found.");
+    console.error("[capstan] Run `capstan build` first to compile the project.");
+    process.exitCode = 1;
+    return;
+  }
+
+  const port = readFlagValue(args, "--port") ?? "3000";
+  const host = readFlagValue(args, "--host") ?? "0.0.0.0";
+
+  const child = spawn(
+    process.execPath,
+    [serverEntry],
+    {
+      cwd,
+      stdio: "inherit",
+      env: {
+        ...process.env,
+        CAPSTAN_PORT: port,
+        CAPSTAN_HOST: host,
+      },
+    },
+  );
+
+  child.on("exit", (code) => {
+    process.exit(code ?? 0);
   });
+
+  // Forward SIGINT / SIGTERM to child
+  for (const sig of ["SIGINT", "SIGTERM"] as const) {
+    process.on(sig, () => child.kill(sig));
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1820,8 +2163,8 @@ function printHelp(): void {
 Commands:
   capstan dev [--port 3000] [--host localhost]
                              Start the development server with HMR
-  capstan build              Build the project and generate agent manifests
-  capstan start [--port 3000]
+  capstan build              Build the project (tsc + route manifest + server entry)
+  capstan start [--port 3000] [--host 0.0.0.0]
                              Start the production server from built output
 
   capstan add <model|api|page|policy> <name>

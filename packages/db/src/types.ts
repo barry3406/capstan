@@ -38,7 +38,9 @@ export interface ModelDefinition {
   indexes: IndexDefinition[];
 }
 
+export type DbProvider = "sqlite" | "postgres" | "mysql";
+
 export interface DatabaseConfig {
-  provider: "sqlite" | "postgres";
+  provider: DbProvider;
   url: string;
 }

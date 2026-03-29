@@ -49,6 +49,31 @@ export default function HomePage() {
     "utf-8",
   );
 
+  // Create app/public/ with a test CSS file
+  const publicDir = join(tempDir, "app", "public");
+  await mkdir(publicDir, { recursive: true });
+
+  await writeFile(
+    join(publicDir, "test.css"),
+    `body { color: red; }`,
+    "utf-8",
+  );
+
+  await writeFile(
+    join(publicDir, "data.json"),
+    JSON.stringify({ hello: "world" }),
+    "utf-8",
+  );
+
+  // Create a subdirectory with a file
+  const subDir = join(publicDir, "assets");
+  await mkdir(subDir, { recursive: true });
+  await writeFile(
+    join(subDir, "app.js"),
+    `console.log("hello");`,
+    "utf-8",
+  );
+
   // Create and start the dev server
   server = await createDevServer({
     rootDir: tempDir,
@@ -161,5 +186,39 @@ describe("Dev server integration", () => {
     const html = await res.text();
     // Should return HTML (either from SSR or the fallback shell)
     expect(html).toContain("<");
+  });
+
+  // --- Static file serving tests -------------------------------------------
+
+  it("GET /test.css returns 200 with text/css content type", async () => {
+    const res = await fetch(`${baseUrl()}/test.css`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("text/css");
+
+    const body = await res.text();
+    expect(body).toBe("body { color: red; }");
+  });
+
+  it("GET /data.json returns 200 with application/json content type", async () => {
+    const res = await fetch(`${baseUrl()}/data.json`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("application/json");
+
+    const body = await res.text();
+    expect(JSON.parse(body)).toEqual({ hello: "world" });
+  });
+
+  it("GET /assets/app.js returns 200 with application/javascript content type", async () => {
+    const res = await fetch(`${baseUrl()}/assets/app.js`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("application/javascript");
+
+    const body = await res.text();
+    expect(body).toBe(`console.log("hello");`);
+  });
+
+  it("GET /nonexistent.css returns 404", async () => {
+    const res = await fetch(`${baseUrl()}/nonexistent.css`);
+    expect(res.status).toBe(404);
   });
 });
