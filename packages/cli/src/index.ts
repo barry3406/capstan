@@ -164,6 +164,33 @@ async function main(): Promise<void> {
     case "harness:memories":
       await runHarnessMemories(args);
       return;
+    case "dev":
+      await runDev(args);
+      return;
+    case "build":
+      await runBuild();
+      return;
+    case "start":
+      await runStart(args);
+      return;
+    case "db:migrate":
+      await runDbMigrate(args);
+      return;
+    case "db:push":
+      await runDbPush();
+      return;
+    case "db:status":
+      await runDbStatus();
+      return;
+    case "mcp":
+      await runMcp();
+      return;
+    case "agent:manifest":
+      await runAgentManifest();
+      return;
+    case "agent:openapi":
+      await runAgentOpenapi();
+      return;
     case "help":
     case "--help":
     case "-h":
@@ -874,6 +901,377 @@ async function runHarnessMemories(args: string[]): Promise<void> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Dev / Build / Start
+// ---------------------------------------------------------------------------
+
+async function runDev(args: string[]): Promise<void> {
+  const { createDevServer } = await import("@capstan/dev");
+  const port = parseInt(readFlagValue(args, "--port") ?? "3000", 10);
+  const host = readFlagValue(args, "--host") ?? "localhost";
+
+  // Try to load capstan.config.ts / capstan.config.js for app metadata
+  let appName = "capstan-app";
+  let appDescription: string | undefined;
+  try {
+    const configPath = await resolveConfig();
+    if (configPath) {
+      const configUrl = pathToFileURL(configPath).href;
+      const mod = (await import(configUrl)) as {
+        default?: { name?: string; description?: string };
+      };
+      if (mod.default?.name) appName = mod.default.name;
+      if (mod.default?.description) appDescription = mod.default.description;
+    }
+  } catch {
+    // Config file is optional — continue without it.
+  }
+
+  const server = await createDevServer({
+    rootDir: process.cwd(),
+    port,
+    host,
+    appName,
+    ...(appDescription ? { appDescription } : {}),
+  });
+  await server.start();
+}
+
+async function runBuild(): Promise<void> {
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const exec = promisify(execFile);
+
+  console.log("Building project...");
+  await exec("npx", ["tsc", "-p", "tsconfig.json"], { cwd: process.cwd() });
+  console.log("TypeScript compilation complete.");
+
+  // Generate agent-manifest.json and openapi.json into dist/
+  const { mkdir, writeFile } = await import("node:fs/promises");
+  const { join } = await import("node:path");
+  const { scanRoutes } = await import("@capstan/router");
+  const { generateAgentManifest, generateOpenApiSpec } = await import("@capstan/agent");
+
+  let appName = "capstan-app";
+  let appDescription: string | undefined;
+  try {
+    const configPath = await resolveConfig();
+    if (configPath) {
+      const configUrl = pathToFileURL(configPath).href;
+      const mod = (await import(configUrl)) as {
+        default?: { name?: string; description?: string };
+      };
+      if (mod.default?.name) appName = mod.default.name;
+      if (mod.default?.description) appDescription = mod.default.description;
+    }
+  } catch {
+    // Config is optional.
+  }
+
+  const routesDir = join(process.cwd(), "app", "routes");
+  const manifest = await scanRoutes(routesDir);
+  const registryEntries = manifest.routes
+    .filter((r) => r.type === "api")
+    .flatMap((r) => {
+      const methods = r.methods && r.methods.length > 0 ? r.methods : ["GET"];
+      return methods.map((m) => ({
+        method: m,
+        path: r.urlPattern,
+      }));
+    });
+
+  const agentConfig = { name: appName, ...(appDescription ? { description: appDescription } : {}) };
+  const agentManifest = generateAgentManifest(agentConfig, registryEntries);
+  const openApiSpec = generateOpenApiSpec(agentConfig, registryEntries);
+
+  const distDir = join(process.cwd(), "dist");
+  await mkdir(distDir, { recursive: true });
+  await writeFile(join(distDir, "agent-manifest.json"), JSON.stringify(agentManifest, null, 2));
+  await writeFile(join(distDir, "openapi.json"), JSON.stringify(openApiSpec, null, 2));
+
+  console.log("Generated dist/agent-manifest.json");
+  console.log("Generated dist/openapi.json");
+  console.log("Build complete.");
+}
+
+async function runStart(args: string[]): Promise<void> {
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const exec = promisify(execFile);
+  const port = readFlagValue(args, "--port") ?? "3000";
+
+  console.log(`Starting production server on port ${port}...`);
+  await exec("node", ["dist/index.js"], {
+    cwd: process.cwd(),
+    env: { ...process.env, PORT: port },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Database commands
+// ---------------------------------------------------------------------------
+
+async function runDbMigrate(args: string[]): Promise<void> {
+  const name = readFlagValue(args, "--name");
+  if (!name) {
+    console.error("Usage: capstan db:migrate --name <migration-name>");
+    process.exitCode = 1;
+    return;
+  }
+
+  const { mkdir, readdir, writeFile } = await import("node:fs/promises");
+  const { join } = await import("node:path");
+  const { generateMigration } = await import("@capstan/db");
+
+  const migrationsDir = join(process.cwd(), "app", "migrations");
+  await mkdir(migrationsDir, { recursive: true });
+
+  // Collect existing model definitions from app/models/ if present
+  const modelsDir = join(process.cwd(), "app", "models");
+  let toModels: Array<{ name: string; fields: Record<string, unknown>; indexes: unknown[] }> = [];
+  try {
+    const modelFiles = await readdir(modelsDir);
+    for (const file of modelFiles) {
+      if (file.endsWith(".ts") || file.endsWith(".js")) {
+        const moduleUrl = pathToFileURL(join(modelsDir, file)).href;
+        const mod = (await import(moduleUrl)) as Record<string, unknown>;
+        // Look for exported model definitions
+        for (const value of Object.values(mod)) {
+          if (
+            value &&
+            typeof value === "object" &&
+            "name" in value &&
+            "fields" in value
+          ) {
+            toModels.push(value as typeof toModels[number]);
+          }
+        }
+      }
+    }
+  } catch {
+    // No models directory — generate an empty migration.
+  }
+
+  const statements = generateMigration([], toModels as never[]);
+  const timestamp = new Date().toISOString().replace(/[^0-9]/g, "").slice(0, 14);
+  const filename = `${timestamp}_${name}.sql`;
+  const content = statements.length > 0
+    ? statements.join(";\n") + ";\n"
+    : "-- empty migration\n";
+
+  await writeFile(join(migrationsDir, filename), content);
+  console.log(`Created migration: app/migrations/${filename}`);
+}
+
+async function runDbPush(): Promise<void> {
+  const { readdir, readFile: readMigrationFile } = await import("node:fs/promises");
+  const { join } = await import("node:path");
+  const { createDatabase } = await import("@capstan/db");
+
+  const migrationsDir = join(process.cwd(), "app", "migrations");
+  let files: string[];
+  try {
+    files = (await readdir(migrationsDir)).filter((f) => f.endsWith(".sql")).sort();
+  } catch {
+    console.log("No migrations directory found at app/migrations/.");
+    return;
+  }
+
+  if (files.length === 0) {
+    console.log("No pending migrations.");
+    return;
+  }
+
+  const db = createDatabase({ provider: "sqlite", url: join(process.cwd(), "app", "data", "app.db") });
+
+  for (const file of files) {
+    const sql = await readMigrationFile(join(migrationsDir, file), "utf8");
+    const statements = sql
+      .split(";")
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0 && !s.startsWith("--"));
+    if (statements.length > 0) {
+      const client = (db as unknown as { $client: { exec: (sql: string) => void } }).$client;
+      for (const stmt of statements) {
+        client.exec(stmt);
+      }
+    }
+    console.log(`Applied: ${file}`);
+  }
+
+  console.log("All migrations applied.");
+}
+
+async function runDbStatus(): Promise<void> {
+  const { readdir } = await import("node:fs/promises");
+  const { join } = await import("node:path");
+
+  const migrationsDir = join(process.cwd(), "app", "migrations");
+  let files: string[];
+  try {
+    files = (await readdir(migrationsDir)).filter((f) => f.endsWith(".sql")).sort();
+  } catch {
+    console.log("No migrations directory found at app/migrations/.");
+    return;
+  }
+
+  if (files.length === 0) {
+    console.log("No migration files found.");
+    return;
+  }
+
+  console.log(`Found ${files.length} migration(s):`);
+  for (const file of files) {
+    console.log(`  ${file}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Agent / MCP commands
+// ---------------------------------------------------------------------------
+
+async function runMcp(): Promise<void> {
+  const { createMcpServer, serveMcpStdio } = await import("@capstan/agent");
+  const { scanRoutes } = await import("@capstan/router");
+  const { join } = await import("node:path");
+
+  let appName = "capstan-app";
+  let appDescription: string | undefined;
+  try {
+    const configPath = await resolveConfig();
+    if (configPath) {
+      const configUrl = pathToFileURL(configPath).href;
+      const mod = (await import(configUrl)) as {
+        default?: { name?: string; description?: string };
+      };
+      if (mod.default?.name) appName = mod.default.name;
+      if (mod.default?.description) appDescription = mod.default.description;
+    }
+  } catch {
+    // Config is optional.
+  }
+
+  const routesDir = join(process.cwd(), "app", "routes");
+  const manifest = await scanRoutes(routesDir);
+  const registryEntries = manifest.routes
+    .filter((r) => r.type === "api")
+    .flatMap((r) => {
+      const methods = r.methods && r.methods.length > 0 ? r.methods : ["GET"];
+      return methods.map((m) => ({
+        method: m,
+        path: r.urlPattern,
+      }));
+    });
+
+  const agentConfig = { name: appName, ...(appDescription ? { description: appDescription } : {}) };
+  const { server } = createMcpServer(agentConfig, registryEntries, async (_method, _path, _args) => {
+    return { status: 501, body: "MCP route execution not wired up in CLI mode." };
+  });
+
+  await serveMcpStdio(server);
+}
+
+async function runAgentManifest(): Promise<void> {
+  const { generateAgentManifest } = await import("@capstan/agent");
+  const { scanRoutes } = await import("@capstan/router");
+  const { join } = await import("node:path");
+
+  let appName = "capstan-app";
+  let appDescription: string | undefined;
+  try {
+    const configPath = await resolveConfig();
+    if (configPath) {
+      const configUrl = pathToFileURL(configPath).href;
+      const mod = (await import(configUrl)) as {
+        default?: { name?: string; description?: string };
+      };
+      if (mod.default?.name) appName = mod.default.name;
+      if (mod.default?.description) appDescription = mod.default.description;
+    }
+  } catch {
+    // Config is optional.
+  }
+
+  const routesDir = join(process.cwd(), "app", "routes");
+  const manifest = await scanRoutes(routesDir);
+  const registryEntries = manifest.routes
+    .filter((r) => r.type === "api")
+    .flatMap((r) => {
+      const methods = r.methods && r.methods.length > 0 ? r.methods : ["GET"];
+      return methods.map((m) => ({
+        method: m,
+        path: r.urlPattern,
+      }));
+    });
+
+  const agentConfig = { name: appName, ...(appDescription ? { description: appDescription } : {}) };
+  const agentManifest = generateAgentManifest(agentConfig, registryEntries);
+  console.log(JSON.stringify(agentManifest, null, 2));
+}
+
+async function runAgentOpenapi(): Promise<void> {
+  const { generateOpenApiSpec } = await import("@capstan/agent");
+  const { scanRoutes } = await import("@capstan/router");
+  const { join } = await import("node:path");
+
+  let appName = "capstan-app";
+  let appDescription: string | undefined;
+  try {
+    const configPath = await resolveConfig();
+    if (configPath) {
+      const configUrl = pathToFileURL(configPath).href;
+      const mod = (await import(configUrl)) as {
+        default?: { name?: string; description?: string };
+      };
+      if (mod.default?.name) appName = mod.default.name;
+      if (mod.default?.description) appDescription = mod.default.description;
+    }
+  } catch {
+    // Config is optional.
+  }
+
+  const routesDir = join(process.cwd(), "app", "routes");
+  const manifest = await scanRoutes(routesDir);
+  const registryEntries = manifest.routes
+    .filter((r) => r.type === "api")
+    .flatMap((r) => {
+      const methods = r.methods && r.methods.length > 0 ? r.methods : ["GET"];
+      return methods.map((m) => ({
+        method: m,
+        path: r.urlPattern,
+      }));
+    });
+
+  const agentConfig = { name: appName, ...(appDescription ? { description: appDescription } : {}) };
+  const spec = generateOpenApiSpec(agentConfig, registryEntries);
+  console.log(JSON.stringify(spec, null, 2));
+}
+
+// ---------------------------------------------------------------------------
+// Config helpers
+// ---------------------------------------------------------------------------
+
+async function resolveConfig(): Promise<string | null> {
+  const { access } = await import("node:fs/promises");
+  const candidates = [
+    resolve(process.cwd(), "capstan.config.ts"),
+    resolve(process.cwd(), "capstan.config.js"),
+  ];
+  for (const candidate of candidates) {
+    try {
+      await access(candidate);
+      return candidate;
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Existing helpers
+// ---------------------------------------------------------------------------
+
 function readFlagValue(args: string[], flag: string): string | undefined {
   const index = args.indexOf(flag);
   if (index === -1) {
@@ -1118,6 +1516,21 @@ function printHelp(): void {
   console.log(`Capstan CLI
 
 Commands:
+  capstan dev [--port 3000] [--host localhost]
+                             Start the development server with HMR
+  capstan build              Build the project and generate agent manifests
+  capstan start [--port 3000]
+                             Start the production server from built output
+
+  capstan db:migrate --name <name>
+                             Generate a new migration file in app/migrations/
+  capstan db:push            Apply pending migrations to the database
+  capstan db:status          Show migration status
+
+  capstan mcp                Start an MCP server on stdio transport
+  capstan agent:manifest     Print the agent manifest JSON to stdout
+  capstan agent:openapi      Print the OpenAPI spec JSON to stdout
+
   capstan brief:check <path> [--pack-registry <path>]
                              Validate a Capstan brief and its compiled App Graph
   capstan brief:inspect <path> [--pack-registry <path>]

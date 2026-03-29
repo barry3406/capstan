@@ -2,14 +2,14 @@
   "name": "capstan",
   "version": "0.1.0",
   "private": true,
-  "description": "A harness-first framework for building agent-operable software.",
+  "description": "An AI Agent Native full-stack framework for building agent-operable software.",
   "packageManager": "npm@11.9.0",
   "type": "module",
   "workspaces": [
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build --workspace @capstan/app-graph && npm run build --workspace @capstan/packs-core && npm run build --workspace @capstan/brief && npm run build --workspace @capstan/surface-web && npm run build --workspace @capstan/surface-agent && npm run build --workspace @capstan/compiler && npm run build --workspace @capstan/feedback && npm run build --workspace @capstan/release && npm run build --workspace @capstan/harness && npm run build --workspace @capstan/cli",
+    "build": "npm run build --workspace @capstan/app-graph && npm run build --workspace @capstan/packs-core && npm run build --workspace @capstan/brief && npm run build --workspace @capstan/surface-web && npm run build --workspace @capstan/surface-agent && npm run build --workspace @capstan/compiler && npm run build --workspace @capstan/feedback && npm run build --workspace @capstan/release && npm run build --workspace @capstan/harness && npm run build --workspace @capstan/core && npm run build --workspace @capstan/router && npm run build --workspace @capstan/db && npm run build --workspace @capstan/auth && npm run build --workspace @capstan/agent && npm run build --workspace @capstan/react && npm run build --workspace @capstan/dev && npm run build --workspace @capstan/cli && npm run build --workspace create-capstan-app",
     "typecheck": "npm run build --workspace @capstan/app-graph && npm run build --workspace @capstan/packs-core && npm run build --workspace @capstan/brief && npm run build --workspace @capstan/surface-web && npm run build --workspace @capstan/surface-agent && npm run build --workspace @capstan/compiler && npm run build --workspace @capstan/feedback && npm run build --workspace @capstan/release && npm run build --workspace @capstan/harness && npm run typecheck --workspace @capstan/app-graph && npm run typecheck --workspace @capstan/packs-core && npm run typecheck --workspace @capstan/brief && npm run typecheck --workspace @capstan/surface-web && npm run typecheck --workspace @capstan/surface-agent && npm run typecheck --workspace @capstan/compiler && npm run typecheck --workspace @capstan/feedback && npm run typecheck --workspace @capstan/release && npm run typecheck --workspace @capstan/harness && npm run typecheck --workspace @capstan/cli",
     "dev": "npm run build --workspace @capstan/app-graph && npm run build --workspace @capstan/packs-core && npm run build --workspace @capstan/brief && npm run build --workspace @capstan/surface-web && npm run build --workspace @capstan/surface-agent && npm run build --workspace @capstan/compiler && npm run build --workspace @capstan/feedback && npm run build --workspace @capstan/release && npm run build --workspace @capstan/harness && tsx ./packages/cli/src/index.ts",
     "test": "npm run build --workspace @capstan/app-graph && npm run build --workspace @capstan/packs-core && npm run build --workspace @capstan/brief && npm run build --workspace @capstan/surface-web && npm run build --workspace @capstan/surface-agent && npm run build --workspace @capstan/compiler && npm run build --workspace @capstan/feedback && npm run build --workspace @capstan/release && npm run build --workspace @capstan/harness && vitest run",
@@ -49,11 +49,27 @@
     "harness:memories": "npm run dev -- harness:memories"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
     "@types/jsdom": "^28.0.1",
     "@types/node": "^24.6.1",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.1",
+    "drizzle-kit": "^0.31.10",
+    "esbuild": "^0.27.4",
     "jsdom": "^29.0.1",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
     "tsx": "^4.20.5",
     "typescript": "^5.9.3",
+    "vite": "^8.0.3",
     "vitest": "^4.1.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.28.0",
+    "better-sqlite3": "^12.8.0",
+    "drizzle-orm": "^0.45.2",
+    "hono": "^4.12.9",
+    "zod": "^4.3.6"
   }
 }

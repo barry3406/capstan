@@ -12,12 +12,16 @@
     "dev": "tsx src/index.ts"
   },
   "dependencies": {
+    "@capstan/agent": "0.1.0",
     "@capstan/app-graph": "0.1.0",
     "@capstan/brief": "0.1.0",
     "@capstan/compiler": "0.1.0",
+    "@capstan/db": "0.1.0",
+    "@capstan/dev": "0.1.0",
     "@capstan/feedback": "0.1.0",
     "@capstan/harness": "0.1.0",
     "@capstan/packs-core": "0.1.0",
-    "@capstan/release": "0.1.0"
+    "@capstan/release": "0.1.0",
+    "@capstan/router": "0.1.0"
   }
 }

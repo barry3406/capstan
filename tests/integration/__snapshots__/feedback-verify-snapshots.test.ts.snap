@@ -205,6 +205,157 @@ exports[`Capstan feedback verify snapshots > keeps contract failure JSON diagnos
 }
 `;
 
+exports[`Capstan feedback verify snapshots > keeps contract failure JSON diagnostics stable 2`] = `
+{
+  "appRoot": "<APP_ROOT>",
+  "diagnostics": [
+    {
+      "code": "policy_projection_mismatch",
+      "detail": "Expected policy "reviewRequired", received "missing".",
+      "file": "<APP_ROOT>/agent-surface.json",
+      "hint": "Regenerate the agent surface manifest so policy-aware consumers see the right boundary.",
+      "severity": "error",
+      "source": "capstan",
+      "summary": "Capability "generateDigest" lost its policy projection.",
+    },
+    {
+      "code": "missing_transport_auth_effect",
+      "file": "<APP_ROOT>/agent-surface.json",
+      "hint": "Regenerate the app so agent consumers can reason about the available auth effects.",
+      "severity": "error",
+      "source": "capstan",
+      "summary": "Transport auth effect "redact" is missing from the agent surface manifest.",
+    },
+    {
+      "code": "skipped",
+      "severity": "info",
+      "source": "capstan",
+      "summary": "Verify skipped because contracts failed.",
+    },
+    {
+      "code": "skipped",
+      "severity": "info",
+      "source": "capstan",
+      "summary": "Verify skipped because contracts failed.",
+    },
+    {
+      "code": "skipped",
+      "severity": "info",
+      "source": "capstan",
+      "summary": "Verify skipped because contracts failed.",
+    },
+    {
+      "code": "skipped",
+      "severity": "info",
+      "source": "capstan",
+      "summary": "Verify skipped because contracts failed.",
+    },
+  ],
+  "generatedBy": "capstan-feedback",
+  "status": "failed",
+  "steps": [
+    {
+      "diagnostics": [],
+      "durationMs": 0,
+      "key": "structure",
+      "label": "Generated Structure",
+      "status": "passed",
+    },
+    {
+      "diagnostics": [
+        {
+          "code": "policy_projection_mismatch",
+          "detail": "Expected policy "reviewRequired", received "missing".",
+          "file": "<APP_ROOT>/agent-surface.json",
+          "hint": "Regenerate the agent surface manifest so policy-aware consumers see the right boundary.",
+          "severity": "error",
+          "source": "capstan",
+          "summary": "Capability "generateDigest" lost its policy projection.",
+        },
+        {
+          "code": "missing_transport_auth_effect",
+          "file": "<APP_ROOT>/agent-surface.json",
+          "hint": "Regenerate the app so agent consumers can reason about the available auth effects.",
+          "severity": "error",
+          "source": "capstan",
+          "summary": "Transport auth effect "redact" is missing from the agent surface manifest.",
+        },
+      ],
+      "durationMs": 0,
+      "key": "contracts",
+      "label": "Surface Contracts",
+      "status": "failed",
+    },
+    {
+      "diagnostics": [
+        {
+          "code": "skipped",
+          "severity": "info",
+          "source": "capstan",
+          "summary": "Verify skipped because contracts failed.",
+        },
+      ],
+      "durationMs": 0,
+      "key": "typecheck",
+      "label": "TypeScript Check",
+      "status": "skipped",
+    },
+    {
+      "diagnostics": [
+        {
+          "code": "skipped",
+          "severity": "info",
+          "source": "capstan",
+          "summary": "Verify skipped because contracts failed.",
+        },
+      ],
+      "durationMs": 0,
+      "key": "build",
+      "label": "Generated Build",
+      "status": "skipped",
+    },
+    {
+      "diagnostics": [
+        {
+          "code": "skipped",
+          "severity": "info",
+          "source": "capstan",
+          "summary": "Verify skipped because contracts failed.",
+        },
+      ],
+      "durationMs": 0,
+      "key": "assertions",
+      "label": "Generated Assertions",
+      "status": "skipped",
+    },
+    {
+      "diagnostics": [
+        {
+          "code": "skipped",
+          "severity": "info",
+          "source": "capstan",
+          "summary": "Verify skipped because contracts failed.",
+        },
+      ],
+      "durationMs": 0,
+      "key": "smoke",
+      "label": "Runtime Smoke",
+      "status": "skipped",
+    },
+  ],
+  "summary": {
+    "diagnosticCount": 6,
+    "errorCount": 2,
+    "failedSteps": 1,
+    "passedSteps": 1,
+    "skippedSteps": 4,
+    "status": "failed",
+    "stepCount": 6,
+    "warningCount": 0,
+  },
+}
+`;
+
 exports[`Capstan feedback verify snapshots > keeps human-readable smoke failure output stable 1`] = `
 "Capstan Verify
 App: <APP_ROOT>

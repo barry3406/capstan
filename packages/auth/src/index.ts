@@ -1,0 +1,15 @@
+export { signSession, verifySession } from "./session.js";
+export {
+  generateApiKey,
+  verifyApiKey,
+  extractApiKeyPrefix,
+} from "./api-key.js";
+export { createAuthMiddleware } from "./middleware.js";
+export { checkPermission, derivePermission } from "./permissions.js";
+export type {
+  AuthConfig,
+  SessionPayload,
+  AgentCredential,
+  AuthContext,
+  AuthResolverDeps,
+} from "./types.js";
