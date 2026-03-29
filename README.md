@@ -1,287 +1,416 @@
-# Capstan
+<div align="center">
 
-Capstan is a framework for building agent-operable software.
+<h1>
+⚓ Capstan
+</h1>
 
-Instead of starting from routes, controllers, and pages, Capstan starts from a
-machine-readable application model. From that model, it scaffolds a human
-surface, an agent control plane, durable workflow primitives, verification
-hooks, and release contracts that stay aligned with each other.
+**The AI Agent Native Full-Stack Framework**
 
-`brief -> app graph -> scaffold -> implement -> verify -> release -> operate`
+One `defineAPI()` call. Four protocol surfaces. Humans and AI agents, served simultaneously.
 
-> Status: prototype. Capstan already supports an end-to-end loop in this repo,
-> but the public API and scaffold shape are still evolving.
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Tests](https://img.shields.io/badge/tests-128%20passing-brightgreen?logo=bun&logoColor=white)](https://bun.sh)
+[![Version](https://img.shields.io/badge/version-0.1.0-orange)](https://github.com/barry3406/capstan)
+[![ESM](https://img.shields.io/badge/ESM-only-blue)](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Modules)
 
-## What Capstan Is
+[Quick Start](#-quick-start) · [Why Capstan?](#-why-capstan) · [Architecture](#-architecture) · [Contributing](#-contributing)
 
-Capstan is for teams that want coding agents to do more than generate files.
+</div>
 
-Capstan treats an application as an `App Graph`:
+---
 
-- `Domain`
-- `Resource`
-- `Capability`
-- `Task`
-- `Policy`
-- `Artifact`
-- `View`
+## What is Capstan?
 
-From that graph, Capstan can project:
+**Capstan** is a full-stack TypeScript framework where every API you write is automatically accessible to both humans (via REST) and AI agents (via MCP, A2A, and OpenAPI) — with zero extra code. It combines file-based routing, Zod-validated endpoints, Drizzle ORM models, and a built-in verification system that AI coding agents use as a self-correcting TDD loop.
 
-- a human-facing application shell
-- an agent-facing control plane
-- durable workflow and supervision contracts
-- framework-owned verification hooks
-- machine-readable release contracts
+Think of it as **Next.js if it were designed from day one for a world where half your consumers are LLMs**.
 
-## Why It Exists
+## How It Works
 
-Modern frameworks are optimized for humans writing application code by hand.
-Capstan is optimized for agents producing, operating, and repairing software
-without losing human supervision.
+```
+                        ┌──────────────────────────────────────────────┐
+                        │              defineAPI({ ... })               │
+                        │   input: z.object   output: z.object         │
+                        │   capability  ·  policy  ·  handler          │
+                        └──────────────────┬───────────────────────────┘
+                                           │
+                                  CapabilityRegistry
+                                           │
+                    ┌──────────┬───────────┼───────────┬──────────┐
+                    ▼          ▼           ▼           ▼          ▼
+              ┌──────────┐┌────────┐┌───────────┐┌─────────┐┌────────────┐
+              │ HTTP/JSON ││  MCP   ││    A2A    ││ OpenAPI ││  Capstan   │
+              │   API     ││ Tools  ││  Skills   ││  3.1    ││  Manifest  │
+              │  (Hono)   ││ (stdio)││ (Google)  ││  Spec   ││   .json    │
+              └──────────┘└────────┘└───────────┘└─────────┘└────────────┘
+                   │           │          │            │           │
+                Browsers    Claude     Agent         Swagger    Agent
+                 & apps    Desktop    networks       & SDKs   discovery
+```
 
-Capstan aims to make applications:
+**Write once. Serve everywhere.** Your `defineAPI()` call becomes an HTTP endpoint, an MCP tool for Claude Desktop, an A2A skill for Google's agent-to-agent protocol, and an OpenAPI spec — all automatically.
 
-- discoverable by coding agents
-- executable through stable control-plane contracts
-- verifiable through framework-owned checks and assertions
-- operable by humans and agents from the same underlying model
-- releasable through structured preview, rollout, and rollback workflows
+---
 
-## Five-Minute Mental Model
+## 🤔 Why Capstan?
 
-1. A human writes a Capstan brief or App Graph.
-2. Capstan compiles that intent into a deterministic application skeleton.
-3. A coding agent fills in user-owned business logic.
-4. `verify` checks the generated app, TypeScript health, assertions, and smoke behavior.
-5. `release:*` and `harness:*` operate the app through machine-readable contracts.
-6. Human operators and coding agents supervise the same durable workflows through aligned surfaces.
+| | **Next.js / Remix** | **FastAPI** | **Capstan** |
+|---|---|---|---|
+| **Primary audience** | Humans | Humans | Humans + AI agents |
+| **API definition** | Route handlers | Decorators | `defineAPI()` with Zod schemas |
+| **Agent protocols** | Manual integration | Manual integration | Auto-generated MCP, A2A, OpenAPI |
+| **Agent discovery** | None | None | `/.well-known/capstan.json` manifest |
+| **Policy enforcement** | DIY middleware | Depends middleware | `definePolicy()` with approve / deny / redact |
+| **Human-in-the-loop** | Build it yourself | Build it yourself | Built-in approval workflow for agent write ops |
+| **AI TDD loop** | None | None | `capstan verify --json` with repair checklist |
+| **Auto CRUD** | None | None | `defineModel()` generates typed route files |
+| **Full stack** | React SSR + API | API only | React SSR + API + Agent protocols |
 
-If you only remember one thing, remember this:
+**The key insight:** every API you build is already an AI tool. No wrappers, no adapters, no second codebase.
 
-Capstan is not "AI that writes a web app". Capstan is "a framework that makes
-the app itself legible and operable for both AI agents and humans".
+---
 
-## What You Author
-
-- a Capstan brief or App Graph
-- user-owned capability handlers in `src/capabilities/*.ts`
-- optional user-owned view modules in `src/views/*.ts`
-- custom assertions in `src/assertions/custom.ts`
-- optional pack registries and reusable packs
-
-## What Capstan Generates
-
-- `human-surface.html` and `src/human-surface/**`
-- `agent-surface.json` and `src/agent-surface/**`
-- `src/control-plane/**`
-- `capstan.app.json`
-- `capstan.release.json`
-- `capstan.release-env.json`
-- `capstan.migrations.json`
-- typed registries for resources, tasks, policies, artifacts, and views
-- a generated app-level `AGENTS.md` with coding-agent workflow guidance
-
-## Quick Start
-
-Capstan currently runs from this monorepo.
+## 🚀 Quick Start
 
 ```bash
-npm install
-npm run brief:check -- ./tests/fixtures/briefs/starter-revenue-ops-saas-brief.json
-npm run brief:inspect -- ./tests/fixtures/briefs/starter-revenue-ops-saas-brief.json
-npm run brief:scaffold -- ./tests/fixtures/briefs/starter-revenue-ops-saas-brief.json ./output-app
-npm run verify -- ./output-app --json
+# 1. Create a new project
+npx create-capstan-app my-app
+cd my-app
+
+# 2. Start the dev server
+npx capstan dev
+
+# 3. Your app is live with all protocol surfaces:
+#    http://localhost:3000              — Web app
+#    http://localhost:3000/openapi.json — OpenAPI spec
+#    http://localhost:3000/.well-known/capstan.json — Agent manifest
+#    http://localhost:3000/.well-known/agent.json   — A2A agent card
+
+# 4. Verify everything is wired correctly
+npx capstan verify --json
 ```
 
-After scaffolding:
+### Scaffold features instantly
 
-- inspect `./output-app/human-surface.html`
-- inspect `./output-app/agent-surface.json`
-- implement logic in `./output-app/src/capabilities/*.ts`
-- add domain checks in `./output-app/src/assertions/custom.ts`
+```bash
+npx capstan add model ticket       # → app/models/ticket.model.ts
+npx capstan add api tickets        # → app/routes/tickets/index.api.ts (GET + POST)
+npx capstan add page tickets       # → app/routes/tickets/index.page.tsx
+npx capstan add policy requireAuth # → app/policies/index.ts
+```
 
-## Minimal Input Example
+---
 
-You can start from a short brief:
+## 📖 Code Examples
+
+### `defineAPI` — Type-safe, multi-protocol endpoints
+
+```typescript
+// app/routes/tickets/index.api.ts
+import { defineAPI } from "@capstan/core";
+import { z } from "zod";
+
+export const GET = defineAPI({
+  input: z.object({
+    status: z.enum(["open", "in_progress", "closed", "all"]).optional(),
+  }),
+  output: z.object({
+    tickets: z.array(z.object({
+      id: z.string(),
+      title: z.string(),
+      status: z.string(),
+      priority: z.string(),
+    })),
+  }),
+  description: "List all tickets",
+  capability: "read",
+  resource: "ticket",
+  async handler({ input }) {
+    const tickets = await db.query.tickets.findMany();
+    return { tickets };
+  },
+});
+
+export const POST = defineAPI({
+  input: z.object({
+    title: z.string().min(1).max(200),
+    priority: z.enum(["low", "medium", "high"]).default("medium"),
+  }),
+  output: z.object({ id: z.string(), title: z.string() }),
+  description: "Create a new ticket",
+  capability: "write",
+  resource: "ticket",
+  policy: "requireAuth",  // ← enforced for both humans AND agents
+  async handler({ input }) {
+    return { id: crypto.randomUUID(), title: input.title };
+  },
+});
+```
+
+That single file gives you **all of this** — no extra code:
+
+| Protocol | Endpoint |
+|----------|----------|
+| REST API | `GET /tickets` · `POST /tickets` |
+| MCP Tool | `get_tickets` · `post_tickets` |
+| A2A Skill | `get_tickets` · `post_tickets` |
+| OpenAPI | Documented in `/openapi.json` |
+
+### `defineModel` — Declarative data models with auto CRUD
+
+```typescript
+// app/models/ticket.model.ts
+import { defineModel, field } from "@capstan/db";
+
+export const Ticket = defineModel("ticket", {
+  fields: {
+    id:          field.id(),
+    title:       field.string({ required: true, min: 1, max: 200 }),
+    description: field.text(),
+    status:      field.enum(["open", "in_progress", "closed"], { default: "open" }),
+    priority:    field.enum(["low", "medium", "high"], { default: "medium" }),
+    createdAt:   field.datetime({ default: "now" }),
+    updatedAt:   field.datetime({ updatedAt: true }),
+  },
+});
+```
+
+Run `capstan add api tickets` and Capstan generates fully typed CRUD route files with Zod validation, policy enforcement, and agent metadata — ready to customize.
+
+### `definePolicy` — Permission policies with agent-aware effects
+
+```typescript
+// app/policies/index.ts
+import { definePolicy } from "@capstan/core";
+
+export const requireAuth = definePolicy({
+  key: "requireAuth",
+  title: "Require Authentication",
+  effect: "deny",
+  async check({ ctx }) {
+    if (!ctx.auth.isAuthenticated) {
+      return { effect: "deny", reason: "Authentication required" };
+    }
+    return { effect: "allow" };
+  },
+});
+
+export const agentApproval = definePolicy({
+  key: "agentApproval",
+  title: "Agent Actions Require Approval",
+  effect: "approve",
+  async check({ ctx }) {
+    if (ctx.auth.type === "agent") {
+      return { effect: "approve", reason: "Agent write ops need human review" };
+    }
+    return { effect: "allow" };
+  },
+});
+```
+
+Policy effects: **`allow`** | **`deny`** | **`approve`** (human-in-the-loop) | **`redact`** (filter sensitive fields)
+
+When a policy returns `approve`, the request enters the **approval workflow** — agents get a `202` with a `pollUrl`, and humans review at `/capstan/approvals`.
+
+---
+
+## 🔄 AI TDD Self-Loop
+
+Capstan includes a **verifier** designed for AI coding agents. When Claude Code, Cursor, or any AI assistant works on your project, it runs `capstan verify --json` after every change and uses the structured output to self-correct.
+
+```
+   ┌───────────┐      ┌────────────┐      ┌─────────────────┐
+   │  AI Agent  │─────▶│ Edit Code  │─────▶│ capstan verify   │
+   │  (Claude,  │      │            │      │   --json         │
+   │   Cursor)  │      └────────────┘      └───────┬─────────┘
+   └─────▲──────┘                                  │
+         │                                         ▼
+         │                              ┌─────────────────────┐
+         │                              │  {                   │
+         │                              │   "status": "failed",│
+         │                              │   "repairChecklist": │
+         │                              │   [{                 │
+         └──────────────────────────────│     "fixCategory",   │
+              Read checklist,           │     "autoFixable",   │
+              apply fixes               │     "hint": "..."    │
+                                        │   }]                 │
+                                        │  }                   │
+                                        └─────────────────────┘
+```
+
+### The 7-step verification cascade
+
+```bash
+$ npx capstan verify --json
+```
 
 ```json
 {
-  "version": 1,
-  "domain": {
-    "key": "starter-revenue-ops",
-    "title": "Starter Revenue Operations Hub",
-    "description": "A zero-entity Capstan brief that relies entirely on inferred starter packs."
-  },
-  "application": {
-    "profile": "saas",
-    "modules": [
-      {
-        "key": "revenueOps",
-        "options": {
-          "artifactKey": "starterRevenueOpsDigest"
-        }
-      }
-    ]
-  },
-  "entities": []
-}
-```
-
-Or drop to a lower-level App Graph:
-
-```json
-{
-  "version": 1,
-  "domain": {
-    "key": "operations",
-    "title": "Operations Console"
-  },
-  "resources": [
-    {
-      "key": "ticket",
-      "title": "Ticket",
-      "fields": {
-        "title": { "type": "string", "required": true },
-        "status": { "type": "string", "required": true }
-      }
-    }
+  "status": "failed",
+  "steps": [
+    { "name": "structure",  "status": "passed", "durationMs": 2 },
+    { "name": "config",     "status": "passed", "durationMs": 15 },
+    { "name": "routes",     "status": "failed", "durationMs": 8,
+      "diagnostics": [{
+        "code": "MISSING_POLICY",
+        "severity": "warning",
+        "message": "POST /tickets has capability 'write' but no policy",
+        "hint": "Add policy: \"requireAuth\" to protect write endpoints",
+        "file": "app/routes/tickets/index.api.ts",
+        "fixCategory": "policy_violation",
+        "autoFixable": true
+      }]
+    },
+    { "name": "models",     "status": "passed", "durationMs": 3 },
+    { "name": "typecheck",  "status": "failed", "durationMs": 1200 },
+    { "name": "contracts",  "status": "skipped" },
+    { "name": "manifest",   "status": "skipped" }
   ],
-  "capabilities": [
+  "repairChecklist": [
     {
-      "key": "listTickets",
-      "title": "List Tickets",
-      "mode": "read",
-      "resources": ["ticket"]
-    }
-  ],
-  "views": [
-    {
-      "key": "ticketList",
-      "title": "Ticket List",
-      "kind": "list",
-      "resource": "ticket",
-      "capability": "listTickets"
+      "index": 1,
+      "step": "routes",
+      "message": "POST /tickets missing policy",
+      "hint": "Add policy: \"requireAuth\"",
+      "fixCategory": "policy_violation",
+      "autoFixable": true
     }
   ]
 }
 ```
 
-## Generated App Structure
+**Steps cascade**: structure → config → routes → models → typecheck → contracts → manifest. Early failures skip dependent steps to reduce noise.
 
-Capstan-generated apps are split into user-owned paths and framework-owned
-paths.
+**Fix categories**: `type_error` · `schema_mismatch` · `missing_file` · `policy_violation` · `contract_drift` · `missing_export`
 
-Safe to edit:
+---
 
-- `src/capabilities/*.ts`
-- `src/views/*.ts`
-- `src/assertions/custom.ts`
-- new application files you add outside framework-generated paths
+## 🌐 Multi-Protocol Endpoints
 
-Treat as framework-owned:
+When you run `capstan dev`, these endpoints are auto-generated:
 
-- `src/control-plane/**`
-- `src/agent-surface/**`
-- `src/human-surface/**`
-- `src/capabilities/generated/**`
-- `src/views/generated/**`
-- `human-surface.html`
-- `agent-surface.json`
-- `capstan.app.json`
-- `capstan.release.json`
-- `capstan.release-env.json`
-- `capstan.migrations.json`
+| Endpoint | Protocol | Purpose |
+|----------|----------|---------|
+| `GET /.well-known/capstan.json` | Capstan | Agent manifest with all capabilities |
+| `GET /.well-known/agent.json` | A2A | Google Agent-to-Agent agent card |
+| `POST /.well-known/a2a` | A2A | JSON-RPC handler for agent tasks |
+| `GET /openapi.json` | OpenAPI 3.1 | Full API specification |
+| `GET /capstan/approvals` | Capstan | Human-in-the-loop approval queue |
+| `npx capstan mcp` | MCP (stdio) | For Claude Desktop / Cursor |
 
-If the requested change is structural, update the brief or graph and
-re-scaffold instead of patching generated framework files by hand.
+### Connect to Claude Desktop
 
-## Current Capabilities
-
-Today, Capstan already includes first working wedges of:
-
-- `brief:check`, `brief:inspect`, `brief:graph`, and `brief:scaffold`
-- `graph:check`, `graph:inspect`, `graph:diff`, and `graph:scaffold`
-- reusable pack composition, including built-in `auth`, `tenant`, `workflow`, `connector`, `billing`, `commerce`, and `revenueOps` packs
-- relation-aware human surfaces with multi-resource navigation
-- agent-surface projections over local transport, HTTP/RPC, MCP, and A2A
-- durable task workflows with approvals, input handoff, retries, replay, summaries, and memory artifacts
-- workflow discovery, inbox, grouped queues, and human supervision workspaces
-- `verify` with structure checks, TypeScript checks, assertions, build validation, and smoke coverage
-- `release:plan`, `release:run`, `release:history`, and `release:rollback`
-
-## Architecture At A Glance
-
-Capstan has five kernels plus one source of truth:
-
-- `App Graph`: the machine-readable application model
-- `Graph`: modeling, validation, normalization, diffing, introspection
-- `Harness`: task execution, approvals, replay, summaries, memory
-- `Surface`: human UI projection and AI control-plane projection
-- `Feedback`: verification, assertions, diagnostics, repair loops
-- `Release`: preview, rollout, health checks, rollback, traceability
-
-## For Claude Code / Coding Agents
-
-Capstan is designed so a coding agent can follow one short, stable loop:
-
-```text
-Use Capstan as the source-of-truth framework.
-Read AGENTS.md and README.md first.
-Start from a Capstan brief or App Graph instead of handwritten app files.
-Run check, inspect, scaffold, and verify in that order.
-If the requested change is structural, update the brief or graph and regenerate the app.
-After scaffolding, edit only user-owned files unless you are explicitly regenerating framework-owned output.
-Use verify output as the repair loop and report what changed, what passed, and any remaining risks.
+```json
+{
+  "mcpServers": {
+    "my-app": {
+      "command": "npx",
+      "args": ["capstan", "mcp"],
+      "cwd": "/path/to/my-app"
+    }
+  }
+}
 ```
 
-Scaffolded apps now also include a root `AGENTS.md` that repeats this workflow
-inside the generated project.
+Every `defineAPI()` route becomes an MCP tool. Claude can now interact with your app natively.
 
-## Intended Package UX
+---
 
-Once Capstan is published as an npm package, the intended happy path is:
+## 🏗 Architecture
+
+```
+capstan.config.ts           ← App configuration (DB, auth, agent settings)
+app/
+  routes/
+    index.page.tsx          ← React pages (SSR with loaders)
+    index.api.ts            ← API handlers (export GET, POST, PUT, DELETE)
+    tickets/
+      index.api.ts          ← File-based routing: /tickets
+      [id].api.ts           ← Dynamic segments: /tickets/:id
+    _layout.tsx             ← Layout wrappers
+    _middleware.ts          ← Middleware
+  models/
+    ticket.model.ts         ← Drizzle ORM + defineModel()
+  policies/
+    index.ts                ← definePolicy() permission rules
+```
+
+**Stack:** [Hono](https://hono.dev) (HTTP) · [Drizzle](https://orm.drizzle.team) (ORM) · [React](https://react.dev) (SSR) · [Zod](https://zod.dev) (validation) · [Bun](https://bun.sh) (testing)
+
+---
+
+## 📦 Packages
+
+### Runtime Framework
+
+| Package | Description |
+|---------|-------------|
+| `@capstan/core` | Hono server, `defineAPI`, `defineMiddleware`, `definePolicy`, approval workflow, verifier |
+| `@capstan/router` | File-based routing (`.page.tsx`, `.api.ts`, `_layout.tsx`, `_middleware.ts`) |
+| `@capstan/db` | Drizzle ORM, `defineModel`, field/relation helpers, migrations, auto CRUD |
+| `@capstan/auth` | JWT sessions, API key auth for agents, permission checking |
+| `@capstan/agent` | `CapabilityRegistry`, MCP server, A2A adapter, OpenAPI generator |
+| `@capstan/react` | SSR with loaders, layouts, `Outlet`, hydration |
+| `@capstan/dev` | Dev server with file watching, hot route reload, MCP/A2A endpoints |
+| `@capstan/cli` | CLI: `dev`, `build`, `verify`, `add`, `mcp`, `db:*` |
+| `create-capstan-app` | Project scaffolder (blank & tickets templates) |
+
+### Compiler System (legacy)
+
+| Package | Description |
+|---------|-------------|
+| `@capstan/app-graph` | Application graph schema, validation, diffing |
+| `@capstan/brief` | Brief-to-graph compilation |
+| `@capstan/compiler` | Graph-to-app code generation |
+| `@capstan/packs-core` | Composable packs (auth, tenant, workflow, billing, commerce) |
+| `@capstan/surface-web` | Web surface projection |
+| `@capstan/surface-agent` | Agent surface projection |
+| `@capstan/feedback` | Verification and diagnostics |
+| `@capstan/release` | Release planning and rollback |
+| `@capstan/harness` | Durable task runtime |
+
+---
+
+## 🧑‍💻 Contributing
+
+Capstan is in early development (`v0.1.0`). Contributions are welcome!
 
 ```bash
-npm install -D capstan
-npx capstan brief:check ./app.brief.json
-npx capstan brief:inspect ./app.brief.json
-npx capstan brief:scaffold ./app.brief.json ./my-app
-npx capstan verify ./my-app --json
+git clone https://github.com/barry3406/capstan.git
+cd capstan
+npm install
+npm run build        # Build all 18 packages
+npm run test:new     # Bun tests (128 tests, ~500ms)
 ```
 
-Or, starting from a graph:
+### Conventions
 
-```bash
-npx capstan graph:check ./app.graph.mjs
-npx capstan graph:inspect ./app.graph.mjs
-npx capstan graph:scaffold ./app.graph.mjs ./my-app
-npx capstan verify ./my-app --json
-```
+- ESM only, `.js` extensions in imports
+- Strict TypeScript (`exactOptionalPropertyTypes`, `verbatimModuleSyntax`)
+- All API handlers use `defineAPI()` with Zod schemas
+- Write endpoints require a `policy` reference
 
-## Repository Guide
+### Help wanted
 
-- `AGENTS.md`: instructions for coding agents working in this repository
-- `docs/vision.md`: product thesis and design principles
-- `docs/architecture/core.md`: the current high-level architecture
-- `docs/blueprint.md`: milestone-by-milestone build plan
-- `docs/testing-strategy.md`: unit, integration, and e2e expectations
-- `docs/roadmap.md`: execution path from prototype to broader framework
-- `packages/app-graph`: App Graph schema, validation, diffing, introspection
-- `packages/brief`: brief model and brief-to-graph compilation
-- `packages/packs-core`: built-in packs and pack composition
-- `packages/compiler`: graph-to-application projection
-- `packages/surface-web`: human-surface projection helpers
-- `packages/surface-agent`: agent-surface projection helpers
-- `packages/feedback`: verification and repair-oriented diagnostics
-- `packages/release`: release planning and execution contracts
-- `packages/harness`: durable task runtime and workflow state
-- `packages/cli`: Capstan CLI entry point
+- Database adapters (Postgres, MySQL)
+- Streaming support for A2A
+- Additional scaffolder templates
+- Documentation site
+- More integration tests
 
-## Read Next
+---
 
-- [Vision](./docs/vision.md)
-- [Core Architecture](./docs/architecture/core.md)
-- [Blueprint](./docs/blueprint.md)
-- [Testing Strategy](./docs/testing-strategy.md)
-- [Roadmap](./docs/roadmap.md)
+## 📝 License
+
+[MIT](LICENSE)
+
+---
+
+<div align="center">
+
+**⚓ Capstan** — APIs that speak human and machine.
+
+[Get Started](#-quick-start) · [GitHub](https://github.com/barry3406/capstan) · [Report a Bug](https://github.com/barry3406/capstan/issues)
+
+</div>
