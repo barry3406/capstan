@@ -1,7 +1,6 @@
 {
-  "name": "@capstan/compiler",
-  "version": "0.1.0",
-  "private": true,
+  "name": "@zauso-ai/capstan-compiler",
+  "version": "0.1.4",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -19,9 +18,30 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@capstan/app-graph": "0.1.0",
-    "@capstan/packs-core": "0.1.0",
-    "@capstan/surface-agent": "0.1.0",
-    "@capstan/surface-web": "0.1.0"
+    "@zauso-ai/capstan-app-graph": "0.1.4",
+    "@zauso-ai/capstan-packs-core": "0.1.4",
+    "@zauso-ai/capstan-surface-agent": "0.1.4",
+    "@zauso-ai/capstan-surface-web": "0.1.4"
+  },
+  "description": "Graph-to-application code generation for Capstan",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/barry3406/capstan.git",
+    "directory": "packages/compiler"
+  },
+  "license": "MIT",
+  "author": "barry3406",
+  "homepage": "https://github.com/barry3406/capstan",
+  "keywords": [
+    "capstan",
+    "ai-agent",
+    "full-stack",
+    "framework",
+    "mcp",
+    "a2a",
+    "typescript"
+  ],
+  "publishConfig": {
+    "access": "public"
   }
 }

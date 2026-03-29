@@ -4,16 +4,16 @@ import path from "node:path";
 
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { scanRoutes } from "@capstan/router";
-import type { RouteManifest, RouteEntry } from "@capstan/router";
+import { scanRoutes } from "@zauso-ai/capstan-router";
+import type { RouteManifest, RouteEntry } from "@zauso-ai/capstan-router";
 import {
   createContext,
   createApproval,
   getApproval,
   listApprovals,
   resolveApproval,
-} from "@capstan/core";
-import type { APIDefinition, HttpMethod, CapstanContext, CapstanAuthContext } from "@capstan/core";
+} from "@zauso-ai/capstan-core";
+import type { APIDefinition, HttpMethod, CapstanContext, CapstanAuthContext } from "@zauso-ai/capstan-core";
 
 import { loadApiHandlers, loadPageModule } from "./loader.js";
 import { watchRoutes } from "./watcher.js";
@@ -50,7 +50,7 @@ function readBody(req: IncomingMessage): Promise<unknown> {
 
 /**
  * Determine if an exported handler value looks like an APIDefinition
- * produced by `defineAPI()` from @capstan/core.
+ * produced by `defineAPI()` from @zauso-ai/capstan-core.
  */
 function isAPIDefinition(value: unknown): value is APIDefinition {
   return (
@@ -120,14 +120,14 @@ async function buildApp(
 
   // --- Auth middleware -------------------------------------------------------
   // If the config includes auth settings, create the auth resolver from
-  // @capstan/auth. Otherwise, fall back to anonymous and warn once.
+  // @zauso-ai/capstan-auth. Otherwise, fall back to anonymous and warn once.
 
   let resolveAuth: ((request: Request) => Promise<CapstanAuthContext>) | null =
     null;
 
   if (config.auth) {
     try {
-      const authModuleName = "@capstan/auth";
+      const authModuleName = "@zauso-ai/capstan-auth";
       const authPkg = (await import(authModuleName)) as {
         createAuthMiddleware: (
           cfg: typeof config.auth,
@@ -136,10 +136,10 @@ async function buildApp(
       };
       resolveAuth = authPkg.createAuthMiddleware(config.auth, {});
     } catch {
-      // @capstan/auth is not installed or failed to load — continue without it.
+      // @zauso-ai/capstan-auth is not installed or failed to load — continue without it.
       // eslint-disable-next-line no-console
       console.warn(
-        "[capstan] @capstan/auth not available. Auth middleware disabled.",
+        "[capstan] @zauso-ai/capstan-auth not available. Auth middleware disabled.",
       );
     }
   } else {
@@ -383,7 +383,7 @@ async function buildApp(
     app.get(route.urlPattern, async (c) => {
       // In dev mode we do a simplified server render:
       // - Run the loader (if any) to get data
-      // - Attempt to render using @capstan/react's renderPage
+      // - Attempt to render using @zauso-ai/capstan-react's renderPage
       // - Fall back to a minimal HTML shell with loader data if React
       //   rendering is unavailable or fails.
 
@@ -439,12 +439,12 @@ async function buildApp(
         }
       }
 
-      // Attempt full SSR via @capstan/react. If the package is available
+      // Attempt full SSR via @zauso-ai/capstan-react. If the package is available
       // and the page module has a valid React component, render it.
       // We use a dynamic import so the dev server works even when
-      // @capstan/react is not installed.
+      // @zauso-ai/capstan-react is not installed.
       try {
-        const reactModuleName = "@capstan/react";
+        const reactModuleName = "@zauso-ai/capstan-react";
         const reactPkg = (await import(reactModuleName)) as {
           renderPage: (opts: {
             pageModule: { default: unknown; loader?: unknown };
@@ -483,7 +483,7 @@ async function buildApp(
 
         return c.html(result.html, result.statusCode as 200);
       } catch {
-        // @capstan/react not available or render failed -- serve a
+        // @zauso-ai/capstan-react not available or render failed -- serve a
         // minimal HTML shell that exposes loader data.
         const html = `<!DOCTYPE html>
 <html lang="en">
@@ -700,7 +700,7 @@ async function buildApp(
 
   app.get("/.well-known/agent.json", async (c) => {
     try {
-      const agentModuleName = "@capstan/agent";
+      const agentModuleName = "@zauso-ai/capstan-agent";
       const agentPkg = (await import(agentModuleName)) as {
         generateA2AAgentCard: (
           cfg: { name: string; description?: string; baseUrl?: string },
@@ -719,7 +719,7 @@ async function buildApp(
       return c.json(card as object);
     } catch {
       return c.json(
-        { error: "@capstan/agent not available — A2A disabled" },
+        { error: "@zauso-ai/capstan-agent not available — A2A disabled" },
         501,
       );
     }
@@ -727,7 +727,7 @@ async function buildApp(
 
   app.post("/.well-known/a2a", async (c) => {
     try {
-      const agentModuleName = "@capstan/agent";
+      const agentModuleName = "@zauso-ai/capstan-agent";
       const agentPkg = (await import(agentModuleName)) as {
         createA2AHandler: (
           cfg: { name: string; description?: string; baseUrl?: string },
@@ -781,7 +781,7 @@ async function buildApp(
           id: null,
           error: {
             code: -32603,
-            message: "@capstan/agent not available — A2A disabled",
+            message: "@zauso-ai/capstan-agent not available — A2A disabled",
           },
         },
         501,
@@ -795,7 +795,7 @@ async function buildApp(
 
   app.post("/.well-known/mcp", async (c) => {
     try {
-      const agentModuleName = "@capstan/agent";
+      const agentModuleName = "@zauso-ai/capstan-agent";
       const agentPkg = (await import(agentModuleName)) as {
         routeToToolName: (method: string, path: string) => string;
       };
@@ -815,13 +815,13 @@ async function buildApp(
         tools,
       });
     } catch {
-      // @capstan/agent not available
+      // @zauso-ai/capstan-agent not available
       return c.json({
         protocol: "mcp",
         version: "1.0",
         name: config.appName ?? "capstan-app",
         tools: [],
-        error: "@capstan/agent not available",
+        error: "@zauso-ai/capstan-agent not available",
       });
     }
   });
@@ -873,7 +873,7 @@ export async function createDevServer(
 
   async function buildMcpServer(): Promise<void> {
     try {
-      const agentModuleName = "@capstan/agent";
+      const agentModuleName = "@zauso-ai/capstan-agent";
       const agentPkg = (await import(agentModuleName)) as {
         createMcpServer: (
           cfg: { name: string; description?: string },
@@ -913,7 +913,7 @@ export async function createDevServer(
         executeRoute,
       );
     } catch {
-      // @capstan/agent not available — MCP disabled.
+      // @zauso-ai/capstan-agent not available — MCP disabled.
       mcpInstance = null;
     }
   }

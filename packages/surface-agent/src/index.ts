@@ -6,7 +6,7 @@ import type {
   RelationSpec,
   ResourceSpec,
   ViewSpec
-} from "@capstan/app-graph";
+} from "@zauso-ai/capstan-app-graph";
 
 export interface AgentSurfaceFieldProjection {
   type: "string" | "integer" | "number" | "boolean" | "date" | "datetime" | "json";

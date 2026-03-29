@@ -8,13 +8,13 @@ import type {
   ResourceSpec,
   TaskSpec,
   ViewSpec
-} from "@capstan/app-graph";
-import { introspectAppGraph, normalizeAppGraph, validateAppGraph } from "@capstan/app-graph";
-import { applyBuiltinAppGraphPacks } from "@capstan/packs-core";
-import type { AgentSurfaceProjection } from "@capstan/surface-agent";
-import { projectAgentSurface, renderAgentManifestJson } from "@capstan/surface-agent";
-import type { HumanSurfaceProjection } from "@capstan/surface-web";
-import { projectHumanSurface, renderHumanSurfaceDocument } from "@capstan/surface-web";
+} from "@zauso-ai/capstan-app-graph";
+import { introspectAppGraph, normalizeAppGraph, validateAppGraph } from "@zauso-ai/capstan-app-graph";
+import { applyBuiltinAppGraphPacks } from "@zauso-ai/capstan-packs-core";
+import type { AgentSurfaceProjection } from "@zauso-ai/capstan-surface-agent";
+import { projectAgentSurface, renderAgentManifestJson } from "@zauso-ai/capstan-surface-agent";
+import type { HumanSurfaceProjection } from "@zauso-ai/capstan-surface-web";
+import { projectHumanSurface, renderHumanSurfaceDocument } from "@zauso-ai/capstan-surface-web";
 
 const CAPSTAN_DIR = ".capstan";
 const GENERATED_MANIFEST_PATH = `${CAPSTAN_DIR}/generated-files.json`;

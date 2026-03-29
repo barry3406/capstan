@@ -4,7 +4,7 @@ import type { CapstanAuthContext, CapstanContext } from "./types.js";
 /**
  * Build a CapstanContext from the raw Hono request context.
  *
- * Auth defaults to anonymous. The real auth layer (@capstan/auth) replaces
+ * Auth defaults to anonymous. The real auth layer (@zauso-ai/capstan-auth) replaces
  * the auth object via middleware before any handler runs.
  */
 export function createContext(honoCtx: HonoContext): CapstanContext {

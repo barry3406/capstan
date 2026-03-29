@@ -289,7 +289,7 @@ async function checkStructure(appRoot: string): Promise<VerifyDiagnostic[]> {
       code: "missing_tsconfig",
       severity: "error",
       message: "Missing tsconfig.json",
-      hint: "Create a tsconfig.json extending @capstan/core recommended settings.",
+      hint: "Create a tsconfig.json extending @zauso-ai/capstan-core recommended settings.",
       fixCategory: "missing_file",
       autoFixable: true,
     });
@@ -361,7 +361,7 @@ async function checkRoutes(appRoot: string): Promise<VerifyDiagnostic[]> {
   }
 
   // Use the router scanner to discover routes
-  const { scanRoutes } = await import("@capstan/router");
+  const { scanRoutes } = await import("@zauso-ai/capstan-router");
   const manifest = await scanRoutes(routesDir);
 
   const apiRoutes = manifest.routes.filter((r) => r.type === "api");
@@ -565,7 +565,7 @@ async function checkTypeScript(appRoot: string): Promise<VerifyDiagnostic[]> {
   // the monorepo root.
   let tscBinary = join(appRoot, "node_modules", ".bin", "tsc");
   if (!(await pathExists(tscBinary))) {
-    // Try the monorepo root from @capstan/core's location
+    // Try the monorepo root from @zauso-ai/capstan-core's location
     const packageDir = dirname(fileURLToPath(import.meta.url));
     const repoRoot = resolve(packageDir, "../../..");
     const repoTsc = join(repoRoot, "node_modules", ".bin", "tsc");
@@ -722,7 +722,7 @@ async function checkContracts(appRoot: string): Promise<VerifyDiagnostic[]> {
 
   // Check API route files for meta.resource references to models
   if (await isDirectory(routesDir)) {
-    const { scanRoutes } = await import("@capstan/router");
+    const { scanRoutes } = await import("@zauso-ai/capstan-router");
     const manifest = await scanRoutes(routesDir);
     const apiRoutes = manifest.routes.filter((r) => r.type === "api");
 
@@ -781,8 +781,8 @@ async function checkManifest(appRoot: string): Promise<VerifyDiagnostic[]> {
   }
 
   // Generate a fresh manifest from the current routes
-  const { scanRoutes } = await import("@capstan/router");
-  const { generateRouteManifest } = await import("@capstan/router");
+  const { scanRoutes } = await import("@zauso-ai/capstan-router");
+  const { generateRouteManifest } = await import("@zauso-ai/capstan-router");
 
   const routeManifest = await scanRoutes(routesDir);
   const { apiRoutes } = generateRouteManifest(routeManifest);

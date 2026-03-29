@@ -7,7 +7,7 @@ import {
   extractApiKeyPrefix,
   checkPermission,
   createAuthMiddleware,
-} from "@capstan/auth";
+} from "@zauso-ai/capstan-auth";
 
 // ---------------------------------------------------------------------------
 // signSession / verifySession

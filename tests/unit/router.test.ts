@@ -6,8 +6,8 @@ import {
   scanRoutes,
   matchRoute,
   generateRouteManifest,
-} from "@capstan/router";
-import type { RouteManifest } from "@capstan/router";
+} from "@zauso-ai/capstan-router";
+import type { RouteManifest } from "@zauso-ai/capstan-router";
 
 // ---------------------------------------------------------------------------
 // Shared temp-dir lifecycle

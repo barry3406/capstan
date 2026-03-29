@@ -67,9 +67,9 @@ export async function scaffoldProject(config: {
 
   // Files shared by every template
   const files: FileEntry[] = [
-    { path: "package.json", content: packageJson(projectName) },
+    { path: "package.json", content: packageJson(projectName, template) },
     { path: "tsconfig.json", content: tsconfig() },
-    { path: "capstan.config.ts", content: capstanConfig(projectName, title) },
+    { path: "capstan.config.ts", content: capstanConfig(projectName, title, template) },
     { path: "app/routes/_layout.tsx", content: rootLayout(title) },
     { path: "app/routes/index.page.tsx", content: indexPage(title) },
     { path: "app/routes/api/health.api.ts", content: healthApi() },

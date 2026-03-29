@@ -2,8 +2,8 @@ import { describe, it, expect, afterAll, beforeAll } from "bun:test";
 import { mkdtemp, rm, access, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { createDevServer } from "@capstan/dev";
-import type { DevServerInstance } from "@capstan/dev";
+import { createDevServer } from "@zauso-ai/capstan-dev";
+import type { DevServerInstance } from "@zauso-ai/capstan-dev";
 
 // Import scaffoldProject from the create-capstan package's scaffold module.
 // The package name is "create-capstan-app" but it does not re-export

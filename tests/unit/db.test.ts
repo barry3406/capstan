@@ -10,7 +10,7 @@ import {
   createDatabase,
   generateMigration,
   applyMigration,
-} from "@capstan/db";
+} from "@zauso-ai/capstan-db";
 
 // ---------------------------------------------------------------------------
 // Temp dir lifecycle for database files

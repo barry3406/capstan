@@ -2,7 +2,26 @@
 // Template strings for generated Capstan projects
 // ---------------------------------------------------------------------------
 
-export function packageJson(projectName: string): string {
+export function packageJson(
+  projectName: string,
+  template: "blank" | "tickets" = "blank",
+): string {
+  const deps: Record<string, string> = {
+    "@zauso-ai/capstan-cli": "^0.1.4",
+    "@zauso-ai/capstan-core": "^0.1.4",
+    "@zauso-ai/capstan-dev": "^0.1.4",
+    "@zauso-ai/capstan-react": "^0.1.4",
+    "@zauso-ai/capstan-router": "^0.1.4",
+    zod: "^3.23.0",
+  };
+
+  // Only include capstan-db for templates that actually use it (native dep
+  // issues with better-sqlite3 make it a poor default).
+  if (template === "tickets") {
+    deps["@zauso-ai/capstan-auth"] = "^0.1.4";
+    deps["@zauso-ai/capstan-db"] = "^0.1.4";
+  }
+
   return JSON.stringify(
     {
       name: projectName,
@@ -14,9 +33,7 @@ export function packageJson(projectName: string): string {
         build: "capstan build",
         start: "capstan start",
       },
-      dependencies: {
-        capstan: "workspace:*",
-      },
+      dependencies: deps,
       devDependencies: {
         typescript: "^5.9.0",
         "@types/node": "^24.0.0",
@@ -46,15 +63,14 @@ export function tsconfig(): string {
   );
 }
 
-export function capstanConfig(projectName: string, title: string): string {
-  return `import { defineConfig, env } from "capstan";
-
-export default defineConfig({
-  app: {
-    name: "${projectName}",
-    title: "${title}",
-    description: "A Capstan application",
-  },
+export function capstanConfig(
+  projectName: string,
+  title: string,
+  template: "blank" | "tickets" = "blank",
+): string {
+  const dbBlock =
+    template === "tickets"
+      ? `
   database: {
     provider: "sqlite",
     url: env("DATABASE_URL") || "./data.db",
@@ -67,7 +83,17 @@ export default defineConfig({
       secret: env("SESSION_SECRET") || "dev-secret-change-in-production",
       maxAge: "7d",
     },
-  },
+  },`
+      : "";
+
+  return `import { defineConfig, env } from "@zauso-ai/capstan-core";
+
+export default defineConfig({
+  app: {
+    name: "${projectName}",
+    title: "${title}",
+    description: "A Capstan application",
+  },${dbBlock}
   agent: {
     manifest: true,
     mcp: true,
@@ -78,7 +104,7 @@ export default defineConfig({
 }
 
 export function rootLayout(title: string): string {
-  return `import { Outlet } from "capstan/react";
+  return `import { Outlet } from "@zauso-ai/capstan-react";
 
 export default function RootLayout() {
   return (
@@ -117,7 +143,7 @@ export function indexPage(title: string): string {
 }
 
 export function healthApi(): string {
-  return `import { defineAPI } from "capstan";
+  return `import { defineAPI } from "@zauso-ai/capstan-core";
 import { z } from "zod";
 
 export const GET = defineAPI({
@@ -138,7 +164,7 @@ export const GET = defineAPI({
 }
 
 export function policiesIndex(): string {
-  return `import { definePolicy } from "capstan";
+  return `import { definePolicy } from "@zauso-ai/capstan-core";
 
 export const requireAuth = definePolicy({
   key: "requireAuth",
@@ -216,7 +242,7 @@ capstan add model <name>
 \`\`\`
 Or manually create \`app/models/<name>.model.ts\`:
 \`\`\`typescript
-import { defineModel, field } from "@capstan/db";
+import { defineModel, field } from "@zauso-ai/capstan-db";
 export const MyModel = defineModel("<name>", {
   fields: {
     id: field.id(),
@@ -232,7 +258,7 @@ capstan add api <name>
 \`\`\`
 Or manually create \`app/routes/<name>/index.api.ts\`:
 \`\`\`typescript
-import { defineAPI } from "capstan";
+import { defineAPI } from "@zauso-ai/capstan-core";
 import { z } from "zod";
 
 export const meta = { resource: "<name>", description: "..." };
@@ -319,7 +345,7 @@ capstan add policy <n>   # Scaffold a policy
 // ---------------------------------------------------------------------------
 
 export function ticketModel(): string {
-  return `import { defineModel, field, relation } from "capstan/db";
+  return `import { defineModel, field, relation } from "@zauso-ai/capstan-db";
 
 export const Ticket = defineModel("ticket", {
   fields: {
@@ -336,7 +362,7 @@ export const Ticket = defineModel("ticket", {
 }
 
 export function ticketsIndexApi(): string {
-  return `import { defineAPI } from "capstan";
+  return `import { defineAPI } from "@zauso-ai/capstan-core";
 import { z } from "zod";
 
 export const meta = {
@@ -399,7 +425,7 @@ export const POST = defineAPI({
 }
 
 export function ticketByIdApi(): string {
-  return `import { defineAPI } from "capstan";
+  return `import { defineAPI } from "@zauso-ai/capstan-core";
 import { z } from "zod";
 
 export const meta = {

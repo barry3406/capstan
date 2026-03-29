@@ -7,8 +7,8 @@ import {
   enforcePolicies,
   createCapstanApp,
   env,
-} from "@capstan/core";
-import type { CapstanContext, PolicyDefinition } from "@capstan/core";
+} from "@zauso-ai/capstan-core";
+import type { CapstanContext, PolicyDefinition } from "@zauso-ai/capstan-core";
 
 // ---------------------------------------------------------------------------
 // defineConfig

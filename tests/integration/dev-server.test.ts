@@ -2,8 +2,8 @@ import { describe, it, expect, afterAll, beforeAll } from "bun:test";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { createDevServer } from "@capstan/dev";
-import type { DevServerInstance } from "@capstan/dev";
+import { createDevServer } from "@zauso-ai/capstan-dev";
+import type { DevServerInstance } from "@zauso-ai/capstan-dev";
 
 // ---------------------------------------------------------------------------
 // Setup: create a minimal Capstan app in a temp directory

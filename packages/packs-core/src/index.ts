@@ -9,7 +9,7 @@ import type {
   ResourceSpec,
   TaskSpec,
   ViewSpec
-} from "@capstan/app-graph";
+} from "@zauso-ai/capstan-app-graph";
 
 const PACKS_APPLIED = Symbol.for("capstan.graph-packs.applied");
 

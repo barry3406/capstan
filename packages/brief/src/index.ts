@@ -7,9 +7,9 @@ import type {
   InputFieldSpec,
   RelationSpec,
   ScalarType
-} from "@capstan/app-graph";
-import type { GraphPackDefinition } from "@capstan/packs-core";
-import { listBuiltinGraphPacks, resolvePackSelections } from "@capstan/packs-core";
+} from "@zauso-ai/capstan-app-graph";
+import type { GraphPackDefinition } from "@zauso-ai/capstan-packs-core";
+import { listBuiltinGraphPacks, resolvePackSelections } from "@zauso-ai/capstan-packs-core";
 
 export const CURRENT_CAPSTAN_BRIEF_VERSION = 1;
 

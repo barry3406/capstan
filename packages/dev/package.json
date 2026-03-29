@@ -1,7 +1,6 @@
 {
-  "name": "@capstan/dev",
-  "version": "0.1.0",
-  "private": true,
+  "name": "@zauso-ai/capstan-dev",
+  "version": "0.1.4",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -19,10 +18,32 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@capstan/agent": "*",
-    "@capstan/auth": "*",
-    "@capstan/core": "*",
-    "@capstan/router": "*",
-    "hono": "^4.0.0"
+    "@zauso-ai/capstan-agent": "0.1.4",
+    "@zauso-ai/capstan-auth": "0.1.4",
+    "@zauso-ai/capstan-core": "0.1.4",
+    "@zauso-ai/capstan-router": "0.1.4",
+    "hono": "^4.0.0",
+    "tsx": "^4.0.0"
+  },
+  "description": "Dev server for Capstan — file watching, hot route reload, MCP/A2A endpoints",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/barry3406/capstan.git",
+    "directory": "packages/dev"
+  },
+  "license": "MIT",
+  "author": "barry3406",
+  "homepage": "https://github.com/barry3406/capstan",
+  "keywords": [
+    "capstan",
+    "ai-agent",
+    "full-stack",
+    "framework",
+    "mcp",
+    "a2a",
+    "typescript"
+  ],
+  "publishConfig": {
+    "access": "public"
   }
 }

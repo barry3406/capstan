@@ -4,22 +4,22 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { AppGraph } from "@capstan/app-graph";
-import { diffAppGraphs, introspectAppGraph, validateAppGraph } from "@capstan/app-graph";
-import type { CapstanBrief } from "@capstan/brief";
+import type { AppGraph } from "@zauso-ai/capstan-app-graph";
+import { diffAppGraphs, introspectAppGraph, validateAppGraph } from "@zauso-ai/capstan-app-graph";
+import type { CapstanBrief } from "@zauso-ai/capstan-brief";
 import {
   compileCapstanBrief,
   summarizeCapstanBrief,
   validateCapstanBrief
-} from "@capstan/brief";
+} from "@zauso-ai/capstan-brief";
 import {
   applyAppGraphPacks,
   applyBuiltinAppGraphPacks,
   listBuiltinGraphPacks
-} from "@capstan/packs-core";
-import type { GraphPackDefinition } from "@capstan/packs-core";
-import { scaffoldAppGraph } from "@capstan/compiler";
-import { renderVerifyReportText, verifyGeneratedApp } from "@capstan/feedback";
+} from "@zauso-ai/capstan-packs-core";
+import type { GraphPackDefinition } from "@zauso-ai/capstan-packs-core";
+import { scaffoldAppGraph } from "@zauso-ai/capstan-compiler";
+import { renderVerifyReportText, verifyGeneratedApp } from "@zauso-ai/capstan-feedback";
 import {
   approveHarnessRun,
   cancelHarnessRun,
@@ -50,7 +50,7 @@ import {
   resumeHarnessRun,
   retryHarnessRun,
   pauseHarnessRun
-} from "@capstan/harness";
+} from "@zauso-ai/capstan-harness";
 import {
   createReleasePlan,
   createReleaseRun,
@@ -60,7 +60,7 @@ import {
   renderReleasePlanText,
   renderRollbackRunText,
   renderReleaseRunText
-} from "@capstan/release";
+} from "@zauso-ai/capstan-release";
 
 async function main(): Promise<void> {
   const [command, ...args] = process.argv.slice(2);
@@ -431,8 +431,8 @@ async function runVerify(args: string[], asJson: boolean): Promise<void> {
   const hasOldAppJson = existsSync(join(appRoot, "capstan.app.json"));
 
   if (hasAppRoutes && !hasOldAppJson) {
-    // New runtime framework — use @capstan/core verifier
-    const { verifyCapstanApp, renderRuntimeVerifyText } = await import("@capstan/core");
+    // New runtime framework — use @zauso-ai/capstan-core verifier
+    const { verifyCapstanApp, renderRuntimeVerifyText } = await import("@zauso-ai/capstan-core");
     const report = await verifyCapstanApp(appRoot);
 
     if (asJson) {
@@ -448,7 +448,7 @@ async function runVerify(args: string[], asJson: boolean): Promise<void> {
   }
 
   if (hasOldAppJson) {
-    // Old compiler-based framework — use @capstan/feedback verifier
+    // Old compiler-based framework — use @zauso-ai/capstan-feedback verifier
     if (!target) {
       console.error("Usage: capstan verify <generated-app-dir> [--json]");
       process.exitCode = 1;
@@ -957,35 +957,75 @@ async function runHarnessMemories(args: string[]): Promise<void> {
 // ---------------------------------------------------------------------------
 
 async function runDev(args: string[]): Promise<void> {
-  const { createDevServer } = await import("@capstan/dev");
-  const port = parseInt(readFlagValue(args, "--port") ?? "3000", 10);
-  const host = readFlagValue(args, "--host") ?? "localhost";
+  // Spawn a child process with --import tsx so that dynamic import() of .ts
+  // and .tsx route files works. Node.js cannot natively handle .tsx, and
+  // register("tsx/esm") was deprecated in Node v20.6+.
+  const { spawn } = await import("node:child_process");
+  const { fileURLToPath } = await import("node:url");
+  const { resolve: resolvePath } = await import("node:path");
 
-  // Try to load capstan.config.ts / capstan.config.js for app metadata
-  let appName = "capstan-app";
-  let appDescription: string | undefined;
+  // Locate the tsx package entry for --import
+  let tsxImportSpecifier: string;
   try {
-    const configPath = await resolveConfig();
-    if (configPath) {
-      const configUrl = pathToFileURL(configPath).href;
-      const mod = (await import(configUrl)) as {
-        default?: { name?: string; description?: string };
-      };
-      if (mod.default?.name) appName = mod.default.name;
-      if (mod.default?.description) appDescription = mod.default.description;
-    }
+    const tsxPkgPath = await import("node:module").then(m =>
+      m.createRequire(import.meta.url).resolve("tsx/esm"),
+    );
+    // --import requires a file:// URL or bare specifier
+    tsxImportSpecifier = "tsx";
   } catch {
-    // Config file is optional — continue without it.
+    tsxImportSpecifier = "tsx";
   }
 
-  const server = await createDevServer({
-    rootDir: process.cwd(),
-    port,
-    host,
-    appName,
-    ...(appDescription ? { appDescription } : {}),
+  // Build an inline script that starts the dev server
+  const port = readFlagValue(args, "--port") ?? "3000";
+  const host = readFlagValue(args, "--host") ?? "localhost";
+
+  const devScript = `
+    import { createDevServer } from "@zauso-ai/capstan-dev";
+    import { pathToFileURL } from "node:url";
+    import { existsSync } from "node:fs";
+    import { resolve } from "node:path";
+
+    const port = ${parseInt(port, 10)};
+    const host = "${host}";
+    const cwd = process.cwd();
+
+    let appName = "capstan-app";
+    let appDescription;
+    for (const name of ["capstan.config.ts", "capstan.config.js"]) {
+      const p = resolve(cwd, name);
+      if (existsSync(p)) {
+        try {
+          const mod = await import(pathToFileURL(p).href);
+          if (mod.default?.app?.name) appName = mod.default.app.name;
+          if (mod.default?.app?.description) appDescription = mod.default.app.description;
+        } catch {}
+        break;
+      }
+    }
+
+    const server = await createDevServer({ rootDir: cwd, port, host, appName, ...(appDescription ? { appDescription } : {}) });
+    await server.start();
+  `;
+
+  const child = spawn(
+    process.execPath,
+    ["--import", tsxImportSpecifier, "--input-type=module", "-e", devScript],
+    {
+      cwd: process.cwd(),
+      stdio: "inherit",
+      env: { ...process.env },
+    },
+  );
+
+  child.on("exit", (code) => {
+    process.exit(code ?? 0);
   });
-  await server.start();
+
+  // Forward SIGINT / SIGTERM to child
+  for (const sig of ["SIGINT", "SIGTERM"] as const) {
+    process.on(sig, () => child.kill(sig));
+  }
 }
 
 async function runBuild(): Promise<void> {
@@ -1000,8 +1040,8 @@ async function runBuild(): Promise<void> {
   // Generate agent-manifest.json and openapi.json into dist/
   const { mkdir, writeFile } = await import("node:fs/promises");
   const { join } = await import("node:path");
-  const { scanRoutes } = await import("@capstan/router");
-  const { generateAgentManifest, generateOpenApiSpec } = await import("@capstan/agent");
+  const { scanRoutes } = await import("@zauso-ai/capstan-router");
+  const { generateAgentManifest, generateOpenApiSpec } = await import("@zauso-ai/capstan-agent");
 
   let appName = "capstan-app";
   let appDescription: string | undefined;
@@ -1072,7 +1112,7 @@ async function runDbMigrate(args: string[]): Promise<void> {
 
   const { mkdir, readdir, writeFile } = await import("node:fs/promises");
   const { join } = await import("node:path");
-  const { generateMigration } = await import("@capstan/db");
+  const { generateMigration } = await import("@zauso-ai/capstan-db");
 
   const migrationsDir = join(process.cwd(), "app", "migrations");
   await mkdir(migrationsDir, { recursive: true });
@@ -1117,7 +1157,7 @@ async function runDbMigrate(args: string[]): Promise<void> {
 async function runDbPush(): Promise<void> {
   const { readdir, readFile: readMigrationFile } = await import("node:fs/promises");
   const { join } = await import("node:path");
-  const { createDatabase } = await import("@capstan/db");
+  const { createDatabase } = await import("@zauso-ai/capstan-db");
 
   const migrationsDir = join(process.cwd(), "app", "migrations");
   let files: string[];
@@ -1182,8 +1222,8 @@ async function runDbStatus(): Promise<void> {
 // ---------------------------------------------------------------------------
 
 async function runMcp(): Promise<void> {
-  const { createMcpServer, serveMcpStdio } = await import("@capstan/agent");
-  const { scanRoutes } = await import("@capstan/router");
+  const { createMcpServer, serveMcpStdio } = await import("@zauso-ai/capstan-agent");
+  const { scanRoutes } = await import("@zauso-ai/capstan-router");
   const { join } = await import("node:path");
 
   let appName = "capstan-app";
@@ -1216,7 +1256,7 @@ async function runMcp(): Promise<void> {
 
   // Build an executeRoute callback that loads handlers from disk and invokes
   // them directly, so MCP tool calls actually run the real route logic.
-  const { loadApiHandlers } = await import("@capstan/dev");
+  const { loadApiHandlers } = await import("@zauso-ai/capstan-dev");
 
   const executeRoute = async (
     method: string,
@@ -1278,8 +1318,8 @@ async function runMcp(): Promise<void> {
 }
 
 async function runAgentManifest(): Promise<void> {
-  const { generateAgentManifest } = await import("@capstan/agent");
-  const { scanRoutes } = await import("@capstan/router");
+  const { generateAgentManifest } = await import("@zauso-ai/capstan-agent");
+  const { scanRoutes } = await import("@zauso-ai/capstan-router");
   const { join } = await import("node:path");
 
   let appName = "capstan-app";
@@ -1316,8 +1356,8 @@ async function runAgentManifest(): Promise<void> {
 }
 
 async function runAgentOpenapi(): Promise<void> {
-  const { generateOpenApiSpec } = await import("@capstan/agent");
-  const { scanRoutes } = await import("@capstan/router");
+  const { generateOpenApiSpec } = await import("@zauso-ai/capstan-agent");
+  const { scanRoutes } = await import("@zauso-ai/capstan-router");
   const { join } = await import("node:path");
 
   let appName = "capstan-app";
@@ -1641,7 +1681,7 @@ async function runAdd(args: string[]): Promise<void> {
         return;
       }
       const pascalName = name.charAt(0).toUpperCase() + name.slice(1);
-      const content = `import { defineModel, field } from "capstan/db";
+      const content = `import { defineModel, field } from "@zauso-ai/capstan-db";
 
 export const ${pascalName} = defineModel("${name}", {
   fields: {
@@ -1666,7 +1706,7 @@ export const ${pascalName} = defineModel("${name}", {
         process.exitCode = 1;
         return;
       }
-      const content = `import { defineAPI } from "capstan";
+      const content = `import { defineAPI } from "@zauso-ai/capstan-core";
 import { z } from "zod";
 
 export const meta = {
@@ -1759,7 +1799,7 @@ export const ${camelName} = definePolicy({
         console.log(`\u2713 Appended policy "${camelName}" to app/policies/index.ts`);
       } else {
         // Create new policies file with import
-        const content = `import { definePolicy } from "capstan";
+        const content = `import { definePolicy } from "@zauso-ai/capstan-core";
 ${policySnippet}`;
         await mkdir(policiesDir, { recursive: true });
         await writeFile(policiesFile, content, "utf-8");

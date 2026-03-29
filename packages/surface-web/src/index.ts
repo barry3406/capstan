@@ -6,7 +6,7 @@ import type {
   PolicySpec,
   ResourceSpec,
   ViewSpec
-} from "@capstan/app-graph";
+} from "@zauso-ai/capstan-app-graph";
 
 export interface HumanSurfaceStateSet {
   loading: string;

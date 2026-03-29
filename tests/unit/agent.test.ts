@@ -4,8 +4,8 @@ import {
   generateOpenApiSpec,
   createMcpServer,
   routeToToolName,
-} from "@capstan/agent";
-import type { RouteRegistryEntry, AgentConfig } from "@capstan/agent";
+} from "@zauso-ai/capstan-agent";
+import type { RouteRegistryEntry, AgentConfig } from "@zauso-ai/capstan-agent";
 
 // ---------------------------------------------------------------------------
 // Shared test data

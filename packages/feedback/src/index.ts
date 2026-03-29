@@ -5,7 +5,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { JSDOM } from "jsdom";
-import type { AppGraph } from "@capstan/app-graph";
+import type { AppGraph } from "@zauso-ai/capstan-app-graph";
 
 const execFileAsync = promisify(execFile);
 const packageDir = dirname(fileURLToPath(import.meta.url));

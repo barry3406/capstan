@@ -31,7 +31,7 @@ export async function loadRouteModule(
  * API route files are expected to export one or more of:
  *   GET, POST, PUT, DELETE, PATCH
  *
- * Each export should be the result of `defineAPI()` from @capstan/core,
+ * Each export should be the result of `defineAPI()` from @zauso-ai/capstan-core,
  * which produces an `APIDefinition` object with a `.handler` method.
  *
  * An optional `meta` export provides additional route metadata (e.g.

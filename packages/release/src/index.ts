@@ -4,7 +4,7 @@ import { execFile } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { verifyGeneratedApp, type VerifyReport } from "@capstan/feedback";
+import { verifyGeneratedApp, type VerifyReport } from "@zauso-ai/capstan-feedback";
 
 const accessAsync = promisify(access);
 const execFileAsync = promisify(execFile);

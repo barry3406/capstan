@@ -1,7 +1,6 @@
 {
-  "name": "@capstan/cli",
-  "version": "0.1.0",
-  "private": true,
+  "name": "@zauso-ai/capstan-cli",
+  "version": "0.1.4",
   "type": "module",
   "bin": {
     "capstan": "./dist/index.js"
@@ -12,17 +11,50 @@
     "dev": "tsx src/index.ts"
   },
   "dependencies": {
-    "@capstan/agent": "0.1.0",
-    "@capstan/app-graph": "0.1.0",
-    "@capstan/brief": "0.1.0",
-    "@capstan/compiler": "0.1.0",
-    "@capstan/core": "0.1.0",
-    "@capstan/db": "0.1.0",
-    "@capstan/dev": "0.1.0",
-    "@capstan/feedback": "0.1.0",
-    "@capstan/harness": "0.1.0",
-    "@capstan/packs-core": "0.1.0",
-    "@capstan/release": "0.1.0",
-    "@capstan/router": "0.1.0"
+    "@zauso-ai/capstan-agent": "0.1.4",
+    "@zauso-ai/capstan-app-graph": "0.1.4",
+    "@zauso-ai/capstan-brief": "0.1.4",
+    "@zauso-ai/capstan-compiler": "0.1.4",
+    "@zauso-ai/capstan-core": "0.1.4",
+    "@zauso-ai/capstan-db": "0.1.4",
+    "@zauso-ai/capstan-dev": "0.1.4",
+    "@zauso-ai/capstan-feedback": "0.1.4",
+    "@zauso-ai/capstan-harness": "0.1.4",
+    "@zauso-ai/capstan-packs-core": "0.1.4",
+    "@zauso-ai/capstan-release": "0.1.4",
+    "@zauso-ai/capstan-router": "0.1.4",
+    "tsx": "^4.19.0"
+  },
+  "description": "CLI for Capstan — dev, build, verify, add, mcp commands",
+  "files": [
+    "dist"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/barry3406/capstan.git",
+    "directory": "packages/cli"
+  },
+  "license": "MIT",
+  "author": "barry3406",
+  "homepage": "https://github.com/barry3406/capstan",
+  "keywords": [
+    "capstan",
+    "ai-agent",
+    "full-stack",
+    "framework",
+    "mcp",
+    "a2a",
+    "typescript"
+  ],
+  "publishConfig": {
+    "access": "public"
   }
 }
