@@ -1,6 +1,6 @@
 {
   "name": "@zauso-ai/capstan-compiler",
-  "version": "0.1.4",
+  "version": "0.2.0",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -18,10 +18,10 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@zauso-ai/capstan-app-graph": "0.1.4",
-    "@zauso-ai/capstan-packs-core": "0.1.4",
-    "@zauso-ai/capstan-surface-agent": "0.1.4",
-    "@zauso-ai/capstan-surface-web": "0.1.4"
+    "@zauso-ai/capstan-app-graph": "0.2.0",
+    "@zauso-ai/capstan-packs-core": "0.2.0",
+    "@zauso-ai/capstan-surface-agent": "0.2.0",
+    "@zauso-ai/capstan-surface-web": "0.2.0"
   },
   "description": "Graph-to-application code generation for Capstan",
   "repository": {

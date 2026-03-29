@@ -7,19 +7,19 @@ export function packageJson(
   template: "blank" | "tickets" = "blank",
 ): string {
   const deps: Record<string, string> = {
-    "@zauso-ai/capstan-cli": "^0.1.4",
-    "@zauso-ai/capstan-core": "^0.1.4",
-    "@zauso-ai/capstan-dev": "^0.1.4",
-    "@zauso-ai/capstan-react": "^0.1.4",
-    "@zauso-ai/capstan-router": "^0.1.4",
+    "@zauso-ai/capstan-cli": "^0.2.0",
+    "@zauso-ai/capstan-core": "^0.2.0",
+    "@zauso-ai/capstan-dev": "^0.2.0",
+    "@zauso-ai/capstan-react": "^0.2.0",
+    "@zauso-ai/capstan-router": "^0.2.0",
     zod: "^3.23.0",
   };
 
   // Only include capstan-db for templates that actually use it (native dep
   // issues with better-sqlite3 make it a poor default).
   if (template === "tickets") {
-    deps["@zauso-ai/capstan-auth"] = "^0.1.4";
-    deps["@zauso-ai/capstan-db"] = "^0.1.4";
+    deps["@zauso-ai/capstan-auth"] = "^0.2.0";
+    deps["@zauso-ai/capstan-db"] = "^0.2.0";
   }
 
   return JSON.stringify(

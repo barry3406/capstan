@@ -1,6 +1,6 @@
 {
   "name": "@zauso-ai/capstan-cli",
-  "version": "0.1.4",
+  "version": "0.2.0",
   "type": "module",
   "bin": {
     "capstan": "./dist/index.js"
@@ -11,18 +11,18 @@
     "dev": "tsx src/index.ts"
   },
   "dependencies": {
-    "@zauso-ai/capstan-agent": "0.1.4",
-    "@zauso-ai/capstan-app-graph": "0.1.4",
-    "@zauso-ai/capstan-brief": "0.1.4",
-    "@zauso-ai/capstan-compiler": "0.1.4",
-    "@zauso-ai/capstan-core": "0.1.4",
-    "@zauso-ai/capstan-db": "0.1.4",
-    "@zauso-ai/capstan-dev": "0.1.4",
-    "@zauso-ai/capstan-feedback": "0.1.4",
-    "@zauso-ai/capstan-harness": "0.1.4",
-    "@zauso-ai/capstan-packs-core": "0.1.4",
-    "@zauso-ai/capstan-release": "0.1.4",
-    "@zauso-ai/capstan-router": "0.1.4",
+    "@zauso-ai/capstan-agent": "0.2.0",
+    "@zauso-ai/capstan-app-graph": "0.2.0",
+    "@zauso-ai/capstan-brief": "0.2.0",
+    "@zauso-ai/capstan-compiler": "0.2.0",
+    "@zauso-ai/capstan-core": "0.2.0",
+    "@zauso-ai/capstan-db": "0.2.0",
+    "@zauso-ai/capstan-dev": "0.2.0",
+    "@zauso-ai/capstan-feedback": "0.2.0",
+    "@zauso-ai/capstan-harness": "0.2.0",
+    "@zauso-ai/capstan-packs-core": "0.2.0",
+    "@zauso-ai/capstan-release": "0.2.0",
+    "@zauso-ai/capstan-router": "0.2.0",
     "tsx": "^4.19.0"
   },
   "description": "CLI for Capstan — dev, build, verify, add, mcp commands",

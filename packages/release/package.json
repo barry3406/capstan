@@ -1,6 +1,6 @@
 {
   "name": "@zauso-ai/capstan-release",
-  "version": "0.1.4",
+  "version": "0.2.0",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -18,7 +18,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@zauso-ai/capstan-feedback": "0.1.4"
+    "@zauso-ai/capstan-feedback": "0.2.0"
   },
   "description": "Release planning and rollback for Capstan",
   "repository": {

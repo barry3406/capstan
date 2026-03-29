@@ -1,6 +1,6 @@
 {
   "name": "@zauso-ai/capstan-brief",
-  "version": "0.1.4",
+  "version": "0.2.0",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -18,8 +18,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@zauso-ai/capstan-app-graph": "0.1.4",
-    "@zauso-ai/capstan-packs-core": "0.1.4"
+    "@zauso-ai/capstan-app-graph": "0.2.0",
+    "@zauso-ai/capstan-packs-core": "0.2.0"
   },
   "description": "Brief-to-graph compilation for Capstan",
   "repository": {
