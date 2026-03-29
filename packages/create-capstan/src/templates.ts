@@ -282,30 +282,35 @@ export const GET = defineAPI({
   policy: "requireAuth",               // Policy key from app/policies/ (optional)
 
   // --- Handler ---
-  async handler({ input, ctx }) {
+  async handler({ input, ctx, params }) {
     // input: parsed & validated by Zod (type-safe)
     // ctx.auth: { isAuthenticated, type, userId?, permissions[] }
     // ctx.request: raw Request object
     // ctx.env: process.env record
+    // params: route parameters (e.g. params.id for [id].api.ts routes)
 
     return { items: [], total: 0 };    // Must match output schema
   },
 });
 \`\`\`
 
-### Handler Context (\`ctx\`)
+### Handler Context (\`ctx\`) and \`params\`
 
 \`\`\`typescript
 interface CapstanContext {
   auth: {
     isAuthenticated: boolean;
-    type: "anonymous" | "session" | "apiKey";
+    type: "anonymous" | "human" | "agent";
     userId?: string;
     permissions: string[];
   };
   request: Request;           // Standard Web API Request
   env: Record<string, string | undefined>;  // process.env
 }
+
+// params: Record<string, string>
+// For a route file at app/routes/tickets/[id].api.ts:
+//   GET /tickets/abc123 → params.id === "abc123"
 \`\`\`
 
 ### Multi-protocol: one defineAPI() → four surfaces
@@ -447,6 +452,38 @@ npm install better-sqlite3              # SQLite
 npm install pg                          # PostgreSQL
 npm install mysql2                      # MySQL
 \`\`\`
+
+## Querying the Database in Handlers
+
+\`\`\`typescript
+// app/db.ts — shared database instance
+import { createDatabase } from "@zauso-ai/capstan-db";
+
+const { db, close } = createDatabase({ provider: "sqlite", url: "./data.db" });
+export { db, close };
+\`\`\`
+
+\`\`\`typescript
+// app/routes/tickets/index.api.ts — using the database in a handler
+import { defineAPI } from "@zauso-ai/capstan-core";
+import { z } from "zod";
+import { db } from "../../db.js";
+
+export const GET = defineAPI({
+  output: z.object({ items: z.array(z.any()) }),
+  description: "List all tickets",
+  capability: "read",
+  async handler({ input, ctx }) {
+    // db is a Drizzle ORM instance — use Drizzle query syntax
+    // See: https://orm.drizzle.team/docs/select
+    return { items: [] };
+  },
+});
+\`\`\`
+
+\`createDatabase()\` accepts \`{ provider, url }\` and returns \`{ db, close }\`.
+- \`db\` — a Drizzle ORM instance (SQLite, PostgreSQL, or MySQL depending on provider)
+- \`close()\` — closes the underlying connection pool (call on shutdown)
 
 ## Policies — Authorization
 

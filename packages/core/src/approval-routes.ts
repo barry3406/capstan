@@ -5,7 +5,7 @@ import {
   listApprovals,
   resolveApproval,
 } from "./approval.js";
-import type { CapstanContext } from "./types.js";
+import type { CapstanAuthContext, CapstanContext } from "./types.js";
 
 /**
  * Handler registry type shared between the production and dev servers.
@@ -18,12 +18,47 @@ export type HandlerRegistry = Map<
 >;
 
 /**
+ * Check that the request is authenticated and has the "approval:manage"
+ * permission (or "admin" role).  Returns a 401 response if the caller is
+ * not authenticated, or a 403 response if the caller lacks the required
+ * permission.  Returns `null` when the check passes.
+ */
+function requireApprovalAuth(c: HonoContext): Response | null {
+  const auth = c.get("capstanAuth") as CapstanAuthContext | undefined;
+
+  // Fail closed: if no auth context is present at all, deny the request.
+  if (!auth || !auth.isAuthenticated) {
+    return c.json(
+      { error: "Authentication required to manage approvals" },
+      401,
+    );
+  }
+
+  // Allow admins and callers with the explicit "approval:manage" permission.
+  const perms: string[] = auth.permissions ?? [];
+  const isAdmin = auth.role === "admin";
+  const hasPermission = perms.includes("approval:manage");
+
+  if (!isAdmin && !hasPermission) {
+    return c.json(
+      { error: "Forbidden: approval:manage permission required" },
+      403,
+    );
+  }
+
+  return null;
+}
+
+/**
  * Mount the approval management endpoints on a Hono app.
  *
  * These routes allow agents and humans to list, approve, and deny pending
  * approvals created by policy enforcement.  The `handlerRegistry` is used
  * by the "approve" endpoint to re-execute the original handler once an
  * approval has been granted.
+ *
+ * All approval routes require authentication and either the "admin" role
+ * or the "approval:manage" permission.
  *
  * Both `createCapstanApp` (production) and the dev server call this
  * function so the logic lives in one place.
@@ -32,6 +67,8 @@ export type HandlerRegistry = Map<
 export function mountApprovalRoutes(app: Hono<any>, handlerRegistry: HandlerRegistry): void {
   /** List all approvals, optionally filtered by ?status=pending|approved|denied */
   app.get("/capstan/approvals", (c: HonoContext) => {
+    const authErr = requireApprovalAuth(c);
+    if (authErr) return authErr;
     const statusParam = new URL(c.req.url).searchParams.get("status") as
       | "pending"
       | "approved"
@@ -43,6 +80,8 @@ export function mountApprovalRoutes(app: Hono<any>, handlerRegistry: HandlerRegi
 
   /** Get a single approval by ID */
   app.get("/capstan/approvals/:id", (c: HonoContext) => {
+    const authErr = requireApprovalAuth(c);
+    if (authErr) return authErr;
     const id = c.req.param("id")!;
     const approval = getApproval(id);
     if (!approval) {
@@ -53,6 +92,8 @@ export function mountApprovalRoutes(app: Hono<any>, handlerRegistry: HandlerRegi
 
   /** Approve a pending approval -- re-executes the original handler */
   app.post("/capstan/approvals/:id/approve", async (c: HonoContext) => {
+    const authErr = requireApprovalAuth(c);
+    if (authErr) return authErr;
     const id = c.req.param("id")!;
     const existing = getApproval(id);
     if (!existing) {
@@ -109,6 +150,8 @@ export function mountApprovalRoutes(app: Hono<any>, handlerRegistry: HandlerRegi
 
   /** Deny a pending approval */
   app.post("/capstan/approvals/:id/deny", async (c: HonoContext) => {
+    const authErr = requireApprovalAuth(c);
+    if (authErr) return authErr;
     const id = c.req.param("id")!;
     const existing = getApproval(id);
     if (!existing) {

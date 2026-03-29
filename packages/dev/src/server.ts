@@ -8,6 +8,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { scanRoutes } from "@zauso-ai/capstan-router";
 import type { RouteManifest, RouteEntry } from "@zauso-ai/capstan-router";
+import { toJSONSchema } from "zod";
 import {
   createContext,
   createApproval,
@@ -335,28 +336,58 @@ async function buildApp(
       apiRouteCount++;
 
       // Record metadata for agent manifest / OpenAPI.
-      const meta: (typeof routeRegistry)[number] = {
+      const entry: (typeof routeRegistry)[number] = {
         method,
         path: route.urlPattern,
       };
 
       if (isAPIDefinition(handler)) {
         if (handler.description !== undefined) {
-          meta.description = handler.description;
+          entry.description = handler.description;
         }
         if (handler.capability !== undefined) {
-          meta.capability = handler.capability;
+          entry.capability = handler.capability;
+        }
+
+        // Extract JSON Schema from Zod input/output schemas so that MCP
+        // tools, OpenAPI specs, and A2A skills see real parameters.
+        try {
+          if (handler.input) {
+            entry.inputSchema = toJSONSchema(handler.input) as Record<string, unknown>;
+          }
+        } catch {
+          // Schema conversion is best-effort; silently ignore failures.
+        }
+
+        try {
+          if (handler.output) {
+            entry.outputSchema = toJSONSchema(handler.output) as Record<string, unknown>;
+          }
+        } catch {
+          // Best-effort.
         }
       }
 
-      routeRegistry.push(meta);
+      // Merge additional metadata from the route file's `meta` export
+      // (e.g. description, resource) when the handler itself doesn't
+      // already provide those fields.
+      if (handlers.meta) {
+        if (entry.description === undefined && typeof handlers.meta["description"] === "string") {
+          entry.description = handlers.meta["description"];
+        }
+        if (entry.capability === undefined && typeof handlers.meta["capability"] === "string") {
+          entry.capability = handlers.meta["capability"] as string;
+        }
+      }
+
+      routeRegistry.push(entry);
 
       // Store the handler for approval re-execution.
       if (isAPIDefinition(handler)) {
         const routeKey = `${method} ${route.urlPattern}`;
         const apiHandler = handler;
         handlerRegistry.set(routeKey, async (input: unknown, ctx: CapstanContext) => {
-          return apiHandler.handler({ input, ctx });
+          return apiHandler.handler({ input, ctx, params: {} });
         });
       }
 
@@ -428,16 +459,18 @@ async function buildApp(
           }
 
           if (isAPIDefinition(handler)) {
-            const result = await handler.handler({ input, ctx });
+            const params = c.req.param() as Record<string, string>;
+            const result = await handler.handler({ input, ctx, params });
             return c.json(result as object);
           }
 
           // If the export is a plain function rather than an APIDefinition,
           // invoke it directly with a similar signature.
           if (typeof handler === "function") {
+            const params = c.req.param() as Record<string, string>;
             const result = await (
-              handler as (args: { input: unknown; ctx: CapstanContext }) => Promise<unknown>
-            )({ input, ctx });
+              handler as (args: { input: unknown; ctx: CapstanContext; params: Record<string, string> }) => Promise<unknown>
+            )({ input, ctx, params });
             return c.json(result as object);
           }
 
@@ -649,6 +682,8 @@ ${LIVE_RELOAD_SCRIPT}
         endpoint: {
           method: r.method,
           path: r.path,
+          ...(r.inputSchema ? { inputSchema: r.inputSchema } : {}),
+          ...(r.outputSchema ? { outputSchema: r.outputSchema } : {}),
         },
       })),
     };
@@ -668,7 +703,10 @@ ${LIVE_RELOAD_SCRIPT}
         summary: r.description ?? `${r.method} ${r.path}`,
         operationId: `${r.method.toLowerCase()}_${r.path.replace(/[/:*]/g, "_").replace(/^_/, "")}`,
         responses: {
-          "200": { description: "Successful response" },
+          "200": {
+            description: "Successful response",
+            ...(r.outputSchema ? { content: { "application/json": { schema: r.outputSchema } } } : {}),
+          },
         },
         ...(r.inputSchema ? { requestBody: { content: { "application/json": { schema: r.inputSchema } } } } : {}),
       };

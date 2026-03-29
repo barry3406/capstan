@@ -31,6 +31,7 @@ export function defineAPI<TInput = unknown, TOutput = unknown>(
     const result = await def.handler({
       input: validatedInput,
       ctx: args.ctx,
+      params: args.params,
     });
 
     // --- validate output --------------------------------------------------

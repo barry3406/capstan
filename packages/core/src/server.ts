@@ -139,7 +139,7 @@ export function createCapstanApp(config: CapstanConfig): CapstanApp {
     // Store the handler so approved requests can re-execute it.
     const routeKey = `${method} ${path}`;
     handlerRegistry.set(routeKey, async (input: unknown, ctx: CapstanContext) => {
-      return apiDef.handler({ input, ctx });
+      return apiDef.handler({ input, ctx, params: {} });
     });
 
     // --- mount on Hono --------------------------------------------------
@@ -206,7 +206,8 @@ export function createCapstanApp(config: CapstanConfig): CapstanApp {
 
       // Run handler (which already includes input/output validation)
       try {
-        const result = await apiDef.handler({ input, ctx });
+        const params = c.req.param() as Record<string, string>;
+        const result = await apiDef.handler({ input, ctx, params });
         return c.json(result as object);
       } catch (err: unknown) {
         // Zod validation errors

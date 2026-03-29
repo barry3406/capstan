@@ -1173,7 +1173,41 @@ const MAX_BODY_SIZE = parseInt(process.env.CAPSTAN_MAX_BODY_SIZE ?? "1048576", 1
 async function main() {
   const app = new Hono();
   app.use("*", createRequestLogger());
-  app.use("*", cors());
+
+  // --- CORS configuration ---------------------------------------------------
+  // Production CORS is restricted by default.  Set CAPSTAN_CORS_ORIGIN to
+  // control allowed origins:
+  //   "*"             — allow all origins (explicit opt-in)
+  //   "https://a.com" — allow only that origin
+  //   not set         — same-origin only (Origin must match the server host)
+  const corsOriginEnv = process.env.CAPSTAN_CORS_ORIGIN;
+
+  if (corsOriginEnv === "*") {
+    // Explicit opt-in to allow all origins.
+    app.use("*", cors());
+  } else {
+    app.use("*", cors({
+      origin: (origin, c) => {
+        if (corsOriginEnv) {
+          // Explicit allowed origin configured.
+          return origin === corsOriginEnv ? origin : null;
+        }
+        // No env var — restrict to same-origin: only allow the Origin if it
+        // matches the server's own host (scheme + host + port).
+        try {
+          const reqHost = c.req.header("host") ?? "";
+          const originUrl = new URL(origin);
+          const originHost = originUrl.host; // includes port
+          if (originHost === reqHost) {
+            return origin;
+          }
+        } catch {
+          // Malformed origin — deny.
+        }
+        return null;
+      },
+    }));
+  }
 
   // --- Auth middleware -------------------------------------------------------
   // Load config from the compiled capstan.config.js to obtain auth settings.
@@ -1543,20 +1577,42 @@ async function main() {
   });
 
   // Approval management endpoints (if @zauso-ai/capstan-core is available)
+  // All approval endpoints require authentication and either the "admin" role
+  // or the "approval:manage" permission.  Fail closed if auth is unavailable.
+  function requireApprovalAuth(c) {
+    const auth = c.get("capstanAuth");
+    if (!auth || !auth.isAuthenticated) {
+      return c.json({ error: "Authentication required to manage approvals" }, 401);
+    }
+    const perms = auth.permissions ?? [];
+    const isAdmin = auth.role === "admin";
+    const hasPermission = perms.includes("approval:manage");
+    if (!isAdmin && !hasPermission) {
+      return c.json({ error: "Forbidden: approval:manage permission required" }, 403);
+    }
+    return null;
+  }
+
   try {
     const corePkg = await import("@zauso-ai/capstan-core");
     if (typeof corePkg.listApprovals === "function") {
       app.get("/capstan/approvals", (c) => {
+        const authErr = requireApprovalAuth(c);
+        if (authErr) return authErr;
         const status = new URL(c.req.url).searchParams.get("status") ?? undefined;
         const approvals = corePkg.listApprovals(status);
         return c.json({ approvals });
       });
       app.get("/capstan/approvals/:id", (c) => {
+        const authErr = requireApprovalAuth(c);
+        if (authErr) return authErr;
         const approval = corePkg.getApproval(c.req.param("id"));
         if (!approval) return c.json({ error: "Approval not found" }, 404);
         return c.json(approval);
       });
       app.post("/capstan/approvals/:id/resolve", async (c) => {
+        const authErr = requireApprovalAuth(c);
+        if (authErr) return authErr;
         let body;
         try { body = await c.req.json(); } catch { body = {}; }
         const decision = body.decision === "approved" ? "approved" : "denied";
@@ -1958,19 +2014,100 @@ async function runMcp(): Promise<void> {
 
   const routesDir = join(process.cwd(), "app", "routes");
   const manifest = await scanRoutes(routesDir);
-  const registryEntries = manifest.routes
-    .filter((r) => r.type === "api")
-    .flatMap((r) => {
-      const methods = r.methods && r.methods.length > 0 ? r.methods : ["GET"];
-      return methods.map((m) => ({
-        method: m,
-        path: r.urlPattern,
-      }));
-    });
 
   // Build an executeRoute callback that loads handlers from disk and invokes
   // them directly, so MCP tool calls actually run the real route logic.
   const { loadApiHandlers } = await import("@zauso-ai/capstan-dev");
+
+  // Build registry entries with full schema information so MCP tools,
+  // OpenAPI specs, and A2A skills expose real parameter types.
+  const { toJSONSchema } = await import("zod");
+  const apiRoutes = manifest.routes.filter((r) => r.type === "api");
+  const registryEntries: Array<{
+    method: string;
+    path: string;
+    description?: string;
+    capability?: "read" | "write" | "external";
+    inputSchema?: Record<string, unknown>;
+    outputSchema?: Record<string, unknown>;
+  }> = [];
+
+  for (const r of apiRoutes) {
+    let handlers: Awaited<ReturnType<typeof loadApiHandlers>>;
+    try {
+      handlers = await loadApiHandlers(r.filePath);
+    } catch {
+      // If a route fails to load, fall back to bare method+path entries.
+      const methods = r.methods && r.methods.length > 0 ? r.methods : ["GET"];
+      for (const m of methods) {
+        registryEntries.push({ method: m, path: r.urlPattern });
+      }
+      continue;
+    }
+
+    const methodExports: Array<[string, unknown]> = [
+      ["GET", handlers.GET],
+      ["POST", handlers.POST],
+      ["PUT", handlers.PUT],
+      ["DELETE", handlers.DELETE],
+      ["PATCH", handlers.PATCH],
+    ];
+
+    for (const [m, handler] of methodExports) {
+      if (handler === undefined) continue;
+
+      const entry: (typeof registryEntries)[number] = {
+        method: m,
+        path: r.urlPattern,
+      };
+
+      // Extract metadata from APIDefinition objects produced by defineAPI().
+      if (
+        handler !== null &&
+        typeof handler === "object" &&
+        "handler" in handler &&
+        typeof (handler as { handler: unknown }).handler === "function"
+      ) {
+        const apiDef = handler as {
+          handler: Function;
+          description?: string;
+          capability?: string;
+          input?: unknown;
+          output?: unknown;
+        };
+        if (apiDef.description !== undefined) entry.description = apiDef.description;
+        if (apiDef.capability !== undefined) entry.capability = apiDef.capability as "read" | "write" | "external";
+
+        try {
+          if (apiDef.input) {
+            entry.inputSchema = toJSONSchema(apiDef.input as Parameters<typeof toJSONSchema>[0]) as Record<string, unknown>;
+          }
+        } catch {
+          // Schema conversion is best-effort.
+        }
+
+        try {
+          if (apiDef.output) {
+            entry.outputSchema = toJSONSchema(apiDef.output as Parameters<typeof toJSONSchema>[0]) as Record<string, unknown>;
+          }
+        } catch {
+          // Best-effort.
+        }
+      }
+
+      // Merge metadata from the route file's `meta` export.
+      if (handlers.meta) {
+        if (entry.description === undefined && typeof handlers.meta["description"] === "string") {
+          entry.description = handlers.meta["description"];
+        }
+        if (entry.capability === undefined && typeof handlers.meta["capability"] === "string") {
+          entry.capability = handlers.meta["capability"] as "read" | "write" | "external";
+        }
+      }
+
+      registryEntries.push(entry);
+    }
+  }
 
   const executeRoute = async (
     method: string,

@@ -27,6 +27,7 @@ export type HttpMethod = "GET" | "POST" | "PUT" | "DELETE" | "PATCH";
 export interface APIHandlerInput<T = unknown> {
   input: T;
   ctx: CapstanContext;
+  params: Record<string, string>;
 }
 
 /** Full definition object for a single API route. */
