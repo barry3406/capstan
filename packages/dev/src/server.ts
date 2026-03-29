@@ -11,9 +11,7 @@ import type { RouteManifest, RouteEntry } from "@zauso-ai/capstan-router";
 import {
   createContext,
   createApproval,
-  getApproval,
-  listApprovals,
-  resolveApproval,
+  mountApprovalRoutes,
 } from "@zauso-ai/capstan-core";
 import type { APIDefinition, HttpMethod, CapstanContext, CapstanAuthContext } from "@zauso-ai/capstan-core";
 
@@ -78,14 +76,34 @@ function injectLiveReload(html: string): string {
 // Helpers
 // ---------------------------------------------------------------------------
 
+/** Default maximum request body size: 1 MB */
+const DEFAULT_MAX_BODY_SIZE = 1_048_576;
+
 /**
  * Read the full request body from an IncomingMessage and return it
  * as a parsed JSON value (or raw string if JSON parsing fails).
+ *
+ * If the accumulated body exceeds {@link maxBytes} the request stream is
+ * destroyed and the promise rejects with an error whose `statusCode`
+ * property is `413`.
  */
-function readBody(req: IncomingMessage): Promise<unknown> {
+function readBody(req: IncomingMessage, maxBytes: number = DEFAULT_MAX_BODY_SIZE): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    let received = 0;
+    req.on("data", (chunk: Buffer) => {
+      received += chunk.length;
+      if (received > maxBytes) {
+        req.destroy();
+        const err: Error & { statusCode?: number } = new Error(
+          `Request body exceeds maximum allowed size of ${maxBytes} bytes`,
+        );
+        err.statusCode = 413;
+        reject(err);
+        return;
+      }
+      chunks.push(chunk);
+    });
     req.on("error", reject);
     req.on("end", () => {
       const raw = Buffer.concat(chunks).toString("utf-8");
@@ -582,7 +600,7 @@ async function buildApp(
   <div id="capstan-root">
     <p>Page: ${route.urlPattern}</p>
   </div>
-  <script>window.__CAPSTAN_DATA__ = ${JSON.stringify({ loaderData, params })}</script>
+  <script>window.__CAPSTAN_DATA__ = ${JSON.stringify({ loaderData, params }).replace(/</g, '\\u003c').replace(/>/g, '\\u003e')}</script>
 ${LIVE_RELOAD_SCRIPT}
 </body>
 </html>`;
@@ -593,121 +611,7 @@ ${LIVE_RELOAD_SCRIPT}
 
   // --- Approval management endpoints ----------------------------------------
 
-  /** List all approvals, optionally filtered by ?status=pending|approved|denied */
-  app.get("/capstan/approvals", (c) => {
-    const statusParam = new URL(c.req.url).searchParams.get("status") as
-      | "pending"
-      | "approved"
-      | "denied"
-      | null;
-    const items = listApprovals(statusParam ?? undefined);
-    return c.json({ approvals: items });
-  });
-
-  /** Get a single approval by ID */
-  app.get("/capstan/approvals/:id", (c) => {
-    const id = c.req.param("id");
-    const approval = getApproval(id);
-    if (!approval) {
-      return c.json({ error: "Approval not found" }, 404);
-    }
-    return c.json(approval);
-  });
-
-  /** Approve a pending approval — re-executes the original handler */
-  app.post("/capstan/approvals/:id/approve", async (c) => {
-    const id = c.req.param("id");
-    const existing = getApproval(id);
-    if (!existing) {
-      return c.json({ error: "Approval not found" }, 404);
-    }
-    if (existing.status !== "pending") {
-      return c.json(
-        { error: "Approval already resolved", status: existing.status },
-        409,
-      );
-    }
-
-    let resolvedBy: string | undefined;
-    try {
-      const body = await c.req.json() as Record<string, unknown>;
-      if (typeof body.resolvedBy === "string") {
-        resolvedBy = body.resolvedBy;
-      }
-    } catch {
-      // No body or invalid JSON — that's fine.
-    }
-
-    const approval = resolveApproval(id, "approved", resolvedBy);
-    if (!approval) {
-      return c.json({ error: "Approval not found" }, 404);
-    }
-
-    // Re-execute the original handler with the stored input.
-    const routeKey = `${approval.method} ${approval.path}`;
-    const handler = handlerRegistry.get(routeKey);
-    if (!handler) {
-      return c.json(
-        { error: "Handler not found for route", route: routeKey },
-        500,
-      );
-    }
-
-    try {
-      const ctx = createContext(c);
-      const result = await handler(approval.input, ctx);
-      approval.result = result;
-      return c.json({
-        status: "approved",
-        approvalId: approval.id,
-        result,
-      });
-    } catch (err: unknown) {
-      const message =
-        err instanceof Error ? err.message : "Handler execution failed";
-      return c.json({ error: message, approvalId: approval.id }, 500);
-    }
-  });
-
-  /** Deny a pending approval */
-  app.post("/capstan/approvals/:id/deny", async (c) => {
-    const id = c.req.param("id");
-    const existing = getApproval(id);
-    if (!existing) {
-      return c.json({ error: "Approval not found" }, 404);
-    }
-    if (existing.status !== "pending") {
-      return c.json(
-        { error: "Approval already resolved", status: existing.status },
-        409,
-      );
-    }
-
-    let resolvedBy: string | undefined;
-    let reason: string | undefined;
-    try {
-      const body = await c.req.json() as Record<string, unknown>;
-      if (typeof body.resolvedBy === "string") {
-        resolvedBy = body.resolvedBy;
-      }
-      if (typeof body.reason === "string") {
-        reason = body.reason;
-      }
-    } catch {
-      // No body or invalid JSON — that's fine.
-    }
-
-    const approval = resolveApproval(id, "denied", resolvedBy);
-    if (!approval) {
-      return c.json({ error: "Approval not found" }, 404);
-    }
-
-    return c.json({
-      status: "denied",
-      approvalId: approval.id,
-      ...(reason !== undefined ? { reason } : {}),
-    });
-  });
+  mountApprovalRoutes(app, handlerRegistry);
 
   // --- Framework endpoints --------------------------------------------------
 
@@ -1085,7 +989,7 @@ export async function createDevServer(
       const hasBody = req.method !== "GET" && req.method !== "HEAD";
       let body: string | undefined;
       if (hasBody) {
-        const raw = await readBody(req);
+        const raw = await readBody(req, config.maxBodySize ?? DEFAULT_MAX_BODY_SIZE);
         body = raw !== undefined ? (typeof raw === "string" ? raw : JSON.stringify(raw)) : undefined;
       }
 
@@ -1108,7 +1012,15 @@ export async function createDevServer(
       );
       const responseBody = await response.text();
       res.end(responseBody);
-    } catch (err) {
+    } catch (err: unknown) {
+      const statusCode = (err as { statusCode?: number }).statusCode;
+      if (statusCode === 413) {
+        if (!res.headersSent) {
+          res.writeHead(413, { "Content-Type": "application/json" });
+        }
+        res.end(JSON.stringify({ error: "Payload Too Large" }));
+        return;
+      }
       // eslint-disable-next-line no-console
       console.error("[capstan] Unhandled request error:", err);
       if (!res.headersSent) {

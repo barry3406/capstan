@@ -11,6 +11,8 @@ export interface DevServerConfig {
   appDescription?: string;
   /** Directory for static assets (defaults to <rootDir>/app/public) */
   publicDir?: string;
+  /** Maximum request body size in bytes (default: 1048576 = 1 MB) */
+  maxBodySize?: number;
   /** Auth configuration — when set, session cookie / API key auth is enabled */
   auth?: {
     session: {

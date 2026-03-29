@@ -12,18 +12,20 @@
   },
   "dependencies": {
     "@zauso-ai/capstan-agent": "0.2.0",
-    "@zauso-ai/capstan-app-graph": "0.2.0",
-    "@zauso-ai/capstan-brief": "0.2.0",
-    "@zauso-ai/capstan-compiler": "0.2.0",
     "@zauso-ai/capstan-core": "0.2.0",
     "@zauso-ai/capstan-db": "0.2.0",
     "@zauso-ai/capstan-dev": "0.2.0",
+    "@zauso-ai/capstan-router": "0.2.0",
+    "tsx": "^4.19.0"
+  },
+  "optionalDependencies": {
+    "@zauso-ai/capstan-app-graph": "0.2.0",
+    "@zauso-ai/capstan-brief": "0.2.0",
+    "@zauso-ai/capstan-compiler": "0.2.0",
     "@zauso-ai/capstan-feedback": "0.2.0",
     "@zauso-ai/capstan-harness": "0.2.0",
     "@zauso-ai/capstan-packs-core": "0.2.0",
-    "@zauso-ai/capstan-release": "0.2.0",
-    "@zauso-ai/capstan-router": "0.2.0",
-    "tsx": "^4.19.0"
+    "@zauso-ai/capstan-release": "0.2.0"
   },
   "description": "CLI for Capstan — dev, build, verify, add, mcp commands",
   "files": [

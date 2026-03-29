@@ -1,4 +1,4 @@
-import type { ModelDefinition, FieldDefinition, ScalarType, IndexDefinition } from "./types.js";
+import type { ModelDefinition, FieldDefinition, ScalarType, IndexDefinition, DbProvider } from "./types.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -217,4 +217,142 @@ export function applyMigration(db: { $client: { exec: (sql: string) => void } },
     client.exec("ROLLBACK");
     throw err;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Migration tracking
+// ---------------------------------------------------------------------------
+
+/**
+ * SQL to create the `_capstan_migrations` tracking table, per provider.
+ */
+function createTrackingTableSQL(provider: DbProvider): string {
+  switch (provider) {
+    case "postgres":
+      return `CREATE TABLE IF NOT EXISTS _capstan_migrations (
+  id SERIAL PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE,
+  applied_at TIMESTAMP NOT NULL DEFAULT NOW()
+)`;
+    case "mysql":
+      return `CREATE TABLE IF NOT EXISTS _capstan_migrations (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(255) NOT NULL UNIQUE,
+  applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+)`;
+    case "sqlite":
+    default:
+      return `CREATE TABLE IF NOT EXISTS _capstan_migrations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+)`;
+  }
+}
+
+/** A database client that can execute and query SQL (SQLite via better-sqlite3). */
+export interface MigrationDbClient {
+  exec: (sql: string) => void;
+  prepare: (sql: string) => {
+    all: (...params: unknown[]) => unknown[];
+    run: (...params: unknown[]) => unknown;
+    get: (...params: unknown[]) => unknown;
+  };
+}
+
+/**
+ * Ensure the `_capstan_migrations` tracking table exists.
+ */
+export function ensureTrackingTable(client: MigrationDbClient, provider: DbProvider = "sqlite"): void {
+  client.exec(createTrackingTableSQL(provider));
+}
+
+/**
+ * Get the list of migration names that have already been applied.
+ */
+export function getAppliedMigrations(client: MigrationDbClient): string[] {
+  const rows = client.prepare(
+    "SELECT name FROM _capstan_migrations ORDER BY id ASC",
+  ).all() as Array<{ name: string }>;
+  return rows.map((r) => r.name);
+}
+
+export interface MigrationStatus {
+  applied: Array<{ name: string; appliedAt: string }>;
+  pending: string[];
+}
+
+/**
+ * Return which migrations have been applied and which are pending.
+ *
+ * @param client - The underlying database client (e.g. better-sqlite3 `Database`).
+ * @param allMigrationNames - Every migration file name, sorted chronologically.
+ * @param provider - The database provider (defaults to `"sqlite"`).
+ */
+export function getMigrationStatus(
+  client: MigrationDbClient,
+  allMigrationNames: string[],
+  provider: DbProvider = "sqlite",
+): MigrationStatus {
+  ensureTrackingTable(client, provider);
+
+  const rows = client.prepare(
+    "SELECT name, applied_at FROM _capstan_migrations ORDER BY id ASC",
+  ).all() as Array<{ name: string; applied_at: string }>;
+
+  const appliedSet = new Set(rows.map((r) => r.name));
+
+  return {
+    applied: rows.map((r) => ({ name: r.name, appliedAt: r.applied_at })),
+    pending: allMigrationNames.filter((n) => !appliedSet.has(n)),
+  };
+}
+
+/**
+ * Apply migration file SQL against a database, tracking each file in the
+ * `_capstan_migrations` table. Only files not yet recorded are executed.
+ *
+ * @param client - The underlying database client.
+ * @param migrations - Array of `{ name, sql }` objects (file name + raw SQL content).
+ * @param provider - The database provider (defaults to `"sqlite"`).
+ * @returns The list of migration names that were applied in this call.
+ */
+export function applyTrackedMigrations(
+  client: MigrationDbClient,
+  migrations: Array<{ name: string; sql: string }>,
+  provider: DbProvider = "sqlite",
+): string[] {
+  ensureTrackingTable(client, provider);
+
+  const applied = getAppliedMigrations(client);
+  const appliedSet = new Set(applied);
+
+  const pending = migrations.filter((m) => !appliedSet.has(m.name));
+  if (pending.length === 0) return [];
+
+  const executed: string[] = [];
+
+  for (const migration of pending) {
+    const statements = migration.sql
+      .split(";")
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0 && !s.startsWith("--"));
+
+    client.exec("BEGIN TRANSACTION");
+    try {
+      for (const stmt of statements) {
+        client.exec(stmt);
+      }
+      client.prepare(
+        "INSERT INTO _capstan_migrations (name) VALUES (?)",
+      ).run(migration.name);
+      client.exec("COMMIT");
+      executed.push(migration.name);
+    } catch (err) {
+      client.exec("ROLLBACK");
+      throw err;
+    }
+  }
+
+  return executed;
 }

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { defineAPI } from "@capstan/core";
+import { defineAPI } from "@zauso-ai/capstan-core";
 
 // ---------------------------------------------------------------------------
 // Sample data — in a real app this would come from the database via the model

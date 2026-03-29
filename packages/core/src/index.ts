@@ -1,6 +1,6 @@
 // Public API ----------------------------------------------------------------
 
-export { defineAPI, getAPIRegistry } from "./api.js";
+export { defineAPI, getAPIRegistry, clearAPIRegistry } from "./api.js";
 export { defineMiddleware } from "./middleware.js";
 export { definePolicy, enforcePolicies } from "./policy.js";
 export { defineConfig, env } from "./config.js";
@@ -13,6 +13,8 @@ export {
   resolveApproval,
   clearApprovals,
 } from "./approval.js";
+export { mountApprovalRoutes } from "./approval-routes.js";
+export type { HandlerRegistry } from "./approval-routes.js";
 
 export type { PendingApproval } from "./approval.js";
 

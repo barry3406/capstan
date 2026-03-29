@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { defineAPI } from "@capstan/core";
+import { defineAPI } from "@zauso-ai/capstan-core";
 
 // ---------------------------------------------------------------------------
 // GET /api/health — Application health check

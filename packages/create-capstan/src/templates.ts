@@ -80,7 +80,7 @@ export function capstanConfig(
       { type: "apiKey" },
     ],
     session: {
-      secret: env("SESSION_SECRET") || "dev-secret-change-in-production",
+      secret: env("SESSION_SECRET") || crypto.randomUUID(),
       maxAge: "7d",
     },
   },`

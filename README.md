@@ -11,7 +11,7 @@ One `defineAPI()` call. Four protocol surfaces. Humans and AI agents, served sim
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Tests](https://img.shields.io/badge/tests-128%20passing-brightgreen?logo=bun&logoColor=white)](https://bun.sh)
-[![Version](https://img.shields.io/badge/version-0.1.0-orange)](https://github.com/barry3406/capstan)
+[![Version](https://img.shields.io/badge/version-0.2.0-orange)](https://github.com/barry3406/capstan)
 [![ESM](https://img.shields.io/badge/ESM-only-blue)](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Modules)
 
 [Quick Start](#-quick-start) · [Why Capstan?](#-why-capstan) · [Architecture](#-architecture) · [Contributing](#-contributing)
@@ -108,7 +108,7 @@ npx capstan add policy requireAuth # → app/policies/index.ts
 
 ```typescript
 // app/routes/tickets/index.api.ts
-import { defineAPI } from "@capstan/core";
+import { defineAPI } from "@zauso-ai/capstan-core";
 import { z } from "zod";
 
 export const GET = defineAPI({
@@ -161,7 +161,7 @@ That single file gives you **all of this** — no extra code:
 
 ```typescript
 // app/models/ticket.model.ts
-import { defineModel, field } from "@capstan/db";
+import { defineModel, field } from "@zauso-ai/capstan-db";
 
 export const Ticket = defineModel("ticket", {
   fields: {
@@ -182,7 +182,7 @@ Run `capstan add api tickets` and Capstan generates fully typed CRUD route files
 
 ```typescript
 // app/policies/index.ts
-import { definePolicy } from "@capstan/core";
+import { definePolicy } from "@zauso-ai/capstan-core";
 
 export const requireAuth = definePolicy({
   key: "requireAuth",
@@ -336,7 +336,9 @@ app/
     index.ts                ← definePolicy() permission rules
 ```
 
-**Stack:** [Hono](https://hono.dev) (HTTP) · [Drizzle](https://orm.drizzle.team) (ORM) · [React](https://react.dev) (SSR) · [Zod](https://zod.dev) (validation) · [Bun](https://bun.sh) (testing)
+**Stack:** [Hono](https://hono.dev) (HTTP) · [Drizzle](https://orm.drizzle.team) (ORM — SQLite, PostgreSQL, MySQL) · [React](https://react.dev) (SSR) · [Zod](https://zod.dev) (validation) · [Bun](https://bun.sh) (testing)
+
+**Dev features:** live reload (SSE), static asset serving from `app/public/`, `capstan build` + `capstan start` for production
 
 ---
 
@@ -346,35 +348,35 @@ app/
 
 | Package | Description |
 |---------|-------------|
-| `@capstan/core` | Hono server, `defineAPI`, `defineMiddleware`, `definePolicy`, approval workflow, verifier |
-| `@capstan/router` | File-based routing (`.page.tsx`, `.api.ts`, `_layout.tsx`, `_middleware.ts`) |
-| `@capstan/db` | Drizzle ORM, `defineModel`, field/relation helpers, migrations, auto CRUD |
-| `@capstan/auth` | JWT sessions, API key auth for agents, permission checking |
-| `@capstan/agent` | `CapabilityRegistry`, MCP server, A2A adapter, OpenAPI generator |
-| `@capstan/react` | SSR with loaders, layouts, `Outlet`, hydration |
-| `@capstan/dev` | Dev server with file watching, hot route reload, MCP/A2A endpoints |
-| `@capstan/cli` | CLI: `dev`, `build`, `verify`, `add`, `mcp`, `db:*` |
+| `@zauso-ai/capstan-core` | Hono server, `defineAPI`, `defineMiddleware`, `definePolicy`, approval workflow, verifier |
+| `@zauso-ai/capstan-router` | File-based routing (`.page.tsx`, `.api.ts`, `_layout.tsx`, `_middleware.ts`) |
+| `@zauso-ai/capstan-db` | Drizzle ORM, `defineModel`, field/relation helpers, migrations, auto CRUD |
+| `@zauso-ai/capstan-auth` | JWT sessions, API key auth for agents, permission checking |
+| `@zauso-ai/capstan-agent` | `CapabilityRegistry`, MCP server, A2A adapter, OpenAPI generator |
+| `@zauso-ai/capstan-react` | SSR with loaders, layouts, `Outlet`, hydration |
+| `@zauso-ai/capstan-dev` | Dev server with file watching, hot route reload, MCP/A2A endpoints |
+| `@zauso-ai/capstan-cli` | CLI: `dev`, `build`, `verify`, `add`, `mcp`, `db:*` |
 | `create-capstan-app` | Project scaffolder (blank & tickets templates) |
 
 ### Compiler System (legacy)
 
 | Package | Description |
 |---------|-------------|
-| `@capstan/app-graph` | Application graph schema, validation, diffing |
-| `@capstan/brief` | Brief-to-graph compilation |
-| `@capstan/compiler` | Graph-to-app code generation |
-| `@capstan/packs-core` | Composable packs (auth, tenant, workflow, billing, commerce) |
-| `@capstan/surface-web` | Web surface projection |
-| `@capstan/surface-agent` | Agent surface projection |
-| `@capstan/feedback` | Verification and diagnostics |
-| `@capstan/release` | Release planning and rollback |
-| `@capstan/harness` | Durable task runtime |
+| `@zauso-ai/capstan-app-graph` | Application graph schema, validation, diffing |
+| `@zauso-ai/capstan-brief` | Brief-to-graph compilation |
+| `@zauso-ai/capstan-compiler` | Graph-to-app code generation |
+| `@zauso-ai/capstan-packs-core` | Composable packs (auth, tenant, workflow, billing, commerce) |
+| `@zauso-ai/capstan-surface-web` | Web surface projection |
+| `@zauso-ai/capstan-surface-agent` | Agent surface projection |
+| `@zauso-ai/capstan-feedback` | Verification and diagnostics |
+| `@zauso-ai/capstan-release` | Release planning and rollback |
+| `@zauso-ai/capstan-harness` | Durable task runtime |
 
 ---
 
 ## 🧑‍💻 Contributing
 
-Capstan is in early development (`v0.1.0`). Contributions are welcome!
+Capstan is in early development (`v0.2.0`). Contributions are welcome!
 
 ```bash
 git clone https://github.com/barry3406/capstan.git
@@ -393,7 +395,6 @@ npm run test:new     # Bun tests (128 tests, ~500ms)
 
 ### Help wanted
 
-- Database adapters (Postgres, MySQL)
 - Streaming support for A2A
 - Additional scaffolder templates
 - Documentation site

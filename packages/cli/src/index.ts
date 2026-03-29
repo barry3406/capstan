@@ -4,63 +4,41 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { AppGraph } from "@zauso-ai/capstan-app-graph";
-import { diffAppGraphs, introspectAppGraph, validateAppGraph } from "@zauso-ai/capstan-app-graph";
-import type { CapstanBrief } from "@zauso-ai/capstan-brief";
-import {
-  compileCapstanBrief,
-  summarizeCapstanBrief,
-  validateCapstanBrief
-} from "@zauso-ai/capstan-brief";
-import {
-  applyAppGraphPacks,
-  applyBuiltinAppGraphPacks,
-  listBuiltinGraphPacks
-} from "@zauso-ai/capstan-packs-core";
-import type { GraphPackDefinition } from "@zauso-ai/capstan-packs-core";
-import { scaffoldAppGraph } from "@zauso-ai/capstan-compiler";
-import { renderVerifyReportText, verifyGeneratedApp } from "@zauso-ai/capstan-feedback";
-import {
-  approveHarnessRun,
-  cancelHarnessRun,
-  compactHarnessRun,
-  completeHarnessRun,
-  createHarnessMemory,
-  createHarnessRun,
-  failHarnessRun,
-  getHarnessRun,
-  getHarnessMemory,
-  getHarnessSummary,
-  listHarnessEvents,
-  listHarnessMemories,
-  listHarnessRuns,
-  listHarnessSummaries,
-  renderHarnessMemoriesText,
-  renderHarnessMemoryText,
-  renderHarnessEventsText,
-  renderHarnessCompactionText,
-  renderHarnessReplayText,
-  renderHarnessRunText,
-  renderHarnessRunsText,
-  renderHarnessSummariesText,
-  replayHarnessRun,
-  provideHarnessInput,
-  requestHarnessApproval,
-  requestHarnessInput,
-  resumeHarnessRun,
-  retryHarnessRun,
-  pauseHarnessRun
-} from "@zauso-ai/capstan-harness";
-import {
-  createReleasePlan,
-  createReleaseRun,
-  createRollbackRun,
-  listReleaseRuns,
-  renderReleaseHistoryText,
-  renderReleasePlanText,
-  renderRollbackRunText,
-  renderReleaseRunText
-} from "@zauso-ai/capstan-release";
+
+// ---------------------------------------------------------------------------
+// Legacy package types — kept as opaque aliases so the CLI compiles without
+// the legacy packages installed.  All runtime values are loaded via dynamic
+// import() inside the command functions that need them.
+// ---------------------------------------------------------------------------
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type AppGraph = any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type CapstanBrief = any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type GraphPackDefinition = any;
+
+const LEGACY_INSTALL_HINT =
+  "Legacy compiler packages are not installed.\n" +
+  "Install them with:  npm install @zauso-ai/capstan-app-graph @zauso-ai/capstan-packs-core @zauso-ai/capstan-brief @zauso-ai/capstan-surface-web @zauso-ai/capstan-surface-agent @zauso-ai/capstan-compiler @zauso-ai/capstan-feedback @zauso-ai/capstan-release @zauso-ai/capstan-harness";
+
+/**
+ * Dynamically import a legacy package, providing a clear error when it is
+ * not installed.
+ */
+async function requireLegacy<T = Record<string, unknown>>(
+  pkg: string,
+): Promise<T> {
+  try {
+    return (await import(pkg)) as T;
+  } catch {
+    console.error(
+      `The legacy package "${pkg}" is required for this command but is not installed.\n\n${LEGACY_INSTALL_HINT}`,
+    );
+    process.exitCode = 1;
+    throw new Error(`Missing legacy package: ${pkg}`);
+  }
+}
 
 async function main(): Promise<void> {
   const [command, ...args] = process.argv.slice(2);
@@ -218,6 +196,9 @@ async function runBriefCheck(args: string[]): Promise<void> {
     return;
   }
 
+  const { validateCapstanBrief } = await requireLegacy<typeof import("@zauso-ai/capstan-brief")>("@zauso-ai/capstan-brief");
+  const { validateAppGraph } = await requireLegacy<typeof import("@zauso-ai/capstan-app-graph")>("@zauso-ai/capstan-app-graph");
+
   const loaded = await loadBrief(target);
   const validation = validateCapstanBrief(loaded.brief);
 
@@ -257,6 +238,9 @@ async function runBriefInspect(args: string[]): Promise<void> {
     process.exitCode = 1;
     return;
   }
+
+  const { summarizeCapstanBrief, validateCapstanBrief } = await requireLegacy<typeof import("@zauso-ai/capstan-brief")>("@zauso-ai/capstan-brief");
+  const { introspectAppGraph } = await requireLegacy<typeof import("@zauso-ai/capstan-app-graph")>("@zauso-ai/capstan-app-graph");
 
   const loaded = await loadBrief(target);
   const graph = await compileBriefWithPackDefinitions(loaded.brief, {
@@ -314,6 +298,8 @@ async function runBriefScaffold(args: string[]): Promise<void> {
     return;
   }
 
+  const { scaffoldAppGraph } = await requireLegacy<typeof import("@zauso-ai/capstan-compiler")>("@zauso-ai/capstan-compiler");
+
   const loaded = await loadBrief(target);
   const graph = await compileBriefWithPackDefinitions(loaded.brief, {
     packDefinitions: loaded.packDefinitions,
@@ -335,6 +321,8 @@ async function runGraphCheck(args: string[]): Promise<void> {
     process.exitCode = 1;
     return;
   }
+
+  const { validateAppGraph } = await requireLegacy<typeof import("@zauso-ai/capstan-app-graph")>("@zauso-ai/capstan-app-graph");
 
   const graph = await loadGraph(target, {
     ...(packRegistryPath ? { packRegistryPath } : {})
@@ -367,6 +355,8 @@ async function runGraphScaffold(args: string[]): Promise<void> {
     return;
   }
 
+  const { scaffoldAppGraph } = await requireLegacy<typeof import("@zauso-ai/capstan-compiler")>("@zauso-ai/capstan-compiler");
+
   const graph = await loadGraph(target, {
     ...(packRegistryPath ? { packRegistryPath } : {})
   });
@@ -387,6 +377,8 @@ async function runGraphInspect(args: string[]): Promise<void> {
     return;
   }
 
+  const { introspectAppGraph } = await requireLegacy<typeof import("@zauso-ai/capstan-app-graph")>("@zauso-ai/capstan-app-graph");
+
   const graph = await loadGraph(target, {
     ...(packRegistryPath ? { packRegistryPath } : {})
   });
@@ -405,6 +397,8 @@ async function runGraphDiff(args: string[]): Promise<void> {
     process.exitCode = 1;
     return;
   }
+
+  const { diffAppGraphs } = await requireLegacy<typeof import("@zauso-ai/capstan-app-graph")>("@zauso-ai/capstan-app-graph");
 
   const before = await loadGraph(beforePath, {
     ...(packRegistryPath ? { packRegistryPath } : {})
@@ -455,6 +449,7 @@ async function runVerify(args: string[], asJson: boolean): Promise<void> {
       return;
     }
 
+    const { verifyGeneratedApp, renderVerifyReportText } = await requireLegacy<typeof import("@zauso-ai/capstan-feedback")>("@zauso-ai/capstan-feedback");
     const report = await verifyGeneratedApp(resolve(process.cwd(), target));
 
     if (asJson) {
@@ -496,6 +491,8 @@ async function runReleasePlan(args: string[]): Promise<void> {
     return;
   }
 
+  const { createReleasePlan, renderReleasePlanText } = await requireLegacy<typeof import("@zauso-ai/capstan-release")>("@zauso-ai/capstan-release");
+
   const report = await createReleasePlan(resolve(process.cwd(), target), {
     ...(environmentPath ? { environmentPath } : {}),
     ...(migrationPath ? { migrationPath } : {})
@@ -527,6 +524,8 @@ async function runReleaseRun(args: string[]): Promise<void> {
     return;
   }
 
+  const { createReleaseRun, renderReleaseRunText } = await requireLegacy<typeof import("@zauso-ai/capstan-release")>("@zauso-ai/capstan-release");
+
   const report = await createReleaseRun(resolve(process.cwd(), target), mode, {
     ...(environmentPath ? { environmentPath } : {}),
     ...(migrationPath ? { migrationPath } : {})
@@ -553,6 +552,8 @@ async function runReleaseHistory(args: string[]): Promise<void> {
     return;
   }
 
+  const { listReleaseRuns, renderReleaseHistoryText } = await requireLegacy<typeof import("@zauso-ai/capstan-release")>("@zauso-ai/capstan-release");
+
   const report = await listReleaseRuns(resolve(process.cwd(), target));
 
   if (asJson) {
@@ -574,6 +575,8 @@ async function runReleaseRollback(args: string[]): Promise<void> {
     process.exitCode = 1;
     return;
   }
+
+  const { createRollbackRun, renderRollbackRunText } = await requireLegacy<typeof import("@zauso-ai/capstan-release")>("@zauso-ai/capstan-release");
 
   const report = await createRollbackRun(resolve(process.cwd(), target), {
     ...(tracePath ? { tracePath } : {})
@@ -605,6 +608,7 @@ async function runHarnessStart(args: string[]): Promise<void> {
     return;
   }
 
+  const { createHarnessRun, renderHarnessRunText } = await requireLegacy<typeof import("@zauso-ai/capstan-harness")>("@zauso-ai/capstan-harness");
   const input = inputPath ? await loadJsonFile(inputPath) : {};
   const run = await createHarnessRun(resolve(process.cwd(), appDir), taskKey, ensureRecord(input), {
     ...(note ? { note } : {})
@@ -628,6 +632,7 @@ async function runHarnessGet(args: string[]): Promise<void> {
     return;
   }
 
+  const { getHarnessRun, renderHarnessRunText } = await requireLegacy<typeof import("@zauso-ai/capstan-harness")>("@zauso-ai/capstan-harness");
   const run = await getHarnessRun(resolve(process.cwd(), appDir), runId);
 
   if (!run) {
@@ -654,6 +659,7 @@ async function runHarnessList(args: string[]): Promise<void> {
     return;
   }
 
+  const { listHarnessRuns, renderHarnessRunsText } = await requireLegacy<typeof import("@zauso-ai/capstan-harness")>("@zauso-ai/capstan-harness");
   const runs = await listHarnessRuns(resolve(process.cwd(), appDir), {
     ...(taskKey ? { taskKey } : {})
   });
@@ -700,6 +706,7 @@ async function runHarnessProvideInput(args: string[]): Promise<void> {
     return;
   }
 
+  const { provideHarnessInput, renderHarnessRunText } = await requireLegacy<typeof import("@zauso-ai/capstan-harness")>("@zauso-ai/capstan-harness");
   const input = ensureRecord(await loadJsonFile(inputPath));
   const run = await provideHarnessInput(resolve(process.cwd(), appDir), runId, input, {
     ...(note ? { note } : {})
@@ -727,6 +734,7 @@ async function runHarnessComplete(args: string[]): Promise<void> {
     return;
   }
 
+  const { completeHarnessRun, renderHarnessRunText } = await requireLegacy<typeof import("@zauso-ai/capstan-harness")>("@zauso-ai/capstan-harness");
   const output = outputPath ? await loadJsonFile(outputPath) : {};
   const run = await completeHarnessRun(
     resolve(process.cwd(), appDir),
@@ -758,6 +766,7 @@ async function runHarnessFail(args: string[]): Promise<void> {
     return;
   }
 
+  const { failHarnessRun, renderHarnessRunText } = await requireLegacy<typeof import("@zauso-ai/capstan-harness")>("@zauso-ai/capstan-harness");
   const run = await failHarnessRun(resolve(process.cwd(), appDir), runId, message);
 
   if (asJson) {
@@ -786,6 +795,7 @@ async function runHarnessEvents(args: string[]): Promise<void> {
     return;
   }
 
+  const { listHarnessEvents, renderHarnessEventsText } = await requireLegacy<typeof import("@zauso-ai/capstan-harness")>("@zauso-ai/capstan-harness");
   const events = await listHarnessEvents(resolve(process.cwd(), appDir), {
     ...(runId ? { runId } : {})
   });
@@ -808,6 +818,7 @@ async function runHarnessReplay(args: string[]): Promise<void> {
     return;
   }
 
+  const { replayHarnessRun, renderHarnessReplayText } = await requireLegacy<typeof import("@zauso-ai/capstan-harness")>("@zauso-ai/capstan-harness");
   const report = await replayHarnessRun(resolve(process.cwd(), appDir), runId);
 
   if (asJson) {
@@ -835,6 +846,7 @@ async function runHarnessCompact(args: string[]): Promise<void> {
     return;
   }
 
+  const { compactHarnessRun, renderHarnessCompactionText } = await requireLegacy<typeof import("@zauso-ai/capstan-harness")>("@zauso-ai/capstan-harness");
   const tail = tailValue ? Number.parseInt(tailValue, 10) : undefined;
   const summary = await compactHarnessRun(resolve(process.cwd(), appDir), runId, {
     ...(typeof tail === "number" && Number.isFinite(tail) ? { tail } : {})
@@ -866,6 +878,7 @@ async function runHarnessSummary(args: string[]): Promise<void> {
     return;
   }
 
+  const { getHarnessSummary, renderHarnessCompactionText } = await requireLegacy<typeof import("@zauso-ai/capstan-harness")>("@zauso-ai/capstan-harness");
   const tail = tailValue ? Number.parseInt(tailValue, 10) : undefined;
   const summary = await getHarnessSummary(resolve(process.cwd(), appDir), runId, {
     refresh,
@@ -893,6 +906,7 @@ async function runHarnessSummaries(args: string[]): Promise<void> {
     return;
   }
 
+  const { listHarnessSummaries, renderHarnessSummariesText } = await requireLegacy<typeof import("@zauso-ai/capstan-harness")>("@zauso-ai/capstan-harness");
   const summaries = await listHarnessSummaries(resolve(process.cwd(), appDir));
 
   if (asJson) {
@@ -917,6 +931,7 @@ async function runHarnessMemory(args: string[]): Promise<void> {
     return;
   }
 
+  const { createHarnessMemory, getHarnessMemory, renderHarnessMemoryText } = await requireLegacy<typeof import("@zauso-ai/capstan-harness")>("@zauso-ai/capstan-harness");
   const tail = tailValue ? Number.parseInt(tailValue, 10) : undefined;
   const artifact = refresh
     ? await createHarnessMemory(resolve(process.cwd(), appDir), runId, {
@@ -944,6 +959,7 @@ async function runHarnessMemories(args: string[]): Promise<void> {
     return;
   }
 
+  const { listHarnessMemories, renderHarnessMemoriesText } = await requireLegacy<typeof import("@zauso-ai/capstan-harness")>("@zauso-ai/capstan-harness");
   const memories = await listHarnessMemories(resolve(process.cwd(), appDir));
   if (asJson) {
     console.log(JSON.stringify(memories, null, 2));
@@ -1135,7 +1151,7 @@ async function runBuild(): Promise<void> {
 
   // Step 6: Generate the production server entry file
   const serverEntry = `import { createServer } from "node:http";
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Hono } from "hono";
@@ -1151,10 +1167,198 @@ const manifest = JSON.parse(readFileSync(manifestPath, "utf-8"));
 
 const port = parseInt(process.env.CAPSTAN_PORT ?? process.env.PORT ?? "3000", 10);
 const host = process.env.CAPSTAN_HOST ?? "0.0.0.0";
+const MAX_BODY_SIZE = parseInt(process.env.CAPSTAN_MAX_BODY_SIZE ?? "1048576", 10);
 
 async function main() {
   const app = new Hono();
   app.use("*", cors());
+
+  // --- Auth middleware -------------------------------------------------------
+  // Load config from the compiled capstan.config.js to obtain auth settings.
+  // If auth config exists, create a real auth resolver via @zauso-ai/capstan-auth
+  // so that session cookies and API keys are verified on every request.
+
+  let resolveAuth = null;
+  let appConfig = null;
+
+  const configCandidates = [
+    join(distDir, "capstan.config.js"),
+    join(cwd, "capstan.config.js"),
+  ];
+
+  for (const candidate of configCandidates) {
+    if (existsSync(candidate)) {
+      try {
+        const configUrl = pathToFileURL(candidate).href;
+        const configMod = await import(configUrl);
+        appConfig = configMod.default ?? configMod;
+        break;
+      } catch (err) {
+        console.warn("[capstan] Failed to load config from " + candidate + ":", err?.message ?? err);
+      }
+    }
+  }
+
+  // Derive auth config: support both CapstanConfig shape (auth.session) and
+  // the flat AuthConfig shape ({ session: { secret } }).
+  const authCfg = appConfig?.auth ?? null;
+  const authSessionConfig = authCfg?.session ?? null;
+
+  if (authSessionConfig && authSessionConfig.secret) {
+    try {
+      const authPkg = await import("@zauso-ai/capstan-auth");
+      resolveAuth = authPkg.createAuthMiddleware(
+        {
+          session: {
+            secret: authSessionConfig.secret,
+            maxAge: authSessionConfig.maxAge,
+          },
+          apiKeys: authCfg.apiKeys ?? undefined,
+        },
+        {
+          findAgentByKeyPrefix: appConfig?.findAgentByKeyPrefix ?? undefined,
+        },
+      );
+      console.log("[capstan] Auth middleware enabled (session + API key verification).");
+    } catch (err) {
+      console.warn("[capstan] @zauso-ai/capstan-auth not available. Auth middleware disabled.", err?.message ?? "");
+    }
+  } else {
+    console.warn("[capstan] No auth config found. All requests will be treated as anonymous.");
+  }
+
+  // Hono middleware: resolve auth for every request and store on context.
+  app.use("*", async (c, next) => {
+    if (resolveAuth) {
+      try {
+        const authCtx = await resolveAuth(c.req.raw);
+        c.set("capstanAuth", authCtx);
+      } catch (err) {
+        console.error("[capstan] Auth resolution error:", err?.message ?? err);
+        c.set("capstanAuth", { isAuthenticated: false, type: "anonymous", permissions: [] });
+      }
+    }
+    await next();
+  });
+
+  // Helper: build a CapstanContext from Hono context, using resolved auth.
+  function buildCtx(c) {
+    const authFromMiddleware = c.get("capstanAuth");
+    return {
+      auth: authFromMiddleware ?? { isAuthenticated: false, type: "anonymous", permissions: [] },
+      request: c.req.raw,
+      env: process.env,
+      honoCtx: c,
+    };
+  }
+
+  // --- Policy loading --------------------------------------------------------
+  // Load user-defined policies from dist/app/policies/index.js (if present).
+  // This mirrors enforcePolicies from @zauso-ai/capstan-core so that custom
+  // policies (beyond "requireAuth") are enforced in production.
+
+  const policyRegistry = new Map();
+  let enforcePoliciesFn = null;
+
+  try {
+    const corePkg = await import("@zauso-ai/capstan-core");
+    if (typeof corePkg.enforcePolicies === "function") {
+      enforcePoliciesFn = corePkg.enforcePolicies;
+    }
+  } catch {
+    // @zauso-ai/capstan-core not available.
+  }
+
+  const policiesIndexPath = join(distDir, "app", "policies", "index.js");
+  if (existsSync(policiesIndexPath)) {
+    try {
+      const policiesMod = await import(pathToFileURL(policiesIndexPath).href);
+      const exports = policiesMod.default ?? policiesMod;
+      if (exports && typeof exports === "object") {
+        for (const [key, value] of Object.entries(exports)) {
+          if (value && typeof value === "object" && "check" in value) {
+            policyRegistry.set(value.key ?? key, value);
+          }
+        }
+      }
+      if (policyRegistry.size > 0) {
+        console.log("[capstan] Loaded " + policyRegistry.size + " custom policies from app/policies/index.js");
+      }
+    } catch (err) {
+      console.warn("[capstan] Failed to load policies from " + policiesIndexPath + ":", err?.message ?? err);
+    }
+  }
+
+  // Built-in requireAuth policy used when no custom override exists.
+  const builtinRequireAuth = {
+    key: "requireAuth",
+    title: "Require Authentication",
+    effect: "deny",
+    check: async ({ ctx }) => {
+      if (ctx.auth.isAuthenticated) return { effect: "allow" };
+      return { effect: "deny", reason: "Authentication required" };
+    },
+  };
+
+  // Enforce all policies for a handler. Returns null if allowed, or a Response
+  // if the request should be blocked/deferred.
+  async function enforceHandlerPolicy(c, ctx, handler, input) {
+    if (!handler.policy) return null;
+
+    const policyName = handler.policy;
+    const policyDef = policyRegistry.get(policyName)
+      ?? (policyName === "requireAuth" ? builtinRequireAuth : null);
+
+    if (!policyDef) {
+      // Unknown policy in production: deny by default (fail closed).
+      console.warn("[capstan] Unknown policy: " + policyName + ". Denying request (fail closed).");
+      return c.json({ error: "Forbidden", reason: "Unknown policy: " + policyName }, 403);
+    }
+
+    let result;
+    if (enforcePoliciesFn) {
+      result = await enforcePoliciesFn([policyDef], ctx, input);
+    } else {
+      result = await policyDef.check({ ctx, input });
+    }
+
+    if (result.effect === "deny") {
+      return c.json(
+        { error: "Forbidden", reason: result.reason ?? "Policy denied", policy: policyName },
+        403,
+      );
+    }
+
+    if (result.effect === "approve") {
+      try {
+        const corePkg = await import("@zauso-ai/capstan-core");
+        if (typeof corePkg.createApproval === "function") {
+          const approval = corePkg.createApproval({
+            method: c.req.method,
+            path: c.req.path,
+            input,
+            policy: policyName,
+            reason: result.reason ?? "This action requires approval",
+          });
+          return c.json(
+            {
+              status: "approval_required",
+              approvalId: approval.id,
+              reason: result.reason ?? "This action requires approval",
+              pollUrl: "/capstan/approvals/" + approval.id,
+            },
+            202,
+          );
+        }
+      } catch {}
+      return c.json(
+        { error: "Forbidden", reason: "Approval required but approval system unavailable", policy: policyName },
+        403,
+      );
+    }
+
+    return null;
+  }
 
   // Serve static assets from dist/public/ if present
   try {
@@ -1213,21 +1417,14 @@ async function main() {
           input = {};
         }
 
-        const ctx = {
-          auth: { isAuthenticated: false, type: "anonymous", permissions: [] },
-          request: c.req.raw,
-          env: process.env,
-          honoCtx: c,
-        };
+        const ctx = buildCtx(c);
 
         try {
           if (isApiDef) {
-            // Policy enforcement
-            if (handler.policy) {
-              if (handler.policy === "requireAuth" && !ctx.auth.isAuthenticated) {
-                return c.json({ error: "Unauthorized", policy: handler.policy }, 401);
-              }
-            }
+            // Policy enforcement using auth-resolved ctx and loaded policies.
+            const policyResponse = await enforceHandlerPolicy(c, ctx, handler, input);
+            if (policyResponse !== null) return policyResponse;
+
             const result = await handler.handler({ input, ctx });
             return c.json(result);
           }
@@ -1240,8 +1437,8 @@ async function main() {
           if (err && typeof err === "object" && "issues" in err && Array.isArray(err.issues)) {
             return c.json({ error: "Validation Error", issues: err.issues }, 400);
           }
-          const message = err instanceof Error ? err.message : "Internal Server Error";
-          console.error("[capstan] Error in " + method + " " + route.urlPattern + ":", message);
+          console.error("[capstan] Request error:", err);
+          const message = "Internal Server Error";
           return c.json({ error: message }, 500);
         }
       });
@@ -1271,13 +1468,15 @@ async function main() {
         if (value !== undefined) params[name] = value;
       }
 
+      const ctx = buildCtx(c);
+
       let loaderData = null;
       if (typeof pageModule.loader === "function") {
         try {
           loaderData = await pageModule.loader({
             params,
             request: c.req.raw,
-            ctx: { auth: { isAuthenticated: false, type: "anonymous", permissions: [] } },
+            ctx: { auth: ctx.auth },
             fetch: { get: async () => null, post: async () => null, put: async () => null, delete: async () => null },
           });
         } catch (err) {
@@ -1296,7 +1495,7 @@ async function main() {
           loaderArgs: {
             params,
             request: c.req.raw,
-            ctx: { auth: { isAuthenticated: false, type: "anonymous", permissions: [] } },
+            ctx: { auth: ctx.auth },
             fetch: { get: async () => null, post: async () => null, put: async () => null, delete: async () => null },
           },
         });
@@ -1308,7 +1507,7 @@ async function main() {
 <head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" /><title>${appName.replace(/"/g, "&quot;")}</title></head>
 <body>
   <div id="capstan-root"><p>Page: \${route.urlPattern}</p></div>
-  <script>window.__CAPSTAN_DATA__ = \${JSON.stringify({ loaderData, params })}</script>
+  <script>window.__CAPSTAN_DATA__ = \${JSON.stringify({ loaderData, params }).replace(/</g, '\\\\u003c').replace(/>/g, '\\\\u003e')}</script>
 </body>
 </html>\`;
         return c.html(html);
@@ -1335,6 +1534,33 @@ async function main() {
     return c.json({ status: "ok", uptime: process.uptime(), timestamp: new Date().toISOString() });
   });
 
+  // Approval management endpoints (if @zauso-ai/capstan-core is available)
+  try {
+    const corePkg = await import("@zauso-ai/capstan-core");
+    if (typeof corePkg.listApprovals === "function") {
+      app.get("/capstan/approvals", (c) => {
+        const status = new URL(c.req.url).searchParams.get("status") ?? undefined;
+        const approvals = corePkg.listApprovals(status);
+        return c.json({ approvals });
+      });
+      app.get("/capstan/approvals/:id", (c) => {
+        const approval = corePkg.getApproval(c.req.param("id"));
+        if (!approval) return c.json({ error: "Approval not found" }, 404);
+        return c.json(approval);
+      });
+      app.post("/capstan/approvals/:id/resolve", async (c) => {
+        let body;
+        try { body = await c.req.json(); } catch { body = {}; }
+        const decision = body.decision === "approved" ? "approved" : "denied";
+        const approval = corePkg.resolveApproval(c.req.param("id"), decision, body.resolvedBy);
+        if (!approval) return c.json({ error: "Approval not found" }, 404);
+        return c.json(approval);
+      });
+    }
+  } catch {
+    // Approval endpoints not available.
+  }
+
   // Start HTTP server
   const server = createServer(async (req, res) => {
     try {
@@ -1351,7 +1577,18 @@ async function main() {
       if (hasBody) {
         body = await new Promise((resolve, reject) => {
           const chunks = [];
-          req.on("data", (c) => chunks.push(c));
+          let received = 0;
+          req.on("data", (c) => {
+            received += c.length;
+            if (received > MAX_BODY_SIZE) {
+              req.destroy();
+              const err = new Error("Request body exceeds maximum allowed size of " + MAX_BODY_SIZE + " bytes");
+              err.statusCode = 413;
+              reject(err);
+              return;
+            }
+            chunks.push(c);
+          });
           req.on("error", reject);
           req.on("end", () => {
             const raw = Buffer.concat(chunks).toString("utf-8");
@@ -1370,6 +1607,11 @@ async function main() {
       const responseBody = await response.text();
       res.end(responseBody);
     } catch (err) {
+      if (err && err.statusCode === 413) {
+        if (!res.headersSent) res.writeHead(413, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Payload Too Large" }));
+        return;
+      }
       console.error("[capstan] Unhandled request error:", err);
       if (!res.headersSent) res.writeHead(500, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "Internal Server Error" }));
@@ -1381,6 +1623,9 @@ async function main() {
     console.log("  Capstan production server running");
     console.log("  Local:  http://" + (host === "0.0.0.0" ? "localhost" : host) + ":" + port);
     console.log("  Routes: " + (apiRouteCount + pageRouteCount) + " total (" + apiRouteCount + " API, " + pageRouteCount + " pages)");
+    if (resolveAuth) console.log("  Auth:   enabled");
+    else console.log("  Auth:   disabled (no auth config)");
+    if (policyRegistry.size > 0) console.log("  Policies: " + policyRegistry.size + " custom policies loaded");
     console.log("");
   });
 }
@@ -1497,48 +1742,35 @@ async function runDbMigrate(args: string[]): Promise<void> {
   console.log(`Created migration: app/migrations/${filename}`);
 }
 
-async function runDbPush(): Promise<void> {
-  const { readdir, readFile: readMigrationFile } = await import("node:fs/promises");
-  const { join } = await import("node:path");
-  const { createDatabase } = await import("@zauso-ai/capstan-db");
+async function loadDbConfig(): Promise<{ provider: "sqlite" | "postgres" | "mysql"; url: string }> {
+  let provider: "sqlite" | "postgres" | "mysql" = "sqlite";
+  let url: string = join(process.cwd(), "app", "data", "app.db");
 
-  const migrationsDir = join(process.cwd(), "app", "migrations");
-  let files: string[];
-  try {
-    files = (await readdir(migrationsDir)).filter((f) => f.endsWith(".sql")).sort();
-  } catch {
-    console.log("No migrations directory found at app/migrations/.");
-    return;
-  }
-
-  if (files.length === 0) {
-    console.log("No pending migrations.");
-    return;
-  }
-
-  const db = createDatabase({ provider: "sqlite", url: join(process.cwd(), "app", "data", "app.db") });
-
-  for (const file of files) {
-    const sql = await readMigrationFile(join(migrationsDir, file), "utf8");
-    const statements = sql
-      .split(";")
-      .map((s) => s.trim())
-      .filter((s) => s.length > 0 && !s.startsWith("--"));
-    if (statements.length > 0) {
-      const client = (db as unknown as { $client: { exec: (sql: string) => void } }).$client;
-      for (const stmt of statements) {
-        client.exec(stmt);
+  const configPath = await resolveConfig();
+  if (configPath) {
+    try {
+      const configUrl = pathToFileURL(configPath).href;
+      const configMod = (await import(configUrl)) as {
+        default?: { database?: { provider?: string; url?: string } };
+      };
+      if (configMod.default?.database?.provider) {
+        provider = configMod.default.database.provider as typeof provider;
       }
+      if (configMod.default?.database?.url) {
+        url = configMod.default.database.url;
+      }
+    } catch {
+      // Config load failed — use defaults.
     }
-    console.log(`Applied: ${file}`);
   }
 
-  console.log("All migrations applied.");
+  return { provider, url };
 }
 
-async function runDbStatus(): Promise<void> {
-  const { readdir } = await import("node:fs/promises");
-  const { join } = await import("node:path");
+async function runDbPush(): Promise<void> {
+  const { readdir, readFile: readMigrationFile, mkdir: mkdirFs } = await import("node:fs/promises");
+  const { dirname } = await import("node:path");
+  const { createDatabase, applyTrackedMigrations } = await import("@zauso-ai/capstan-db");
 
   const migrationsDir = join(process.cwd(), "app", "migrations");
   let files: string[];
@@ -1554,9 +1786,103 @@ async function runDbStatus(): Promise<void> {
     return;
   }
 
-  console.log(`Found ${files.length} migration(s):`);
+  const { provider, url } = await loadDbConfig();
+
+  // Ensure directory exists for SQLite file-based databases
+  if (provider === "sqlite" && url !== ":memory:") {
+    await mkdirFs(dirname(url), { recursive: true });
+  }
+
+  const dbInstance = createDatabase({ provider, url });
+  // Access the underlying driver client from the Drizzle instance
+  const client = (dbInstance.db as { $client: unknown }).$client as {
+    exec: (sql: string) => void;
+    prepare: (sql: string) => {
+      all: (...params: unknown[]) => unknown[];
+      run: (...params: unknown[]) => unknown;
+      get: (...params: unknown[]) => unknown;
+    };
+  };
+
+  // Load all migration file contents
+  const migrations: Array<{ name: string; sql: string }> = [];
   for (const file of files) {
-    console.log(`  ${file}`);
+    const sql = await readMigrationFile(join(migrationsDir, file), "utf8");
+    migrations.push({ name: file, sql });
+  }
+
+  const executed = applyTrackedMigrations(client, migrations, provider);
+
+  if (executed.length === 0) {
+    console.log("No pending migrations. Database is up to date.");
+  } else {
+    for (const name of executed) {
+      console.log(`Applied: ${name}`);
+    }
+    console.log(`\n${executed.length} migration(s) applied.`);
+  }
+}
+
+async function runDbStatus(): Promise<void> {
+  const { readdir } = await import("node:fs/promises");
+  const { createDatabase, getMigrationStatus } = await import("@zauso-ai/capstan-db");
+
+  const migrationsDir = join(process.cwd(), "app", "migrations");
+  let files: string[];
+  try {
+    files = (await readdir(migrationsDir)).filter((f) => f.endsWith(".sql")).sort();
+  } catch {
+    console.log("No migrations directory found at app/migrations/.");
+    return;
+  }
+
+  if (files.length === 0) {
+    console.log("No migration files found.");
+    return;
+  }
+
+  const { provider, url } = await loadDbConfig();
+
+  let status: { applied: Array<{ name: string; appliedAt: string }>; pending: string[] };
+  try {
+    const dbInstance = createDatabase({ provider, url });
+    const client = (dbInstance.db as { $client: unknown }).$client as {
+      exec: (sql: string) => void;
+      prepare: (sql: string) => {
+        all: (...params: unknown[]) => unknown[];
+        run: (...params: unknown[]) => unknown;
+        get: (...params: unknown[]) => unknown;
+      };
+    };
+
+    status = getMigrationStatus(client, files, provider);
+  } catch {
+    // Database may not exist yet — treat everything as pending
+    status = {
+      applied: [],
+      pending: files,
+    };
+  }
+
+  console.log(`Migration status (${provider}):\n`);
+
+  if (status.applied.length > 0) {
+    console.log(`Applied (${status.applied.length}):`);
+    for (const m of status.applied) {
+      console.log(`  ✓ ${m.name}  (${m.appliedAt})`);
+    }
+  }
+
+  if (status.pending.length > 0) {
+    if (status.applied.length > 0) console.log("");
+    console.log(`Pending (${status.pending.length}):`);
+    for (const name of status.pending) {
+      console.log(`  • ${name}`);
+    }
+  }
+
+  if (status.applied.length > 0 && status.pending.length === 0) {
+    console.log("\nDatabase is up to date.");
   }
 }
 
@@ -1788,26 +2114,28 @@ async function runHarnessMutation(
     return;
   }
 
+  const harness = await requireLegacy<typeof import("@zauso-ai/capstan-harness")>("@zauso-ai/capstan-harness");
+
   const root = resolve(process.cwd(), appDir);
   const run =
     mode === "pause"
-      ? await pauseHarnessRun(root, runId, { ...(note ? { note } : {}) })
+      ? await harness.pauseHarnessRun(root, runId, { ...(note ? { note } : {}) })
       : mode === "resume"
-        ? await resumeHarnessRun(root, runId, { ...(note ? { note } : {}) })
+        ? await harness.resumeHarnessRun(root, runId, { ...(note ? { note } : {}) })
         : mode === "request-approval"
-          ? await requestHarnessApproval(root, runId, { ...(note ? { note } : {}) })
+          ? await harness.requestHarnessApproval(root, runId, { ...(note ? { note } : {}) })
         : mode === "approve"
-          ? await approveHarnessRun(root, runId, { ...(note ? { note } : {}) })
+          ? await harness.approveHarnessRun(root, runId, { ...(note ? { note } : {}) })
           : mode === "request-input"
-            ? await requestHarnessInput(root, runId, { ...(note ? { note } : {}) })
+            ? await harness.requestHarnessInput(root, runId, { ...(note ? { note } : {}) })
             : mode === "cancel"
-              ? await cancelHarnessRun(root, runId, { ...(note ? { note } : {}) })
-            : await retryHarnessRun(root, runId, { ...(note ? { note } : {}) });
+              ? await harness.cancelHarnessRun(root, runId, { ...(note ? { note } : {}) })
+            : await harness.retryHarnessRun(root, runId, { ...(note ? { note } : {}) });
 
   if (asJson) {
     console.log(JSON.stringify(run, null, 2));
   } else {
-    process.stdout.write(renderHarnessRunText(run));
+    process.stdout.write(harness.renderHarnessRunText(run));
   }
 }
 
@@ -1914,6 +2242,8 @@ async function compileBriefWithPackDefinitions(
     options.packDefinitions ?? [],
     externalPackDefinitions
   );
+  const { compileCapstanBrief } = await requireLegacy<typeof import("@zauso-ai/capstan-brief")>("@zauso-ai/capstan-brief");
+
   const compiled = compileCapstanBrief(brief, {
     packDefinitions
   });
@@ -1957,10 +2287,16 @@ function normalizePackRegistryExport(
   throw new Error("Pack registry modules must export an array of pack definitions.");
 }
 
-function applyGraphWithPackDefinitions(
+async function applyGraphWithPackDefinitions(
   graph: AppGraph,
   extraPackDefinitions: readonly GraphPackDefinition[]
-): AppGraph {
+): Promise<AppGraph> {
+  const {
+    applyAppGraphPacks,
+    applyBuiltinAppGraphPacks,
+    listBuiltinGraphPacks,
+  } = await requireLegacy<typeof import("@zauso-ai/capstan-packs-core")>("@zauso-ai/capstan-packs-core");
+
   if (!extraPackDefinitions.length) {
     return applyBuiltinAppGraphPacks(graph);
   }

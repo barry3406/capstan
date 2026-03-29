@@ -1,4 +1,4 @@
-import { defineConfig, env } from "@capstan/core";
+import { defineConfig, env } from "@zauso-ai/capstan-core";
 
 export default defineConfig({
   app: {

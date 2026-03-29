@@ -1,4 +1,4 @@
-import { defineModel, field } from "@capstan/db";
+import { defineModel, field } from "@zauso-ai/capstan-db";
 
 export const User = defineModel("user", {
   fields: {

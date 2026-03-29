@@ -65,3 +65,14 @@ const apiRegistry: APIDefinition[] = [];
 export function getAPIRegistry(): ReadonlyArray<APIDefinition> {
   return apiRegistry;
 }
+
+/**
+ * Clear all entries from the global API registry.
+ *
+ * This should be called at the start of `createCapstanApp` or between test
+ * cases to prevent stale definitions from leaking across app instances,
+ * hot-reload cycles, or test runs.
+ */
+export function clearAPIRegistry(): void {
+  apiRegistry.length = 0;
+}

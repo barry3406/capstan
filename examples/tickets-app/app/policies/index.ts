@@ -1,4 +1,4 @@
-import { definePolicy } from "@capstan/core";
+import { definePolicy } from "@zauso-ai/capstan-core";
 
 export const requireAuth = definePolicy({
   key: "requireAuth",

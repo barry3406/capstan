@@ -44,18 +44,18 @@ npx create-capstan-app
 The repo has two coexisting systems:
 
 **Runtime Framework (NEW — the primary system):**
-- `@capstan/core` — Hono HTTP server, defineAPI, defineMiddleware, definePolicy, approval workflow
-- `@capstan/router` — File-based routing (.page.tsx, .api.ts, _layout.tsx, _middleware.ts)
-- `@capstan/db` — Drizzle ORM, defineModel, field/relation helpers, migration, auto CRUD generation
-- `@capstan/auth` — JWT sessions, API key auth for agents, permission checking
-- `@capstan/agent` — CapabilityRegistry, agent manifest, MCP server, A2A adapter, OpenAPI generator
-- `@capstan/react` — SSR with loaders, layouts, Outlet, hydration
-- `@capstan/dev` — Dev server with file watching, hot route reload, MCP/A2A endpoints
+- `@zauso-ai/capstan-core` — Hono HTTP server, defineAPI, defineMiddleware, definePolicy, approval workflow
+- `@zauso-ai/capstan-router` — File-based routing (.page.tsx, .api.ts, _layout.tsx, _middleware.ts)
+- `@zauso-ai/capstan-db` — Drizzle ORM, defineModel, field/relation helpers, migration, auto CRUD generation
+- `@zauso-ai/capstan-auth` — JWT sessions, API key auth for agents, permission checking
+- `@zauso-ai/capstan-agent` — CapabilityRegistry, agent manifest, MCP server, A2A adapter, OpenAPI generator
+- `@zauso-ai/capstan-react` — SSR with loaders, layouts, Outlet, hydration
+- `@zauso-ai/capstan-dev` — Dev server with file watching, hot route reload, MCP/A2A endpoints
 - `create-capstan-app` — Project scaffolder
 
 **Compiler System (LEGACY — still functional):**
-- `@capstan/app-graph`, `@capstan/brief`, `@capstan/compiler`, `@capstan/packs-core`
-- `@capstan/surface-web`, `@capstan/surface-agent`, `@capstan/feedback`, `@capstan/release`, `@capstan/harness`
+- `@zauso-ai/capstan-app-graph`, `@zauso-ai/capstan-brief`, `@zauso-ai/capstan-compiler`, `@zauso-ai/capstan-packs-core`
+- `@zauso-ai/capstan-surface-web`, `@zauso-ai/capstan-surface-agent`, `@zauso-ai/capstan-feedback`, `@zauso-ai/capstan-release`, `@zauso-ai/capstan-harness`
 
 ### Multi-Protocol Architecture
 

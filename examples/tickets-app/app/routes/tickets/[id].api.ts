@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { defineAPI } from "@capstan/core";
+import { defineAPI } from "@zauso-ai/capstan-core";
 
 // ---------------------------------------------------------------------------
 // Sample data — mirrors the data in index.api.ts
