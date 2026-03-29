@@ -4,97 +4,109 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What Is Capstan
 
-A harness-first framework for building agent-operable software. The core loop is: **brief → graph → scaffold → implement → verify → release → operate**. Everything is designed to be machine-readable and discoverable by both humans and AI agents.
+An AI Agent Native full-stack framework. Like Next.js but designed for both human and AI agent consumption. One `defineAPI()` call simultaneously exposes HTTP, MCP, A2A, and OpenAPI interfaces.
 
 ## Commands
 
 ```bash
-# Build all packages (must run before tests or CLI commands)
+# Build all packages (18 packages, dependency order)
 npm run build
 
-# Run all tests (builds first, then runs vitest)
+# Run new tests (Bun — fast, 128 tests in ~500ms)
+npm run test:new
+
+# Run legacy tests (vitest — for old compiler packages)
 npm test
 
-# Run a single test file
-npm run build && npx vitest run tests/unit/app-graph.test.ts
+# Dev server
+npx capstan dev
 
-# Run tests matching a pattern
-npm run build && npx vitest run -t "pattern"
+# Verify app (AI TDD self-loop — structured JSON diagnostics)
+npx capstan verify --json
 
-# Watch mode
-npm run test:watch
+# Scaffold features
+npx capstan add model <name>
+npx capstan add api <name>
+npx capstan add page <name>
+npx capstan add policy <name>
 
-# Type-check all packages
-npm run typecheck
+# MCP server (stdio transport for Claude Desktop / Cursor)
+npx capstan mcp
 
-# CLI dev mode (builds all packages then runs CLI)
-npm run dev -- <command>
-
-# Example CLI commands
-npm run brief:scaffold -- --brief path/to/brief.json --out ./my-app
-npm run verify -- --app ./my-app
-npm run graph:check -- --graph path/to/graph.json
+# Create new project
+npx create-capstan-app
 ```
-
-Build order matters — packages must be built in dependency order. The `npm run build` script handles this. Always build before running tests or CLI commands.
 
 ## Architecture
 
-### Monorepo Layout
+### Two Systems
 
-Ten packages under `packages/`, all using npm workspaces with `@capstan/` scope. Each package has its own `tsconfig.json` extending `tsconfig.base.json`, builds to `dist/`, and exports from a single `src/index.ts`.
+The repo has two coexisting systems:
 
-### Five Kernels
+**Runtime Framework (NEW — the primary system):**
+- `@capstan/core` — Hono HTTP server, defineAPI, defineMiddleware, definePolicy, approval workflow
+- `@capstan/router` — File-based routing (.page.tsx, .api.ts, _layout.tsx, _middleware.ts)
+- `@capstan/db` — Drizzle ORM, defineModel, field/relation helpers, migration, auto CRUD generation
+- `@capstan/auth` — JWT sessions, API key auth for agents, permission checking
+- `@capstan/agent` — CapabilityRegistry, agent manifest, MCP server, A2A adapter, OpenAPI generator
+- `@capstan/react` — SSR with loaders, layouts, Outlet, hydration
+- `@capstan/dev` — Dev server with file watching, hot route reload, MCP/A2A endpoints
+- `create-capstan-app` — Project scaffolder
 
-- **app-graph** — Core data model. Defines the App Graph schema (resources, capabilities, tasks, policies, artifacts, views) with validation, diffing, and introspection. No internal dependencies — everything else builds on this.
-- **harness** — Durable task execution runtime. Manages task lifecycle, approvals, events, memory, compaction, and replay. No internal dependencies.
-- **compiler** — Largest package (~9000 lines). Projects a validated App Graph into a full application: control plane, agent surface, human surface, capabilities, views, assertions, and generated AGENTS.md.
-- **feedback** — Verification and diagnostics. Runs type checks, schema validation, assertion checks, and DOM-based HTML verification (via jsdom).
-- **release** — Release planning, rollout, rollback, and history tracking.
+**Compiler System (LEGACY — still functional):**
+- `@capstan/app-graph`, `@capstan/brief`, `@capstan/compiler`, `@capstan/packs-core`
+- `@capstan/surface-web`, `@capstan/surface-agent`, `@capstan/feedback`, `@capstan/release`, `@capstan/harness`
 
-Supporting packages: **brief** (parses briefs, compiles to graphs), **packs-core** (composable packs: auth, tenant, workflow, etc.), **surface-web** and **surface-agent** (projection helpers for human and AI interfaces).
-
-### Package Dependency Flow
+### Multi-Protocol Architecture
 
 ```
-app-graph (leaf)  ←  packs-core  ←  brief
-                  ←  compiler (also depends on surface-web, surface-agent)
-                  ←  feedback  ←  release
-cli depends on all packages
-harness, surface-web, surface-agent are leaf packages
+defineAPI() → CapabilityRegistry
+                ├── HTTP JSON API (Hono)
+                ├── MCP Tools (@modelcontextprotocol/sdk)
+                ├── A2A Skills (Google Agent-to-Agent)
+                └── OpenAPI 3.1 Spec
 ```
 
-### CLI Entry Point
+Auto-generated endpoints:
+- `GET /.well-known/capstan.json` — Capstan agent manifest
+- `GET /.well-known/agent.json` — A2A agent card
+- `POST /.well-known/a2a` — A2A JSON-RPC handler
+- `POST /.well-known/mcp` — MCP tool discovery
+- `GET /openapi.json` — OpenAPI spec
+- `GET /capstan/approvals` — Approval workflow management
 
-`packages/cli/src/index.ts` — routes all commands (`brief:*`, `graph:*`, `verify`, `release:*`, `harness:*`).
+### Key File Locations
+
+- CLI entry: `packages/cli/src/index.ts`
+- Dev server: `packages/dev/src/server.ts`
+- Core framework: `packages/core/src/` (api.ts, server.ts, policy.ts, verify.ts, approval.ts)
+- Route scanner: `packages/router/src/scanner.ts`
+- Multi-protocol registry: `packages/agent/src/registry.ts`
+- A2A adapter: `packages/agent/src/a2a.ts`
+- MCP adapter: `packages/agent/src/mcp.ts`
+- Auto CRUD: `packages/db/src/crud.ts`
+
+## Verifier (AI TDD Self-Loop)
+
+`capstan verify --json` runs a 7-step cascade:
+1. **structure** — required files exist
+2. **config** — capstan.config.ts loads
+3. **routes** — API files export handlers, write endpoints have policies
+4. **models** — model definitions valid
+5. **typecheck** — tsc --noEmit
+6. **contracts** — models ↔ routes consistency, policy references valid
+7. **manifest** — agent manifest matches live routes
+
+Output includes `repairChecklist` with `fixCategory` and `autoFixable` for AI consumption.
 
 ## TypeScript Conventions
 
-- ESM only (`"type": "module"` everywhere, `NodeNext` module resolution)
-- Strict mode with `exactOptionalPropertyTypes`, `verbatimModuleSyntax`, and `noUncheckedIndexedAccess`
-- Validation functions return `{ ok: boolean, issues: Issue[] }`
+- ESM only, NodeNext module resolution, `.js` extensions in imports
+- Strict mode with `exactOptionalPropertyTypes`, `verbatimModuleSyntax`, `noUncheckedIndexedAccess`
 - Target: ES2022
+- `import type` for type-only imports
 
-## Working Rules (from AGENTS.md)
+## Testing
 
-- Prefer one obvious implementation path over flexible but ambiguous patterns
-- Keep files and folders predictable — repo structure is part of the product
-- Make machine-readable contracts explicit instead of hiding behavior in prose
-- Favor deterministic flows over clever implicit behavior
-- Keep naming stable — renames should be rare and intentional
-
-## Design Lens
-
-When adding or changing a feature, ask:
-1. How does an agent discover this?
-2. How does an agent execute this?
-3. How does an agent verify success or failure?
-4. How does an agent recover or retry?
-5. How does a human supervise or override it?
-
-## Generated App Structure
-
-After scaffolding, generated apps have framework-owned paths (regenerate, don't patch) and user-owned paths (safe to edit):
-
-- **User-owned**: `src/capabilities/*.ts`, `src/views/*.ts`, `src/assertions/custom.ts`
-- **Framework-owned**: `src/control-plane/**`, `src/agent-surface/**`, `src/human-surface/**`, `capstan.app.json`, `AGENTS.md`
+- New packages: `bun test` (tests/unit/core,router,db,auth,agent + tests/integration/dev-server,full-pipeline)
+- Legacy packages: `vitest run` (tests/unit/app-graph,brief,compiler,packs-core,surface-web + tests/integration/* + tests/e2e/*)
