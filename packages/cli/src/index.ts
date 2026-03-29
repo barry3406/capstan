@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
-import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { existsSync } from "node:fs";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { AppGraph } from "@capstan/app-graph";
 import { diffAppGraphs, introspectAppGraph, validateAppGraph } from "@capstan/app-graph";
@@ -90,7 +91,7 @@ async function main(): Promise<void> {
       await runGraphDiff(args);
       return;
     case "verify":
-      await runVerify(args[0], args.includes("--json"));
+      await runVerify(args, args.includes("--json"));
       return;
     case "release:plan":
       await runReleasePlan(args);
@@ -190,6 +191,9 @@ async function main(): Promise<void> {
       return;
     case "agent:openapi":
       await runAgentOpenapi();
+      return;
+    case "add":
+      await runAdd(args);
       return;
     case "help":
     case "--help":
@@ -411,24 +415,71 @@ async function runGraphDiff(args: string[]): Promise<void> {
   console.log(JSON.stringify(diffAppGraphs(before, after), null, 2));
 }
 
-async function runVerify(target: string | undefined, asJson: boolean): Promise<void> {
-  if (!target) {
-    console.error("Usage: capstan verify <generated-app-dir> [--json]");
-    process.exitCode = 1;
+async function runVerify(args: string[], asJson: boolean): Promise<void> {
+  // Detect which verification system to use:
+  // - If the target (or cwd) has app/routes/, use the new runtime verifier
+  // - If the target has capstan.app.json, use the old compiler-based verifier
+
+  // Strip --json from args to get the positional target
+  const positional = args.filter((a) => a !== "--json");
+  const target = positional[0];
+
+  // For the new runtime verifier, target is optional (defaults to cwd)
+  const appRoot = target ? resolve(process.cwd(), target) : process.cwd();
+
+  const hasAppRoutes = existsSync(join(appRoot, "app", "routes"));
+  const hasOldAppJson = existsSync(join(appRoot, "capstan.app.json"));
+
+  if (hasAppRoutes && !hasOldAppJson) {
+    // New runtime framework — use @capstan/core verifier
+    const { verifyCapstanApp, renderRuntimeVerifyText } = await import("@capstan/core");
+    const report = await verifyCapstanApp(appRoot);
+
+    if (asJson) {
+      console.log(JSON.stringify(report, null, 2));
+    } else {
+      process.stdout.write(renderRuntimeVerifyText(report));
+    }
+
+    if (report.status === "failed") {
+      process.exitCode = 1;
+    }
     return;
   }
 
-  const report = await verifyGeneratedApp(resolve(process.cwd(), target));
+  if (hasOldAppJson) {
+    // Old compiler-based framework — use @capstan/feedback verifier
+    if (!target) {
+      console.error("Usage: capstan verify <generated-app-dir> [--json]");
+      process.exitCode = 1;
+      return;
+    }
 
-  if (asJson) {
-    console.log(JSON.stringify(report, null, 2));
+    const report = await verifyGeneratedApp(resolve(process.cwd(), target));
+
+    if (asJson) {
+      console.log(JSON.stringify(report, null, 2));
+    } else {
+      process.stdout.write(renderVerifyReportText(report));
+    }
+
+    if (report.status === "failed") {
+      process.exitCode = 1;
+    }
+    return;
+  }
+
+  // Neither detected — try to give helpful guidance
+  console.error("Could not detect project type.");
+  console.error("  - For runtime apps: ensure app/routes/ directory exists.");
+  console.error("  - For generated apps: ensure capstan.app.json exists.");
+  if (target) {
+    console.error(`  Looked in: ${appRoot}`);
   } else {
-    process.stdout.write(renderVerifyReportText(report));
+    console.error(`  Looked in: ${process.cwd()}`);
+    console.error("  Tip: run from your project root, or pass the directory as an argument.");
   }
-
-  if (report.status === "failed") {
-    process.exitCode = 1;
-  }
+  process.exitCode = 1;
 }
 
 async function runReleasePlan(args: string[]): Promise<void> {
@@ -1163,10 +1214,65 @@ async function runMcp(): Promise<void> {
       }));
     });
 
-  const agentConfig = { name: appName, ...(appDescription ? { description: appDescription } : {}) };
-  const { server } = createMcpServer(agentConfig, registryEntries, async (_method, _path, _args) => {
-    return { status: 501, body: "MCP route execution not wired up in CLI mode." };
-  });
+  // Build an executeRoute callback that loads handlers from disk and invokes
+  // them directly, so MCP tool calls actually run the real route logic.
+  const { loadApiHandlers } = await import("@capstan/dev");
+
+  const executeRoute = async (
+    method: string,
+    urlPath: string,
+    input: unknown,
+  ): Promise<unknown> => {
+    try {
+      // Find the matching route file from the manifest.
+      const matchingRoutes = manifest.routes.filter(
+        (r) => r.type === "api" && r.urlPattern === urlPath,
+      );
+      if (matchingRoutes.length === 0) {
+        return { error: `No route found for ${method} ${urlPath}` };
+      }
+
+      const route = matchingRoutes[0]!;
+      const handlers = await loadApiHandlers(route.filePath);
+      const handler = handlers[method as keyof typeof handlers];
+
+      if (!handler || typeof handler !== "object" || !("handler" in handler)) {
+        return { error: `No ${method} handler found at ${urlPath}` };
+      }
+
+      const apiDef = handler as {
+        handler: (args: { input: unknown; ctx: unknown }) => Promise<unknown>;
+      };
+      const result = await apiDef.handler({
+        input: input ?? {},
+        ctx: {
+          auth: {
+            isAuthenticated: false,
+            type: "anonymous" as const,
+            permissions: [],
+          },
+          request: new Request(`http://localhost${urlPath}`),
+          env: process.env,
+          honoCtx: {},
+        },
+      });
+      return result;
+    } catch (err) {
+      return {
+        error: err instanceof Error ? err.message : "Route execution failed",
+      };
+    }
+  };
+
+  const agentConfig = {
+    name: appName,
+    ...(appDescription ? { description: appDescription } : {}),
+  };
+  const { server } = createMcpServer(
+    agentConfig,
+    registryEntries,
+    executeRoute,
+  );
 
   await serveMcpStdio(server);
 }
@@ -1512,6 +1618,162 @@ function mergeExtraPackDefinitions(
   return merged;
 }
 
+// ---------------------------------------------------------------------------
+// capstan add
+// ---------------------------------------------------------------------------
+
+async function runAdd(args: string[]): Promise<void> {
+  const subcommand = args[0];
+  const name = args[1];
+
+  if (!subcommand || !name) {
+    console.error("Usage: capstan add <model|api|page|policy> <name>");
+    process.exitCode = 1;
+    return;
+  }
+
+  switch (subcommand) {
+    case "model": {
+      const filePath = join(process.cwd(), "app/models", `${name}.model.ts`);
+      if (existsSync(filePath)) {
+        console.error(`File already exists: app/models/${name}.model.ts`);
+        process.exitCode = 1;
+        return;
+      }
+      const pascalName = name.charAt(0).toUpperCase() + name.slice(1);
+      const content = `import { defineModel, field } from "capstan/db";
+
+export const ${pascalName} = defineModel("${name}", {
+  fields: {
+    id: field.id(),
+    title: field.string({ required: true }),
+    description: field.text(),
+    createdAt: field.datetime({ default: "now" }),
+    updatedAt: field.datetime({ updatedAt: true }),
+  },
+});
+`;
+      await mkdir(join(process.cwd(), "app/models"), { recursive: true });
+      await writeFile(filePath, content, "utf-8");
+      console.log(`\u2713 Created app/models/${name}.model.ts`);
+      break;
+    }
+    case "api": {
+      const dirPath = join(process.cwd(), "app/routes", name);
+      const filePath = join(dirPath, "index.api.ts");
+      if (existsSync(filePath)) {
+        console.error(`File already exists: app/routes/${name}/index.api.ts`);
+        process.exitCode = 1;
+        return;
+      }
+      const content = `import { defineAPI } from "capstan";
+import { z } from "zod";
+
+export const meta = {
+  resource: "${name}",
+  description: "Manage ${name}",
+};
+
+export const GET = defineAPI({
+  output: z.object({
+    items: z.array(z.object({ id: z.string(), title: z.string() })),
+  }),
+  description: "List ${name}",
+  capability: "read",
+  resource: "${name}",
+  async handler({ input, ctx }) {
+    // TODO: Replace with real database query
+    return { items: [] };
+  },
+});
+
+export const POST = defineAPI({
+  input: z.object({
+    title: z.string().min(1),
+  }),
+  output: z.object({
+    id: z.string(),
+    title: z.string(),
+  }),
+  description: "Create a ${name}",
+  capability: "write",
+  resource: "${name}",
+  policy: "requireAuth",
+  async handler({ input, ctx }) {
+    // TODO: Replace with real database insert
+    return {
+      id: crypto.randomUUID(),
+      title: input.title,
+    };
+  },
+});
+`;
+      await mkdir(dirPath, { recursive: true });
+      await writeFile(filePath, content, "utf-8");
+      console.log(`\u2713 Created app/routes/${name}/index.api.ts`);
+      break;
+    }
+    case "page": {
+      const dirPath = join(process.cwd(), "app/routes", name);
+      const filePath = join(dirPath, "index.page.tsx");
+      if (existsSync(filePath)) {
+        console.error(`File already exists: app/routes/${name}/index.page.tsx`);
+        process.exitCode = 1;
+        return;
+      }
+      const titleName = name.charAt(0).toUpperCase() + name.slice(1);
+      const content = `export default function ${titleName}Page() {
+  return (
+    <main>
+      <h1>${titleName}</h1>
+      <p>This is the ${name} page.</p>
+    </main>
+  );
+}
+`;
+      await mkdir(dirPath, { recursive: true });
+      await writeFile(filePath, content, "utf-8");
+      console.log(`\u2713 Created app/routes/${name}/index.page.tsx`);
+      break;
+    }
+    case "policy": {
+      const policiesDir = join(process.cwd(), "app/policies");
+      const policiesFile = join(policiesDir, "index.ts");
+      const camelName = name.charAt(0).toLowerCase() + name.slice(1);
+      const titleName = name.charAt(0).toUpperCase() + name.slice(1);
+      const policySnippet = `
+export const ${camelName} = definePolicy({
+  key: "${camelName}",
+  title: "${titleName}",
+  effect: "deny",
+  async check({ ctx }) {
+    // TODO: Implement policy logic
+    return { effect: "allow" };
+  },
+});
+`;
+      if (existsSync(policiesFile)) {
+        // Append to existing policies file
+        const existing = await readFile(policiesFile, "utf-8");
+        await writeFile(policiesFile, existing + policySnippet, "utf-8");
+        console.log(`\u2713 Appended policy "${camelName}" to app/policies/index.ts`);
+      } else {
+        // Create new policies file with import
+        const content = `import { definePolicy } from "capstan";
+${policySnippet}`;
+        await mkdir(policiesDir, { recursive: true });
+        await writeFile(policiesFile, content, "utf-8");
+        console.log(`\u2713 Created app/policies/index.ts with policy "${camelName}"`);
+      }
+      break;
+    }
+    default:
+      console.error(`Unknown add subcommand: ${subcommand}`);
+      console.error("Usage: capstan add <model|api|page|policy> <name>");
+      process.exitCode = 1;
+  }
+}
+
 function printHelp(): void {
   console.log(`Capstan CLI
 
@@ -1521,6 +1783,9 @@ Commands:
   capstan build              Build the project and generate agent manifests
   capstan start [--port 3000]
                              Start the production server from built output
+
+  capstan add <model|api|page|policy> <name>
+                             Scaffold a model, API route, page, or policy
 
   capstan db:migrate --name <name>
                              Generate a new migration file in app/migrations/
@@ -1547,8 +1812,8 @@ Commands:
                              Print graph metadata, summary, validation, and normalized output
   capstan graph:diff <before> <after> [--pack-registry <path>]
                              Print a machine-readable diff between two App Graphs
-  capstan verify <app-dir> [--json]
-                             Verify a generated app and emit repair-oriented diagnostics
+  capstan verify [app-dir] [--json]
+                             Verify a Capstan app (auto-detects runtime vs generated)
   capstan release:plan <app-dir> [--json] [--env <path>] [--migrations <path>]
                              Generate a machine-readable preview/release plan
   capstan release:run <app-dir> <preview|release> [--json] [--env <path>] [--migrations <path>]

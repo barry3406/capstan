@@ -6,8 +6,14 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { scanRoutes } from "@capstan/router";
 import type { RouteManifest, RouteEntry } from "@capstan/router";
-import { createContext } from "@capstan/core";
-import type { APIDefinition, HttpMethod, CapstanContext } from "@capstan/core";
+import {
+  createContext,
+  createApproval,
+  getApproval,
+  listApprovals,
+  resolveApproval,
+} from "@capstan/core";
+import type { APIDefinition, HttpMethod, CapstanContext, CapstanAuthContext } from "@capstan/core";
 
 import { loadApiHandlers, loadPageModule } from "./loader.js";
 import { watchRoutes } from "./watcher.js";
@@ -59,9 +65,12 @@ function isAPIDefinition(value: unknown): value is APIDefinition {
  * Build a minimal `CapstanContext` from a raw `Request` for use outside
  * of the Hono middleware pipeline (e.g. for page loaders).
  */
-function buildStandaloneContext(request: Request): CapstanContext {
+function buildStandaloneContext(
+  request: Request,
+  auth?: CapstanAuthContext,
+): CapstanContext {
   return {
-    auth: {
+    auth: auth ?? {
       isAuthenticated: false,
       type: "anonymous",
       permissions: [],
@@ -79,6 +88,9 @@ function buildStandaloneContext(request: Request): CapstanContext {
 // Route registration
 // ---------------------------------------------------------------------------
 
+/** Hono env type that declares the capstanAuth variable. */
+type HonoEnv = { Variables: { capstanAuth: CapstanAuthContext } };
+
 /**
  * Given a scanned route manifest, build a fresh Hono application with all
  * routes registered. Returns the Hono app plus metadata used by the
@@ -88,7 +100,7 @@ async function buildApp(
   manifest: RouteManifest,
   config: DevServerConfig,
 ): Promise<{
-  app: Hono;
+  app: Hono<HonoEnv>;
   apiRouteCount: number;
   pageRouteCount: number;
   routeRegistry: Array<{
@@ -100,10 +112,52 @@ async function buildApp(
     outputSchema?: Record<string, unknown>;
   }>;
 }> {
-  const app = new Hono();
+
+  const app = new Hono<HonoEnv>();
 
   // Global middleware ---------------------------------------------------------
   app.use("*", cors());
+
+  // --- Auth middleware -------------------------------------------------------
+  // If the config includes auth settings, create the auth resolver from
+  // @capstan/auth. Otherwise, fall back to anonymous and warn once.
+
+  let resolveAuth: ((request: Request) => Promise<CapstanAuthContext>) | null =
+    null;
+
+  if (config.auth) {
+    try {
+      const authModuleName = "@capstan/auth";
+      const authPkg = (await import(authModuleName)) as {
+        createAuthMiddleware: (
+          cfg: typeof config.auth,
+          deps: { findAgentByKeyPrefix?: (prefix: string) => Promise<unknown> },
+        ) => (request: Request) => Promise<CapstanAuthContext>;
+      };
+      resolveAuth = authPkg.createAuthMiddleware(config.auth, {});
+    } catch {
+      // @capstan/auth is not installed or failed to load — continue without it.
+      // eslint-disable-next-line no-console
+      console.warn(
+        "[capstan] @capstan/auth not available. Auth middleware disabled.",
+      );
+    }
+  } else {
+    // eslint-disable-next-line no-console
+    console.warn(
+      "[capstan] No auth config provided. All requests treated as anonymous.",
+    );
+  }
+
+  // Hono middleware that resolves auth and attaches it to the context so that
+  // `createContext(c)` picks it up via `c.get("capstanAuth")`.
+  app.use("*", async (c, next) => {
+    if (resolveAuth) {
+      const authCtx = await resolveAuth(c.req.raw);
+      c.set("capstanAuth", authCtx);
+    }
+    await next();
+  });
 
   // Route metadata accumulated for the agent manifest / OpenAPI spec.
   const routeRegistry: Array<{
@@ -114,6 +168,15 @@ async function buildApp(
     inputSchema?: Record<string, unknown>;
     outputSchema?: Record<string, unknown>;
   }> = [];
+
+  /**
+   * Handler registry keyed by "METHOD /path" so approved requests can
+   * re-execute the original handler without going through the HTTP stack.
+   */
+  const handlerRegistry = new Map<
+    string,
+    (input: unknown, ctx: CapstanContext) => Promise<unknown>
+  >();
 
   let apiRouteCount = 0;
   let pageRouteCount = 0;
@@ -173,6 +236,15 @@ async function buildApp(
 
       routeRegistry.push(meta);
 
+      // Store the handler for approval re-execution.
+      if (isAPIDefinition(handler)) {
+        const routeKey = `${method} ${route.urlPattern}`;
+        const apiHandler = handler;
+        handlerRegistry.set(routeKey, async (input: unknown, ctx: CapstanContext) => {
+          return apiHandler.handler({ input, ctx });
+        });
+      }
+
       // Mount the handler on the Hono app.
       const honoMethod = method.toLowerCase() as
         | "get"
@@ -202,6 +274,44 @@ async function buildApp(
         }
 
         try {
+          // --- Policy enforcement -------------------------------------------
+          // If the handler declares a policy, enforce it before executing.
+          if (isAPIDefinition(handler) && handler.policy) {
+            const policyName = handler.policy;
+            // requireAuth is a built-in policy: deny anonymous requests.
+            if (policyName === "requireAuth") {
+              if (!ctx.auth.isAuthenticated) {
+                return c.json(
+                  { error: "Unauthorized", policy: policyName },
+                  401,
+                );
+              }
+            }
+            // For custom policies that are not "requireAuth", create a
+            // pending approval so a human/supervisor can review the action.
+            // The dev server does not maintain a full policy registry, so
+            // custom policies are treated as requiring approval in dev mode.
+            if (policyName !== "requireAuth") {
+              const reason = `Policy "${policyName}" requires approval`;
+              const approval = createApproval({
+                method,
+                path: route.urlPattern,
+                input,
+                policy: policyName,
+                reason,
+              });
+              return c.json(
+                {
+                  status: "approval_required",
+                  approvalId: approval.id,
+                  reason,
+                  pollUrl: `/capstan/approvals/${approval.id}`,
+                },
+                202,
+              );
+            }
+          }
+
           if (isAPIDefinition(handler)) {
             const result = await handler.handler({ input, ctx });
             return c.json(result as object);
@@ -286,7 +396,17 @@ async function buildApp(
         }
       }
 
-      const ctx = buildStandaloneContext(request);
+      // Resolve auth for page loaders when auth middleware is configured.
+      let pageAuth: CapstanAuthContext | undefined;
+      if (resolveAuth) {
+        try {
+          pageAuth = await resolveAuth(request);
+        } catch {
+          // Auth resolution failed — fall through to anonymous.
+        }
+      }
+
+      const ctx = buildStandaloneContext(request, pageAuth);
 
       // Run loader if present
       let loaderData: unknown = null;
@@ -384,6 +504,124 @@ async function buildApp(
     });
   }
 
+  // --- Approval management endpoints ----------------------------------------
+
+  /** List all approvals, optionally filtered by ?status=pending|approved|denied */
+  app.get("/capstan/approvals", (c) => {
+    const statusParam = new URL(c.req.url).searchParams.get("status") as
+      | "pending"
+      | "approved"
+      | "denied"
+      | null;
+    const items = listApprovals(statusParam ?? undefined);
+    return c.json({ approvals: items });
+  });
+
+  /** Get a single approval by ID */
+  app.get("/capstan/approvals/:id", (c) => {
+    const id = c.req.param("id");
+    const approval = getApproval(id);
+    if (!approval) {
+      return c.json({ error: "Approval not found" }, 404);
+    }
+    return c.json(approval);
+  });
+
+  /** Approve a pending approval — re-executes the original handler */
+  app.post("/capstan/approvals/:id/approve", async (c) => {
+    const id = c.req.param("id");
+    const existing = getApproval(id);
+    if (!existing) {
+      return c.json({ error: "Approval not found" }, 404);
+    }
+    if (existing.status !== "pending") {
+      return c.json(
+        { error: "Approval already resolved", status: existing.status },
+        409,
+      );
+    }
+
+    let resolvedBy: string | undefined;
+    try {
+      const body = await c.req.json() as Record<string, unknown>;
+      if (typeof body.resolvedBy === "string") {
+        resolvedBy = body.resolvedBy;
+      }
+    } catch {
+      // No body or invalid JSON — that's fine.
+    }
+
+    const approval = resolveApproval(id, "approved", resolvedBy);
+    if (!approval) {
+      return c.json({ error: "Approval not found" }, 404);
+    }
+
+    // Re-execute the original handler with the stored input.
+    const routeKey = `${approval.method} ${approval.path}`;
+    const handler = handlerRegistry.get(routeKey);
+    if (!handler) {
+      return c.json(
+        { error: "Handler not found for route", route: routeKey },
+        500,
+      );
+    }
+
+    try {
+      const ctx = createContext(c);
+      const result = await handler(approval.input, ctx);
+      approval.result = result;
+      return c.json({
+        status: "approved",
+        approvalId: approval.id,
+        result,
+      });
+    } catch (err: unknown) {
+      const message =
+        err instanceof Error ? err.message : "Handler execution failed";
+      return c.json({ error: message, approvalId: approval.id }, 500);
+    }
+  });
+
+  /** Deny a pending approval */
+  app.post("/capstan/approvals/:id/deny", async (c) => {
+    const id = c.req.param("id");
+    const existing = getApproval(id);
+    if (!existing) {
+      return c.json({ error: "Approval not found" }, 404);
+    }
+    if (existing.status !== "pending") {
+      return c.json(
+        { error: "Approval already resolved", status: existing.status },
+        409,
+      );
+    }
+
+    let resolvedBy: string | undefined;
+    let reason: string | undefined;
+    try {
+      const body = await c.req.json() as Record<string, unknown>;
+      if (typeof body.resolvedBy === "string") {
+        resolvedBy = body.resolvedBy;
+      }
+      if (typeof body.reason === "string") {
+        reason = body.reason;
+      }
+    } catch {
+      // No body or invalid JSON — that's fine.
+    }
+
+    const approval = resolveApproval(id, "denied", resolvedBy);
+    if (!approval) {
+      return c.json({ error: "Approval not found" }, 404);
+    }
+
+    return c.json({
+      status: "denied",
+      approvalId: approval.id,
+      ...(reason !== undefined ? { reason } : {}),
+    });
+  });
+
   // --- Framework endpoints --------------------------------------------------
 
   // Agent manifest
@@ -456,6 +694,138 @@ async function buildApp(
     });
   });
 
+  // --- A2A endpoints ---------------------------------------------------------
+  // GET /.well-known/agent.json — A2A Agent Card discovery
+  // POST /.well-known/a2a       — A2A JSON-RPC task handler
+
+  app.get("/.well-known/agent.json", async (c) => {
+    try {
+      const agentModuleName = "@capstan/agent";
+      const agentPkg = (await import(agentModuleName)) as {
+        generateA2AAgentCard: (
+          cfg: { name: string; description?: string; baseUrl?: string },
+          routes: Array<{ method: string; path: string; description?: string; inputSchema?: Record<string, unknown>; outputSchema?: Record<string, unknown> }>,
+        ) => unknown;
+      };
+
+      const card = agentPkg.generateA2AAgentCard(
+        {
+          name: config.appName ?? "capstan-app",
+          ...(config.appDescription ? { description: config.appDescription } : {}),
+          baseUrl: `http://${config.host ?? "localhost"}:${config.port ?? 3000}`,
+        },
+        routeRegistry,
+      );
+      return c.json(card as object);
+    } catch {
+      return c.json(
+        { error: "@capstan/agent not available — A2A disabled" },
+        501,
+      );
+    }
+  });
+
+  app.post("/.well-known/a2a", async (c) => {
+    try {
+      const agentModuleName = "@capstan/agent";
+      const agentPkg = (await import(agentModuleName)) as {
+        createA2AHandler: (
+          cfg: { name: string; description?: string; baseUrl?: string },
+          routes: Array<{ method: string; path: string; description?: string; inputSchema?: Record<string, unknown>; outputSchema?: Record<string, unknown> }>,
+          executeRoute: (method: string, path: string, input: unknown) => Promise<unknown>,
+        ) => {
+          handleRequest: (body: unknown) => Promise<unknown>;
+        };
+      };
+
+      const executeRoute = async (
+        method: string,
+        urlPath: string,
+        input: unknown,
+      ): Promise<unknown> => {
+        const url = `http://localhost:${config.port ?? 3000}${urlPath}`;
+        const init: RequestInit = {
+          method,
+          headers: { "Content-Type": "application/json" },
+        };
+        if (method !== "GET" && method !== "HEAD" && input !== undefined) {
+          init.body = JSON.stringify(input);
+        }
+        const request = new Request(url, init);
+        // Use the outer Hono app reference for internal dispatch.
+        const response = await app.fetch(request);
+        try {
+          return await response.json();
+        } catch {
+          return { status: response.status, body: await response.text() };
+        }
+      };
+
+      const handler = agentPkg.createA2AHandler(
+        {
+          name: config.appName ?? "capstan-app",
+          ...(config.appDescription ? { description: config.appDescription } : {}),
+          baseUrl: `http://${config.host ?? "localhost"}:${config.port ?? 3000}`,
+        },
+        routeRegistry,
+        executeRoute,
+      );
+
+      const body = await c.req.json();
+      const result = await handler.handleRequest(body);
+      return c.json(result as object);
+    } catch {
+      return c.json(
+        {
+          jsonrpc: "2.0",
+          id: null,
+          error: {
+            code: -32603,
+            message: "@capstan/agent not available — A2A disabled",
+          },
+        },
+        501,
+      );
+    }
+  });
+
+  // --- MCP discovery endpoint -----------------------------------------------
+  // POST /.well-known/mcp returns a JSON description of available MCP tools
+  // so that agents can discover capabilities without connecting via stdio.
+
+  app.post("/.well-known/mcp", async (c) => {
+    try {
+      const agentModuleName = "@capstan/agent";
+      const agentPkg = (await import(agentModuleName)) as {
+        routeToToolName: (method: string, path: string) => string;
+      };
+
+      const tools = routeRegistry.map((r) => ({
+        name: agentPkg.routeToToolName(r.method, r.path),
+        description: r.description ?? `${r.method} ${r.path}`,
+        method: r.method,
+        path: r.path,
+        inputSchema: r.inputSchema ?? { type: "object", properties: {} },
+      }));
+
+      return c.json({
+        protocol: "mcp",
+        version: "1.0",
+        name: config.appName ?? "capstan-app",
+        tools,
+      });
+    } catch {
+      // @capstan/agent not available
+      return c.json({
+        protocol: "mcp",
+        version: "1.0",
+        name: config.appName ?? "capstan-app",
+        tools: [],
+        error: "@capstan/agent not available",
+      });
+    }
+  });
+
   return { app, apiRouteCount, pageRouteCount, routeRegistry };
 }
 
@@ -483,12 +853,72 @@ export async function createDevServer(
   // --- Initial route scan ---------------------------------------------------
 
   let manifest = await scanRoutes(routesDir);
-  let { app, apiRouteCount, pageRouteCount } = await buildApp(manifest, config);
+  let { app, apiRouteCount, pageRouteCount, routeRegistry } = await buildApp(
+    manifest,
+    config,
+  );
 
   // The Node.js HTTP server holds a reference to the current Hono app.
   // When routes change we rebuild the app and swap the reference -- in-flight
   // requests finish against the old app while new requests hit the new one.
   let currentApp = app;
+
+  // --- MCP server instance ---------------------------------------------------
+  // Create an MCP server backed by the route registry so that `capstan mcp`
+  // can connect to the running dev server's routes. The executeRoute callback
+  // invokes the Hono app directly using an internal fetch.
+
+  type McpServerType = { server: unknown; getToolDefinitions: () => Array<{ name: string; description: string; inputSchema: unknown }> };
+  let mcpInstance: McpServerType | null = null;
+
+  async function buildMcpServer(): Promise<void> {
+    try {
+      const agentModuleName = "@capstan/agent";
+      const agentPkg = (await import(agentModuleName)) as {
+        createMcpServer: (
+          cfg: { name: string; description?: string },
+          routes: Array<{ method: string; path: string; description?: string; inputSchema?: Record<string, unknown> }>,
+          executeRoute: (method: string, path: string, input: unknown) => Promise<unknown>,
+        ) => McpServerType;
+      };
+
+      const executeRoute = async (
+        method: string,
+        urlPath: string,
+        input: unknown,
+      ): Promise<unknown> => {
+        const url = `http://localhost:${port}${urlPath}`;
+        const init: RequestInit = {
+          method,
+          headers: { "Content-Type": "application/json" },
+        };
+        if (method !== "GET" && method !== "HEAD" && input !== undefined) {
+          init.body = JSON.stringify(input);
+        }
+        const request = new Request(url, init);
+        const response = await currentApp.fetch(request);
+        try {
+          return await response.json();
+        } catch {
+          return { status: response.status, body: await response.text() };
+        }
+      };
+
+      mcpInstance = agentPkg.createMcpServer(
+        {
+          name: config.appName ?? "capstan-app",
+          ...(config.appDescription ? { description: config.appDescription } : {}),
+        },
+        routeRegistry,
+        executeRoute,
+      );
+    } catch {
+      // @capstan/agent not available — MCP disabled.
+      mcpInstance = null;
+    }
+  }
+
+  await buildMcpServer();
 
   // --- HTTP server ----------------------------------------------------------
 
@@ -556,6 +986,10 @@ export async function createDevServer(
       currentApp = rebuilt.app;
       apiRouteCount = rebuilt.apiRouteCount;
       pageRouteCount = rebuilt.pageRouteCount;
+      routeRegistry = rebuilt.routeRegistry;
+
+      // Rebuild MCP server with updated routes.
+      await buildMcpServer();
 
       const totalRoutes = apiRouteCount + pageRouteCount;
       // eslint-disable-next-line no-console

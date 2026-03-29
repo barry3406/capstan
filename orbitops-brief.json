@@ -1,0 +1,788 @@
+{
+  "version": 1,
+  "domain": {
+    "key": "orbitops",
+    "title": "OrbitOps — 订单到收入运营平台",
+    "description": "面向 B2B SaaS 公司的全链路收入运营平台：统一管理客户、合同、订单、订阅、账单、回款、续费、对账、异常处理和外部系统对接，同时支持人工运营和 Agent 自动化操作。"
+  },
+  "application": {
+    "profile": "saas",
+    "modules": [
+      { "key": "workflow" }
+    ]
+  },
+  "entities": [
+    {
+      "name": "Workspace",
+      "plural": "Workspaces",
+      "resourceKey": "workspace",
+      "title": "工作空间",
+      "description": "租户下的工作空间，代表一条业务线、区域或运营团队。",
+      "fields": {
+        "name": { "type": "string", "required": true, "description": "工作空间名称" },
+        "slug": { "type": "string", "required": true, "description": "URL 标识符" },
+        "region": { "type": "string", "description": "所属区域" },
+        "status": {
+          "type": "string",
+          "required": true,
+          "description": "状态",
+          "constraints": { "enum": ["active", "suspended", "archived"] }
+        }
+      },
+      "actions": {
+        "list": { "title": "工作空间列表", "viewTitle": "工作空间列表" },
+        "write": { "title": "创建/编辑工作空间", "viewTitle": "工作空间表单" },
+        "execute": false
+      }
+    },
+    {
+      "name": "Member",
+      "plural": "Members",
+      "resourceKey": "member",
+      "title": "成员",
+      "description": "工作空间中的用户成员及其角色。",
+      "fields": {
+        "displayName": { "type": "string", "required": true, "description": "显示名称" },
+        "email": { "type": "string", "required": true, "description": "邮箱" },
+        "roleKey": {
+          "type": "string",
+          "required": true,
+          "description": "角色标识",
+          "constraints": { "enum": ["tenantAdmin", "salesOps", "revOps", "financeOps", "csm", "approver", "supportAuditor"] }
+        },
+        "status": {
+          "type": "string",
+          "required": true,
+          "description": "状态",
+          "constraints": { "enum": ["active", "suspended", "deactivated"] }
+        }
+      },
+      "relations": {
+        "workspace": "Workspace"
+      },
+      "actions": {
+        "list": { "title": "成员列表", "viewTitle": "成员列表" },
+        "write": { "title": "创建/编辑成员", "viewTitle": "成员表单" },
+        "execute": false
+      }
+    },
+    {
+      "name": "Customer Account",
+      "plural": "Customer Accounts",
+      "resourceKey": "customerAccount",
+      "title": "客户账户",
+      "description": "收入运营中管理的客户主体。",
+      "fields": {
+        "name": { "type": "string", "required": true, "description": "客户名称" },
+        "externalId": { "type": "string", "description": "外部系统 ID" },
+        "domain": { "type": "string", "description": "客户域名" },
+        "industry": { "type": "string", "description": "所属行业" },
+        "tier": {
+          "type": "string",
+          "description": "客户层级",
+          "constraints": { "enum": ["enterprise", "mid_market", "smb"] }
+        },
+        "healthScore": { "type": "number", "description": "健康评分" },
+        "status": {
+          "type": "string",
+          "required": true,
+          "description": "状态",
+          "constraints": { "enum": ["prospect", "active", "churn_risk", "churned"] }
+        }
+      },
+      "relations": {
+        "workspace": "Workspace",
+        "contacts": { "target": "Customer Contact", "kind": "many", "description": "关联联系人" },
+        "contracts": { "target": "Commercial Contract", "kind": "many", "description": "关联合同" },
+        "orders": { "target": "Sales Order", "kind": "many", "description": "关联订单" },
+        "subscriptions": { "target": "Service Subscription", "kind": "many", "description": "关联订阅" },
+        "invoices": { "target": "Billing Invoice", "kind": "many", "description": "关联发票" },
+        "renewalOpportunities": { "target": "Renewal Opportunity", "kind": "many", "description": "关联续费机会" }
+      },
+      "actions": {
+        "list": { "title": "客户列表", "viewTitle": "客户账户列表" },
+        "write": { "title": "创建/编辑客户", "viewTitle": "客户账户表单" },
+        "execute": {
+          "verb": "Review",
+          "title": "审查客户健康状况",
+          "artifactKind": "report",
+          "artifactKey": "customerHealthSnapshot",
+          "artifactTitle": "客户健康快照",
+          "taskDescription": "全面审查客户健康状况、订阅、发票与续费风险。",
+          "viewTitle": "客户账户详情"
+        }
+      }
+    },
+    {
+      "name": "Customer Contact",
+      "plural": "Customer Contacts",
+      "resourceKey": "customerContact",
+      "title": "客户联系人",
+      "description": "客户账户下的联系人。",
+      "fields": {
+        "firstName": { "type": "string", "required": true, "description": "名" },
+        "lastName": { "type": "string", "required": true, "description": "姓" },
+        "email": { "type": "string", "required": true, "description": "邮箱" },
+        "phone": { "type": "string", "description": "电话" },
+        "jobTitle": { "type": "string", "description": "职位" },
+        "isPrimary": { "type": "boolean", "description": "是否主联系人" }
+      },
+      "relations": {
+        "customerAccount": "Customer Account"
+      },
+      "actions": {
+        "list": { "title": "联系人列表", "viewTitle": "客户联系人列表" },
+        "write": { "title": "创建/编辑联系人", "viewTitle": "客户联系人表单" },
+        "execute": false
+      }
+    },
+    {
+      "name": "Pricing Plan",
+      "plural": "Pricing Plans",
+      "resourceKey": "pricingPlan",
+      "title": "价格计划",
+      "description": "挂在产品目录项下的定价方案。",
+      "fields": {
+        "name": { "type": "string", "required": true, "description": "计划名称" },
+        "billingInterval": {
+          "type": "string",
+          "required": true,
+          "description": "计费周期",
+          "constraints": { "enum": ["monthly", "quarterly", "annual"] }
+        },
+        "basePriceCents": { "type": "integer", "required": true, "description": "基础价格（分）" },
+        "currency": {
+          "type": "string",
+          "required": true,
+          "description": "币种",
+          "constraints": { "maxLength": 3 }
+        },
+        "status": {
+          "type": "string",
+          "required": true,
+          "description": "状态",
+          "constraints": { "enum": ["active", "deprecated", "archived"] }
+        }
+      },
+      "relations": {
+        "productCatalogItem": "Product Catalog Item"
+      },
+      "actions": {
+        "list": { "title": "价格计划列表", "viewTitle": "价格计划列表" },
+        "write": { "title": "创建/编辑价格计划", "viewTitle": "价格计划表单" },
+        "execute": false
+      }
+    },
+    {
+      "name": "Product Catalog Item",
+      "plural": "Product Catalog Items",
+      "resourceKey": "productCatalogItem",
+      "title": "产品目录",
+      "description": "可售产品或服务。",
+      "fields": {
+        "title": { "type": "string", "required": true, "description": "产品名称" },
+        "sku": { "type": "string", "required": true, "description": "SKU 编码" },
+        "description": { "type": "string", "description": "产品描述" },
+        "category": { "type": "string", "description": "类目" },
+        "status": {
+          "type": "string",
+          "required": true,
+          "description": "状态",
+          "constraints": { "enum": ["active", "discontinued"] }
+        }
+      },
+      "relations": {
+        "pricingPlans": { "target": "Pricing Plan", "kind": "many", "description": "关联价格计划" }
+      },
+      "actions": {
+        "list": { "title": "产品列表", "viewTitle": "产品目录列表" },
+        "write": { "title": "创建/编辑产品", "viewTitle": "产品目录表单" },
+        "execute": false
+      }
+    },
+    {
+      "name": "Commercial Contract",
+      "plural": "Commercial Contracts",
+      "resourceKey": "commercialContract",
+      "title": "商业合同",
+      "description": "与客户签订的商业合同。",
+      "fields": {
+        "contractNumber": { "type": "string", "required": true, "description": "合同编号" },
+        "startDate": { "type": "date", "required": true, "description": "开始日期" },
+        "endDate": { "type": "date", "required": true, "description": "结束日期" },
+        "totalValueCents": { "type": "integer", "description": "合同总金额（分）" },
+        "currency": { "type": "string", "description": "币种", "constraints": { "maxLength": 3 } },
+        "status": {
+          "type": "string",
+          "required": true,
+          "description": "状态",
+          "constraints": { "enum": ["draft", "active", "expired", "terminated"] }
+        }
+      },
+      "relations": {
+        "customerAccount": "Customer Account",
+        "salesOrders": { "target": "Sales Order", "kind": "many", "description": "关联销售订单" }
+      },
+      "actions": {
+        "list": { "title": "合同列表", "viewTitle": "商业合同列表" },
+        "write": { "title": "创建/编辑合同", "viewTitle": "商业合同表单" },
+        "execute": false
+      }
+    },
+    {
+      "name": "Sales Order Line",
+      "plural": "Sales Order Lines",
+      "resourceKey": "salesOrderLine",
+      "title": "订单行项",
+      "description": "销售订单中的明细行。",
+      "fields": {
+        "productName": { "type": "string", "required": true, "description": "产品名称" },
+        "quantity": { "type": "integer", "required": true, "description": "数量" },
+        "unitPriceCents": { "type": "integer", "required": true, "description": "单价（分）" },
+        "discountPercent": {
+          "type": "number",
+          "description": "折扣百分比",
+          "constraints": { "minimum": 0, "maximum": 100 }
+        },
+        "lineTotalCents": { "type": "integer", "description": "行合计（分）" }
+      },
+      "relations": {
+        "salesOrder": "Sales Order",
+        "productCatalogItem": "Product Catalog Item",
+        "pricingPlan": "Pricing Plan"
+      },
+      "actions": {
+        "list": { "title": "订单行项列表", "viewTitle": "订单行项列表" },
+        "write": { "title": "创建/编辑订单行项", "viewTitle": "订单行项表单" },
+        "execute": false
+      }
+    },
+    {
+      "name": "Sales Order",
+      "plural": "Sales Orders",
+      "resourceKey": "salesOrder",
+      "title": "销售订单",
+      "description": "从合同或直接销售发起的订单。",
+      "fields": {
+        "orderNumber": { "type": "string", "required": true, "description": "订单编号" },
+        "orderDate": { "type": "date", "required": true, "description": "下单日期" },
+        "totalCents": { "type": "integer", "description": "订单总额（分）" },
+        "discountPercent": {
+          "type": "number",
+          "description": "整单折扣百分比",
+          "constraints": { "minimum": 0, "maximum": 100 }
+        },
+        "currency": { "type": "string", "description": "币种", "constraints": { "maxLength": 3 } },
+        "status": {
+          "type": "string",
+          "required": true,
+          "description": "状态",
+          "constraints": { "enum": ["draft", "submitted", "approved", "fulfilled", "cancelled"] }
+        }
+      },
+      "relations": {
+        "customerAccount": "Customer Account",
+        "commercialContract": "Commercial Contract",
+        "lines": { "target": "Sales Order Line", "kind": "many", "description": "订单行项" },
+        "subscriptions": { "target": "Service Subscription", "kind": "many", "description": "关联订阅" }
+      },
+      "actions": {
+        "list": { "title": "订单列表", "viewTitle": "销售订单列表" },
+        "write": { "verb": "Create", "title": "创建订单", "viewTitle": "创建销售订单" },
+        "execute": {
+          "verb": "Activate",
+          "title": "激活订单",
+          "taskDescription": "从已完成的销售订单激活对应的订阅服务。",
+          "artifactKind": "record",
+          "artifactKey": "salesOrderActivationReceipt",
+          "artifactTitle": "订单激活回执",
+          "viewTitle": "销售订单详情"
+        }
+      }
+    },
+    {
+      "name": "Service Subscription",
+      "plural": "Service Subscriptions",
+      "resourceKey": "serviceSubscription",
+      "title": "服务订阅",
+      "description": "客户的有效订阅，关联价格计划和来源订单。",
+      "fields": {
+        "subscriptionNumber": { "type": "string", "required": true, "description": "订阅编号" },
+        "startDate": { "type": "date", "required": true, "description": "开始日期" },
+        "endDate": { "type": "date", "description": "结束日期" },
+        "renewalDate": { "type": "date", "description": "续费日期" },
+        "mrrCents": { "type": "integer", "description": "月经常性收入 MRR（分）" },
+        "currency": { "type": "string", "description": "币种", "constraints": { "maxLength": 3 } },
+        "status": {
+          "type": "string",
+          "required": true,
+          "description": "状态",
+          "constraints": { "enum": ["active", "paused", "cancelled", "expired"] }
+        }
+      },
+      "relations": {
+        "customerAccount": "Customer Account",
+        "salesOrder": "Sales Order",
+        "pricingPlan": "Pricing Plan",
+        "invoices": { "target": "Billing Invoice", "kind": "many", "description": "关联发票" }
+      },
+      "actions": {
+        "list": { "title": "订阅列表", "viewTitle": "服务订阅列表" },
+        "write": { "verb": "Upsert", "title": "创建/编辑订阅", "viewTitle": "服务订阅表单" },
+        "execute": {
+          "verb": "Manage",
+          "title": "管理订阅生命周期",
+          "taskDescription": "管理订阅生命周期：暂停、恢复、取消。",
+          "artifactKind": "record",
+          "artifactKey": "subscriptionLifecycleRecord",
+          "artifactTitle": "订阅生命周期记录",
+          "viewTitle": "服务订阅详情"
+        }
+      }
+    },
+    {
+      "name": "Billing Invoice",
+      "plural": "Billing Invoices",
+      "resourceKey": "billingInvoice",
+      "title": "账单发票",
+      "description": "向客户开具的服务账单。",
+      "fields": {
+        "invoiceNumber": { "type": "string", "required": true, "description": "发票编号" },
+        "issuedDate": { "type": "date", "required": true, "description": "开票日期" },
+        "dueDate": { "type": "date", "required": true, "description": "到期日" },
+        "amountCents": { "type": "integer", "required": true, "description": "金额（分）" },
+        "currency": { "type": "string", "required": true, "description": "币种", "constraints": { "maxLength": 3 } },
+        "status": {
+          "type": "string",
+          "required": true,
+          "description": "状态",
+          "constraints": { "enum": ["draft", "sent", "paid", "overdue", "void", "written_off"] }
+        }
+      },
+      "relations": {
+        "customerAccount": "Customer Account",
+        "serviceSubscription": "Service Subscription",
+        "payments": { "target": "Payment Record", "kind": "many", "description": "关联回款记录" }
+      },
+      "actions": {
+        "list": { "title": "发票列表", "viewTitle": "账单发票列表" },
+        "write": { "verb": "Issue", "title": "开具发票", "viewTitle": "开具账单发票" },
+        "execute": {
+          "verb": "Collect",
+          "title": "催收发票",
+          "taskDescription": "对逾期或未付发票进行催收。",
+          "artifactKind": "record",
+          "artifactKey": "invoiceCollectionReceipt",
+          "artifactTitle": "发票催收回执",
+          "viewTitle": "账单发票详情"
+        }
+      }
+    },
+    {
+      "name": "Payment Record",
+      "plural": "Payment Records",
+      "resourceKey": "paymentRecord",
+      "title": "回款记录",
+      "description": "针对发票的回款记录。",
+      "fields": {
+        "paymentMethod": {
+          "type": "string",
+          "description": "支付方式",
+          "constraints": { "enum": ["credit_card", "wire", "ach", "check", "other"] }
+        },
+        "amountCents": { "type": "integer", "required": true, "description": "金额（分）" },
+        "currency": { "type": "string", "required": true, "description": "币种", "constraints": { "maxLength": 3 } },
+        "receivedAt": { "type": "datetime", "required": true, "description": "到账时间" },
+        "externalReference": { "type": "string", "description": "外部参考号" },
+        "status": {
+          "type": "string",
+          "required": true,
+          "description": "状态",
+          "constraints": { "enum": ["confirmed", "pending", "failed", "reversed"] }
+        }
+      },
+      "relations": {
+        "billingInvoice": "Billing Invoice"
+      },
+      "actions": {
+        "list": { "title": "回款列表", "viewTitle": "回款记录列表" },
+        "write": { "verb": "Record", "title": "登记回款", "viewTitle": "登记回款表单" },
+        "execute": false
+      }
+    },
+    {
+      "name": "Refund Request",
+      "plural": "Refund Requests",
+      "resourceKey": "refundRequest",
+      "title": "退款申请",
+      "description": "关联发票或回款的退款申请。",
+      "fields": {
+        "reason": { "type": "string", "required": true, "description": "退款原因" },
+        "amountCents": { "type": "integer", "required": true, "description": "退款金额（分）" },
+        "currency": { "type": "string", "required": true, "description": "币种", "constraints": { "maxLength": 3 } },
+        "status": {
+          "type": "string",
+          "required": true,
+          "description": "状态",
+          "constraints": { "enum": ["requested", "approved", "rejected", "executed"] }
+        }
+      },
+      "relations": {
+        "customerAccount": "Customer Account",
+        "billingInvoice": "Billing Invoice",
+        "paymentRecord": "Payment Record"
+      },
+      "actions": {
+        "list": { "title": "退款列表", "viewTitle": "退款申请列表" },
+        "write": { "verb": "Request", "title": "发起退款", "viewTitle": "发起退款申请" },
+        "execute": {
+          "verb": "Process",
+          "title": "处理退款",
+          "taskDescription": "处理退款申请：校验、审批、执行退款。",
+          "artifactKind": "record",
+          "artifactKey": "refundExecutionReceipt",
+          "artifactTitle": "退款执行回执",
+          "viewTitle": "退款申请详情"
+        }
+      }
+    },
+    {
+      "name": "Dispute Case",
+      "plural": "Dispute Cases",
+      "resourceKey": "disputeCase",
+      "title": "争议案例",
+      "description": "客户发起或代客户发起的账单/支付争议。",
+      "fields": {
+        "title": { "type": "string", "required": true, "description": "争议标题" },
+        "description": { "type": "string", "description": "争议描述" },
+        "disputedAmountCents": { "type": "integer", "description": "争议金额（分）" },
+        "severity": {
+          "type": "string",
+          "required": true,
+          "description": "严重程度",
+          "constraints": { "enum": ["low", "medium", "high", "critical"] }
+        },
+        "status": {
+          "type": "string",
+          "required": true,
+          "description": "状态",
+          "constraints": { "enum": ["open", "investigating", "resolved", "escalated"] }
+        }
+      },
+      "relations": {
+        "customerAccount": "Customer Account",
+        "billingInvoice": "Billing Invoice",
+        "salesOrder": "Sales Order"
+      },
+      "actions": {
+        "list": { "title": "争议列表", "viewTitle": "争议案例列表" },
+        "write": { "verb": "Open", "title": "发起争议", "viewTitle": "发起争议案例" },
+        "execute": {
+          "verb": "Resolve",
+          "title": "解决争议",
+          "taskDescription": "调查并解决账单争议。",
+          "artifactKind": "report",
+          "artifactKey": "disputeResolutionReport",
+          "artifactTitle": "争议解决报告",
+          "viewTitle": "争议案例详情"
+        }
+      }
+    },
+    {
+      "name": "Renewal Campaign",
+      "plural": "Renewal Campaigns",
+      "resourceKey": "renewalCampaign",
+      "title": "续费活动",
+      "description": "管理即将到期订阅续费的活动。",
+      "fields": {
+        "name": { "type": "string", "required": true, "description": "活动名称" },
+        "windowStart": { "type": "date", "required": true, "description": "窗口开始日期" },
+        "windowEnd": { "type": "date", "required": true, "description": "窗口结束日期" },
+        "status": {
+          "type": "string",
+          "required": true,
+          "description": "状态",
+          "constraints": { "enum": ["draft", "active", "closed"] }
+        }
+      },
+      "relations": {
+        "workspace": "Workspace",
+        "opportunities": { "target": "Renewal Opportunity", "kind": "many", "description": "关联续费机会" }
+      },
+      "actions": {
+        "list": { "title": "续费活动列表", "viewTitle": "续费活动列表" },
+        "write": { "verb": "Plan", "title": "规划续费活动", "viewTitle": "规划续费活动" },
+        "execute": {
+          "verb": "Launch",
+          "title": "启动续费活动",
+          "taskDescription": "从符合条件的订阅中批量生成续费机会。",
+          "artifactKind": "report",
+          "artifactKey": "renewalRiskDigest",
+          "artifactTitle": "续费风险摘要",
+          "viewTitle": "续费活动详情"
+        }
+      }
+    },
+    {
+      "name": "Renewal Opportunity",
+      "plural": "Renewal Opportunities",
+      "resourceKey": "renewalOpportunity",
+      "title": "续费机会",
+      "description": "续费活动中的单个续费机会。",
+      "fields": {
+        "currentMrrCents": { "type": "integer", "description": "当前 MRR（分）" },
+        "proposedMrrCents": { "type": "integer", "description": "建议 MRR（分）" },
+        "riskLevel": {
+          "type": "string",
+          "description": "风险等级",
+          "constraints": { "enum": ["low", "medium", "high"] }
+        },
+        "stage": {
+          "type": "string",
+          "required": true,
+          "description": "阶段",
+          "constraints": { "enum": ["identified", "engaged", "negotiating", "renewed", "lost"] }
+        }
+      },
+      "relations": {
+        "renewalCampaign": "Renewal Campaign",
+        "customerAccount": "Customer Account",
+        "serviceSubscription": "Service Subscription"
+      },
+      "actions": {
+        "list": { "title": "续费机会列表", "viewTitle": "续费机会列表" },
+        "write": { "verb": "Update", "title": "更新续费机会", "viewTitle": "更新续费机会" },
+        "execute": false
+      }
+    },
+    {
+      "name": "Reconciliation Case",
+      "plural": "Reconciliation Cases",
+      "resourceKey": "reconciliationCase",
+      "title": "对账案例",
+      "description": "跨订单、订阅、发票、回款的收入对账案例。",
+      "fields": {
+        "title": { "type": "string", "required": true, "description": "案例标题" },
+        "periodStart": { "type": "date", "required": true, "description": "对账期间开始" },
+        "periodEnd": { "type": "date", "required": true, "description": "对账期间结束" },
+        "discrepancyCents": { "type": "integer", "description": "差异金额（分）" },
+        "status": {
+          "type": "string",
+          "required": true,
+          "description": "状态",
+          "constraints": { "enum": ["open", "in_progress", "resolved", "escalated"] }
+        }
+      },
+      "relations": {
+        "customerAccount": "Customer Account",
+        "billingInvoice": "Billing Invoice",
+        "salesOrder": "Sales Order",
+        "serviceSubscription": "Service Subscription"
+      },
+      "actions": {
+        "list": { "title": "对账列表", "viewTitle": "对账案例列表" },
+        "write": { "verb": "Open", "title": "创建对账案例", "viewTitle": "创建对账案例" },
+        "execute": {
+          "verb": "Reconcile",
+          "title": "执行对账",
+          "taskDescription": "对指定期间的收入进行对账。",
+          "artifactKind": "report",
+          "artifactKey": "revenueReconciliationCaseReport",
+          "artifactTitle": "收入对账报告",
+          "viewTitle": "对账案例详情"
+        }
+      }
+    },
+    {
+      "name": "Exception Case",
+      "plural": "Exception Cases",
+      "resourceKey": "exceptionCase",
+      "title": "异常案例",
+      "description": "需要调查和处理的收入运营异常。",
+      "fields": {
+        "title": { "type": "string", "required": true, "description": "异常标题" },
+        "severity": {
+          "type": "string",
+          "required": true,
+          "description": "严重程度",
+          "constraints": { "enum": ["low", "medium", "high", "critical"] }
+        },
+        "category": {
+          "type": "string",
+          "description": "异常类别",
+          "constraints": { "enum": ["billing_mismatch", "payment_failure", "sync_error", "data_quality", "other"] }
+        },
+        "ownerId": { "type": "string", "description": "负责人 ID" },
+        "status": {
+          "type": "string",
+          "required": true,
+          "description": "状态",
+          "constraints": { "enum": ["open", "investigating", "awaiting_input", "resolved", "closed"] }
+        }
+      },
+      "relations": {
+        "customerAccount": "Customer Account",
+        "billingInvoice": "Billing Invoice",
+        "salesOrder": "Sales Order",
+        "serviceSubscription": "Service Subscription"
+      },
+      "actions": {
+        "list": { "title": "异常列表", "viewTitle": "异常案例列表" },
+        "write": { "title": "创建异常案例", "viewTitle": "创建异常案例" },
+        "execute": {
+          "verb": "Resolve",
+          "title": "处理异常",
+          "taskDescription": "调查并处理异常案例，支持人工输入和审批。",
+          "artifactKind": "report",
+          "artifactKey": "exceptionResolutionSummary",
+          "artifactTitle": "异常处理摘要",
+          "viewTitle": "异常案例详情"
+        }
+      }
+    },
+    {
+      "name": "Integration Connection",
+      "plural": "Integration Connections",
+      "resourceKey": "integrationConnection",
+      "title": "集成连接器",
+      "description": "与外部系统（Salesforce、Stripe、NetSuite、HubSpot）的连接配置。",
+      "fields": {
+        "name": { "type": "string", "required": true, "description": "连接名称" },
+        "provider": {
+          "type": "string",
+          "required": true,
+          "description": "供应商",
+          "constraints": { "enum": ["salesforce", "stripe", "netsuite", "hubspot"] }
+        },
+        "status": {
+          "type": "string",
+          "required": true,
+          "description": "状态",
+          "constraints": { "enum": ["active", "paused", "error", "disconnected"] }
+        },
+        "lastSyncedAt": { "type": "datetime", "description": "上次同步时间" }
+      },
+      "relations": {
+        "workspace": "Workspace",
+        "syncJobs": { "target": "Sync Job", "kind": "many", "description": "关联同步任务" }
+      },
+      "actions": {
+        "list": { "title": "连接器列表", "viewTitle": "集成连接器列表" },
+        "write": { "verb": "Configure", "title": "配置连接器", "viewTitle": "配置集成连接器" },
+        "execute": {
+          "verb": "Sync",
+          "title": "触发同步",
+          "taskDescription": "触发此集成连接器的数据同步。",
+          "artifactKind": "report",
+          "artifactKey": "syncHealthReport",
+          "artifactTitle": "同步健康报告",
+          "viewTitle": "集成连接器详情"
+        }
+      }
+    },
+    {
+      "name": "Sync Job",
+      "plural": "Sync Jobs",
+      "resourceKey": "syncJob",
+      "title": "同步任务",
+      "description": "集成连接器的单次同步执行记录。",
+      "fields": {
+        "direction": {
+          "type": "string",
+          "required": true,
+          "description": "方向",
+          "constraints": { "enum": ["inbound", "outbound"] }
+        },
+        "recordsProcessed": { "type": "integer", "description": "已处理记录数" },
+        "recordsFailed": { "type": "integer", "description": "失败记录数" },
+        "startedAt": { "type": "datetime", "description": "开始时间" },
+        "completedAt": { "type": "datetime", "description": "完成时间" },
+        "errorSummary": { "type": "string", "description": "错误摘要" },
+        "status": {
+          "type": "string",
+          "required": true,
+          "description": "状态",
+          "constraints": { "enum": ["running", "completed", "failed", "cancelled"] }
+        }
+      },
+      "relations": {
+        "integrationConnection": "Integration Connection"
+      },
+      "actions": {
+        "list": { "title": "同步任务列表", "viewTitle": "同步任务列表" },
+        "write": { "title": "创建同步任务", "viewTitle": "同步任务表单" },
+        "execute": false
+      }
+    },
+    {
+      "name": "Approval Request",
+      "plural": "Approval Requests",
+      "resourceKey": "approvalRequest",
+      "title": "审批请求",
+      "description": "由业务操作触发的审批请求（折扣、退款、发票、核销等）。",
+      "fields": {
+        "requestType": {
+          "type": "string",
+          "required": true,
+          "description": "审批类型",
+          "constraints": { "enum": ["discount_approval", "invoice_approval", "refund_approval", "writeoff_approval", "generic"] }
+        },
+        "subjectResourceKey": { "type": "string", "required": true, "description": "关联资源类型" },
+        "subjectResourceId": { "type": "string", "required": true, "description": "关联资源 ID" },
+        "requestedById": { "type": "string", "description": "申请人 ID" },
+        "assignedToId": { "type": "string", "description": "审批人 ID" },
+        "reason": { "type": "string", "description": "原因说明" },
+        "decision": {
+          "type": "string",
+          "description": "审批决定",
+          "constraints": { "enum": ["pending", "approved", "rejected"] }
+        },
+        "decisionNote": { "type": "string", "description": "审批意见" },
+        "status": {
+          "type": "string",
+          "required": true,
+          "description": "状态",
+          "constraints": { "enum": ["pending", "approved", "rejected", "expired"] }
+        }
+      },
+      "relations": {
+        "customerAccount": "Customer Account"
+      },
+      "actions": {
+        "list": { "title": "审批列表", "viewTitle": "审批请求列表" },
+        "write": { "verb": "Submit", "title": "提交审批", "viewTitle": "提交审批请求" },
+        "execute": {
+          "verb": "Decide",
+          "title": "处理审批",
+          "taskDescription": "处理审批请求：批准或拒绝，可附加意见。",
+          "artifactKind": "record",
+          "artifactKey": "approvalDecisionRecord",
+          "artifactTitle": "审批决定记录",
+          "viewTitle": "审批请求详情"
+        }
+      }
+    },
+    {
+      "name": "Audit Note",
+      "plural": "Audit Notes",
+      "resourceKey": "auditNote",
+      "title": "审计备注",
+      "description": "可挂载到任何核心业务资源上的审计备注。",
+      "fields": {
+        "content": { "type": "string", "required": true, "description": "备注内容" },
+        "authorId": { "type": "string", "description": "作者 ID" },
+        "attachedToResourceKey": { "type": "string", "required": true, "description": "挂载资源类型" },
+        "attachedToResourceId": { "type": "string", "required": true, "description": "挂载资源 ID" },
+        "createdAt": { "type": "datetime", "required": true, "description": "创建时间" }
+      },
+      "relations": {
+        "customerAccount": "Customer Account"
+      },
+      "actions": {
+        "list": { "title": "审计备注列表", "viewTitle": "审计备注列表" },
+        "write": { "verb": "Add", "title": "添加审计备注", "viewTitle": "添加审计备注" },
+        "execute": false
+      }
+    }
+  ]
+}

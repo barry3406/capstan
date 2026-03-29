@@ -165,6 +165,156 @@ dist/
 }
 
 // ---------------------------------------------------------------------------
+// AGENTS.md
+// ---------------------------------------------------------------------------
+
+export function agentsMd(
+  projectName: string,
+  template: "blank" | "tickets",
+): string {
+  const ticketsNote =
+    template === "tickets"
+      ? `
+## Tickets Template
+
+This project was scaffolded with the **tickets** template, which includes:
+- \`app/models/ticket.model.ts\` — Ticket data model (status, priority fields)
+- \`app/routes/tickets/index.api.ts\` — GET (list) + POST (create) for tickets
+- \`app/routes/tickets/[id].api.ts\` — GET ticket by ID
+
+Use these as reference when adding new resources.
+`
+      : "";
+
+  return `# AGENTS.md — AI Coding Guide
+
+This file helps AI coding agents (Claude Code, Cursor, etc.) work efficiently in this Capstan project.
+
+## Project: ${projectName}
+
+## Project Structure
+
+\`\`\`
+app/
+  routes/          — File-based routing
+    *.api.ts       — API handlers (GET, POST, PUT, DELETE exports)
+    *.page.tsx     — React pages with SSR
+    _layout.tsx    — Layout wrappers
+    _middleware.ts — Middleware
+    [param]/       — Dynamic route segments
+  models/          — Data model definitions
+  policies/        — Permission policies
+  migrations/      — Database migrations
+capstan.config.ts  — Framework configuration
+\`\`\`
+${ticketsNote}
+## Adding a New Feature
+
+### 1. Add a model
+\`\`\`bash
+capstan add model <name>
+\`\`\`
+Or manually create \`app/models/<name>.model.ts\`:
+\`\`\`typescript
+import { defineModel, field } from "@capstan/db";
+export const MyModel = defineModel("<name>", {
+  fields: {
+    id: field.id(),
+    title: field.string({ required: true }),
+    createdAt: field.datetime({ default: "now" }),
+  },
+});
+\`\`\`
+
+### 2. Add API routes
+\`\`\`bash
+capstan add api <name>
+\`\`\`
+Or manually create \`app/routes/<name>/index.api.ts\`:
+\`\`\`typescript
+import { defineAPI } from "capstan";
+import { z } from "zod";
+
+export const meta = { resource: "<name>", description: "..." };
+
+export const GET = defineAPI({
+  output: z.object({ items: z.array(z.object({ id: z.string() })) }),
+  description: "List items",
+  capability: "read",
+  resource: "<name>",
+  async handler({ input, ctx }) {
+    return { items: [] };
+  },
+});
+
+export const POST = defineAPI({
+  input: z.object({ title: z.string().min(1) }),
+  output: z.object({ id: z.string() }),
+  description: "Create item",
+  capability: "write",
+  resource: "<name>",
+  policy: "requireAuth",
+  async handler({ input, ctx }) {
+    return { id: crypto.randomUUID() };
+  },
+});
+\`\`\`
+
+### 3. Add a page (optional)
+\`\`\`bash
+capstan add page <name>
+\`\`\`
+Or create \`app/routes/<name>/index.page.tsx\` with a React component.
+
+### 4. Add a policy (if needed)
+\`\`\`bash
+capstan add policy <name>
+\`\`\`
+Or add to \`app/policies/index.ts\`:
+\`\`\`typescript
+export const myPolicy = definePolicy({
+  key: "myPolicy",
+  title: "My Policy",
+  effect: "deny",
+  async check({ ctx }) {
+    // your logic
+    return { effect: "allow" };
+  },
+});
+\`\`\`
+
+## Verification (TDD Loop)
+\`\`\`bash
+capstan verify --json    # Structured diagnostics for AI consumption
+\`\`\`
+The verify command checks: types, schemas, policies, routes, contracts.
+AI agents should run this after every change and fix any reported issues.
+
+## Key Commands
+\`\`\`bash
+capstan dev              # Start dev server
+capstan verify --json    # Verify everything, output JSON for AI
+capstan add model <n>    # Scaffold a model
+capstan add api <n>      # Scaffold API routes
+capstan add page <n>     # Scaffold a page
+capstan add policy <n>   # Scaffold a policy
+\`\`\`
+
+## Agent API Endpoints (auto-generated)
+- \`GET /.well-known/capstan.json\` — Agent manifest
+- \`GET /openapi.json\` — OpenAPI 3.1 spec
+- \`MCP\` — via \`capstan mcp\` (stdio transport)
+
+## Conventions
+- API files: \`*.api.ts\` export HTTP methods (GET, POST, PUT, DELETE)
+- Page files: \`*.page.tsx\` export default React component
+- All API handlers use \`defineAPI()\` with Zod schemas
+- Write endpoints should have a \`policy\` reference
+- Models go in \`app/models/\`, policies in \`app/policies/\`
+`;
+}
+
+// ---------------------------------------------------------------------------
 // Tickets template extras
 // ---------------------------------------------------------------------------
 

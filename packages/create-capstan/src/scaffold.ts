@@ -9,6 +9,7 @@ import {
   healthApi,
   policiesIndex,
   gitignore,
+  agentsMd,
   ticketModel,
   ticketsIndexApi,
   ticketByIdApi,
@@ -74,6 +75,7 @@ export async function scaffoldProject(config: {
     { path: "app/routes/api/health.api.ts", content: healthApi() },
     { path: "app/policies/index.ts", content: policiesIndex() },
     { path: ".gitignore", content: gitignore() },
+    { path: "AGENTS.md", content: agentsMd(projectName, template) },
   ];
 
   // Template-specific files

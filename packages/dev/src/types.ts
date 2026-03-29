@@ -9,6 +9,17 @@ export interface DevServerConfig {
   appName?: string;
   /** App description */
   appDescription?: string;
+  /** Auth configuration — when set, session cookie / API key auth is enabled */
+  auth?: {
+    session: {
+      secret: string;
+      maxAge?: string;
+    };
+    apiKeys?: {
+      prefix?: string;
+      headerName?: string;
+    };
+  };
 }
 
 export interface DevServerInstance {

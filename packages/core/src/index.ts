@@ -6,6 +6,15 @@ export { definePolicy, enforcePolicies } from "./policy.js";
 export { defineConfig, env } from "./config.js";
 export { createCapstanApp } from "./server.js";
 export { createContext } from "./context.js";
+export {
+  createApproval,
+  getApproval,
+  listApprovals,
+  resolveApproval,
+  clearApprovals,
+} from "./approval.js";
+
+export type { PendingApproval } from "./approval.js";
 
 export type { CapstanApp } from "./server.js";
 
@@ -22,3 +31,6 @@ export type {
   PolicyEffect,
   RouteMetadata,
 } from "./types.js";
+
+export { verifyCapstanApp, renderRuntimeVerifyText } from "./verify.js";
+export type { VerifyReport, VerifyDiagnostic, VerifyStep } from "./verify.js";

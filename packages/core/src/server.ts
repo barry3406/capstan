@@ -4,6 +4,12 @@ import { cors } from "hono/cors";
 import { toJSONSchema } from "zod";
 import { createContext } from "./context.js";
 import { enforcePolicies } from "./policy.js";
+import {
+  createApproval,
+  getApproval,
+  listApprovals,
+  resolveApproval,
+} from "./approval.js";
 import type {
   APIDefinition,
   CapstanConfig,
@@ -72,6 +78,15 @@ export function createCapstanApp(config: CapstanConfig): CapstanApp {
   const app = new Hono<CapstanEnv>();
   const routeRegistry: RouteMetadata[] = [];
 
+  /**
+   * Handler registry keyed by "METHOD /path" so that approved requests can
+   * re-execute the original handler without going through the HTTP stack.
+   */
+  const handlerRegistry = new Map<
+    string,
+    (input: unknown, ctx: CapstanContext) => Promise<unknown>
+  >();
+
   // ------------------------------------------------------------------
   // Global middleware
   // ------------------------------------------------------------------
@@ -120,6 +135,12 @@ export function createCapstanApp(config: CapstanConfig): CapstanApp {
       buildRouteMetadata(method, path, apiDef, inputSchema, outputSchema),
     );
 
+    // Store the handler so approved requests can re-execute it.
+    const routeKey = `${method} ${path}`;
+    handlerRegistry.set(routeKey, async (input: unknown, ctx: CapstanContext) => {
+      return apiDef.handler({ input, ctx });
+    });
+
     // --- mount on Hono --------------------------------------------------
     const honoHandler = async (c: HonoContext<CapstanEnv>) => {
       const ctx = createContext(c as unknown as HonoContext);
@@ -144,10 +165,21 @@ export function createCapstanApp(config: CapstanConfig): CapstanApp {
           );
         }
         if (policyResult.effect === "approve") {
+          const reason =
+            policyResult.reason ?? "This action requires approval";
+          const approval = createApproval({
+            method,
+            path,
+            input: rawInput,
+            policy: policies.map((p) => p.key).join(", "),
+            reason,
+          });
           return c.json(
             {
-              error: "Approval required",
-              reason: policyResult.reason ?? "This action requires approval",
+              status: "approval_required",
+              approvalId: approval.id,
+              reason,
+              pollUrl: `/capstan/approvals/${approval.id}`,
             },
             202,
           );
@@ -211,6 +243,128 @@ export function createCapstanApp(config: CapstanConfig): CapstanApp {
       honoHandler,
     );
   };
+
+  // ------------------------------------------------------------------
+  // Approval management endpoints
+  // ------------------------------------------------------------------
+
+  /** List all approvals, optionally filtered by ?status=pending|approved|denied */
+  app.get("/capstan/approvals", (c) => {
+    const statusParam = new URL(c.req.url).searchParams.get("status") as
+      | "pending"
+      | "approved"
+      | "denied"
+      | null;
+    const items = listApprovals(statusParam ?? undefined);
+    return c.json({ approvals: items });
+  });
+
+  /** Get a single approval by ID */
+  app.get("/capstan/approvals/:id", (c) => {
+    const id = c.req.param("id");
+    const approval = getApproval(id);
+    if (!approval) {
+      return c.json({ error: "Approval not found" }, 404);
+    }
+    return c.json(approval);
+  });
+
+  /** Approve a pending approval — re-executes the original handler */
+  app.post("/capstan/approvals/:id/approve", async (c) => {
+    const id = c.req.param("id");
+    const existing = getApproval(id);
+    if (!existing) {
+      return c.json({ error: "Approval not found" }, 404);
+    }
+    if (existing.status !== "pending") {
+      return c.json(
+        { error: "Approval already resolved", status: existing.status },
+        409,
+      );
+    }
+
+    // Parse optional body for resolvedBy
+    let resolvedBy: string | undefined;
+    try {
+      const body = await c.req.json() as Record<string, unknown>;
+      if (typeof body.resolvedBy === "string") {
+        resolvedBy = body.resolvedBy;
+      }
+    } catch {
+      // No body or invalid JSON — that's fine.
+    }
+
+    const approval = resolveApproval(id, "approved", resolvedBy);
+    if (!approval) {
+      return c.json({ error: "Approval not found" }, 404);
+    }
+
+    // Re-execute the original handler with the stored input.
+    const routeKey = `${approval.method} ${approval.path}`;
+    const handler = handlerRegistry.get(routeKey);
+    if (!handler) {
+      return c.json(
+        { error: "Handler not found for route", route: routeKey },
+        500,
+      );
+    }
+
+    try {
+      // Build a synthetic context for the approver.
+      const ctx = createContext(c as unknown as HonoContext);
+      const result = await handler(approval.input, ctx);
+      approval.result = result;
+      return c.json({
+        status: "approved",
+        approvalId: approval.id,
+        result,
+      });
+    } catch (err: unknown) {
+      const message =
+        err instanceof Error ? err.message : "Handler execution failed";
+      return c.json({ error: message, approvalId: approval.id }, 500);
+    }
+  });
+
+  /** Deny a pending approval */
+  app.post("/capstan/approvals/:id/deny", async (c) => {
+    const id = c.req.param("id");
+    const existing = getApproval(id);
+    if (!existing) {
+      return c.json({ error: "Approval not found" }, 404);
+    }
+    if (existing.status !== "pending") {
+      return c.json(
+        { error: "Approval already resolved", status: existing.status },
+        409,
+      );
+    }
+
+    let resolvedBy: string | undefined;
+    let reason: string | undefined;
+    try {
+      const body = await c.req.json() as Record<string, unknown>;
+      if (typeof body.resolvedBy === "string") {
+        resolvedBy = body.resolvedBy;
+      }
+      if (typeof body.reason === "string") {
+        reason = body.reason;
+      }
+    } catch {
+      // No body or invalid JSON — that's fine.
+    }
+
+    const approval = resolveApproval(id, "denied", resolvedBy);
+    if (!approval) {
+      return c.json({ error: "Approval not found" }, 404);
+    }
+
+    return c.json({
+      status: "denied",
+      approvalId: approval.id,
+      ...(reason !== undefined ? { reason } : {}),
+    });
+  });
 
   // ------------------------------------------------------------------
   // Agent manifest endpoint

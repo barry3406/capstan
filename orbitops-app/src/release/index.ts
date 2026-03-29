@@ -1,0 +1,446 @@
+import type {
+  ReleaseContract,
+  ReleaseEnvironmentSnapshot,
+  ReleaseMigrationPlan
+} from "../types.js";
+
+export const releaseContract = {
+  "version": 1,
+  "domain": {
+    "key": "orbitops",
+    "title": "OrbitOps — 订单到收入运营平台",
+    "description": "面向 B2B SaaS 公司的全链路收入运营平台：统一管理客户、合同、订单、订阅、账单、回款、续费、对账、异常处理和外部系统对接，同时支持人工运营和 Agent 自动化操作。"
+  },
+  "application": {
+    "key": "orbitops.app",
+    "title": "OrbitOps — 订单到收入运营平台 Release Contract",
+    "generatedBy": "capstan"
+  },
+  "environments": [
+    {
+      "key": "preview",
+      "title": "Preview Environment",
+      "strategy": "ephemeral",
+      "baseUrl": "http://localhost:3000",
+      "variables": [
+        {
+          "key": "NODE_ENV",
+          "title": "Node Environment",
+          "description": "Controls runtime mode for preview builds.",
+          "required": true,
+          "defaultValue": "production"
+        },
+        {
+          "key": "PORT",
+          "title": "Preview Port",
+          "description": "Port used to expose preview infrastructure.",
+          "required": false,
+          "defaultValue": "3000"
+        }
+      ],
+      "secrets": []
+    },
+    {
+      "key": "release",
+      "title": "Release Environment",
+      "strategy": "managed",
+      "variables": [
+        {
+          "key": "NODE_ENV",
+          "title": "Node Environment",
+          "description": "Controls runtime mode for release builds.",
+          "required": true,
+          "defaultValue": "production"
+        }
+      ],
+      "secrets": []
+    }
+  ],
+  "inputs": {
+    "environmentSnapshot": {
+      "path": "capstan.release-env.json",
+      "title": "Release Environment Snapshot",
+      "description": "Machine-readable snapshot of the variables and secret handles expected for preview and release."
+    },
+    "migrationPlan": {
+      "path": "capstan.migrations.json",
+      "title": "Release Migration Plan",
+      "description": "Machine-readable migration status that must remain safe before preview or release can continue."
+    }
+  },
+  "artifacts": [
+    {
+      "key": "compiledDist",
+      "title": "Compiled Dist Output",
+      "kind": "directory",
+      "path": "dist",
+      "required": true
+    },
+    {
+      "key": "humanSurfaceDocument",
+      "title": "Human Surface HTML",
+      "kind": "html",
+      "path": "human-surface.html",
+      "required": true
+    },
+    {
+      "key": "agentSurfaceManifest",
+      "title": "Agent Surface Manifest",
+      "kind": "json",
+      "path": "agent-surface.json",
+      "required": true
+    }
+  ],
+  "healthChecks": [
+    {
+      "key": "verifyPasses",
+      "title": "Capstan Verify Passes",
+      "kind": "verify_pass",
+      "description": "The generated application must pass Capstan verify before promotion.",
+      "required": true
+    },
+    {
+      "key": "distExists",
+      "title": "Compiled Dist Exists",
+      "kind": "path_exists",
+      "target": "dist",
+      "description": "The compiled dist directory must exist before preview or release.",
+      "required": true
+    },
+    {
+      "key": "agentManifestParses",
+      "title": "Agent Manifest Parses",
+      "kind": "json_parse",
+      "target": "agent-surface.json",
+      "description": "The generated agent manifest must remain machine-readable.",
+      "required": true
+    },
+    {
+      "key": "humanSurfaceExists",
+      "title": "Human Surface Exists",
+      "kind": "path_exists",
+      "target": "human-surface.html",
+      "description": "The generated human surface document must be present for operator preview.",
+      "required": true
+    }
+  ],
+  "preview": {
+    "steps": [
+      {
+        "key": "verify",
+        "title": "Run Capstan Verify",
+        "command": "capstan verify . --json"
+      },
+      {
+        "key": "build",
+        "title": "Build Generated App",
+        "command": "tsc -p tsconfig.json"
+      },
+      {
+        "key": "inspectPreviewArtifacts",
+        "title": "Inspect Preview Artifacts",
+        "description": "Review human-surface.html and agent-surface.json before preview publication."
+      }
+    ]
+  },
+  "release": {
+    "steps": [
+      {
+        "key": "verify",
+        "title": "Run Capstan Verify",
+        "command": "capstan verify . --json"
+      },
+      {
+        "key": "build",
+        "title": "Build Generated App",
+        "command": "tsc -p tsconfig.json"
+      },
+      {
+        "key": "publishArtifacts",
+        "title": "Publish Compiled And Surface Artifacts",
+        "description": "Promote dist/, human-surface.html, and agent-surface.json to the target runtime."
+      },
+      {
+        "key": "confirmHealth",
+        "title": "Confirm Release Health",
+        "description": "Run the configured health checks before final promotion."
+      }
+    ]
+  },
+  "rollback": {
+    "strategy": "restore_previous_artifacts",
+    "steps": [
+      "Restore the previously known-good dist/ artifact bundle.",
+      "Restore the previous human-surface.html and agent-surface.json projections.",
+      "Rerun Capstan verify before reopening traffic."
+    ]
+  },
+  "trace": {
+    "captures": [
+      "verify_report",
+      "release_contract",
+      "artifact_inventory",
+      "health_results"
+    ]
+  }
+} satisfies ReleaseContract;
+export const releaseEnvironmentSnapshot =
+  {
+  "version": 1,
+  "environments": [
+    {
+      "key": "preview",
+      "variables": {
+        "NODE_ENV": "production",
+        "PORT": "3000"
+      },
+      "secrets": []
+    },
+    {
+      "key": "release",
+      "variables": {
+        "NODE_ENV": "production"
+      },
+      "secrets": []
+    }
+  ]
+} satisfies ReleaseEnvironmentSnapshot;
+export const releaseMigrationPlan =
+  {
+  "version": 1,
+  "generatedBy": "capstan",
+  "status": "safe",
+  "steps": [
+    {
+      "key": "graphProjection",
+      "title": "Graph Projection Schema",
+      "status": "applied",
+      "description": "The generated graph projection is in sync with the current scaffolded schema."
+    }
+  ]
+} satisfies ReleaseMigrationPlan;
+
+export function renderReleaseContract(): string {
+  return `{
+  "version": 1,
+  "domain": {
+    "key": "orbitops",
+    "title": "OrbitOps — 订单到收入运营平台",
+    "description": "面向 B2B SaaS 公司的全链路收入运营平台：统一管理客户、合同、订单、订阅、账单、回款、续费、对账、异常处理和外部系统对接，同时支持人工运营和 Agent 自动化操作。"
+  },
+  "application": {
+    "key": "orbitops.app",
+    "title": "OrbitOps — 订单到收入运营平台 Release Contract",
+    "generatedBy": "capstan"
+  },
+  "environments": [
+    {
+      "key": "preview",
+      "title": "Preview Environment",
+      "strategy": "ephemeral",
+      "baseUrl": "http://localhost:3000",
+      "variables": [
+        {
+          "key": "NODE_ENV",
+          "title": "Node Environment",
+          "description": "Controls runtime mode for preview builds.",
+          "required": true,
+          "defaultValue": "production"
+        },
+        {
+          "key": "PORT",
+          "title": "Preview Port",
+          "description": "Port used to expose preview infrastructure.",
+          "required": false,
+          "defaultValue": "3000"
+        }
+      ],
+      "secrets": []
+    },
+    {
+      "key": "release",
+      "title": "Release Environment",
+      "strategy": "managed",
+      "variables": [
+        {
+          "key": "NODE_ENV",
+          "title": "Node Environment",
+          "description": "Controls runtime mode for release builds.",
+          "required": true,
+          "defaultValue": "production"
+        }
+      ],
+      "secrets": []
+    }
+  ],
+  "inputs": {
+    "environmentSnapshot": {
+      "path": "capstan.release-env.json",
+      "title": "Release Environment Snapshot",
+      "description": "Machine-readable snapshot of the variables and secret handles expected for preview and release."
+    },
+    "migrationPlan": {
+      "path": "capstan.migrations.json",
+      "title": "Release Migration Plan",
+      "description": "Machine-readable migration status that must remain safe before preview or release can continue."
+    }
+  },
+  "artifacts": [
+    {
+      "key": "compiledDist",
+      "title": "Compiled Dist Output",
+      "kind": "directory",
+      "path": "dist",
+      "required": true
+    },
+    {
+      "key": "humanSurfaceDocument",
+      "title": "Human Surface HTML",
+      "kind": "html",
+      "path": "human-surface.html",
+      "required": true
+    },
+    {
+      "key": "agentSurfaceManifest",
+      "title": "Agent Surface Manifest",
+      "kind": "json",
+      "path": "agent-surface.json",
+      "required": true
+    }
+  ],
+  "healthChecks": [
+    {
+      "key": "verifyPasses",
+      "title": "Capstan Verify Passes",
+      "kind": "verify_pass",
+      "description": "The generated application must pass Capstan verify before promotion.",
+      "required": true
+    },
+    {
+      "key": "distExists",
+      "title": "Compiled Dist Exists",
+      "kind": "path_exists",
+      "target": "dist",
+      "description": "The compiled dist directory must exist before preview or release.",
+      "required": true
+    },
+    {
+      "key": "agentManifestParses",
+      "title": "Agent Manifest Parses",
+      "kind": "json_parse",
+      "target": "agent-surface.json",
+      "description": "The generated agent manifest must remain machine-readable.",
+      "required": true
+    },
+    {
+      "key": "humanSurfaceExists",
+      "title": "Human Surface Exists",
+      "kind": "path_exists",
+      "target": "human-surface.html",
+      "description": "The generated human surface document must be present for operator preview.",
+      "required": true
+    }
+  ],
+  "preview": {
+    "steps": [
+      {
+        "key": "verify",
+        "title": "Run Capstan Verify",
+        "command": "capstan verify . --json"
+      },
+      {
+        "key": "build",
+        "title": "Build Generated App",
+        "command": "tsc -p tsconfig.json"
+      },
+      {
+        "key": "inspectPreviewArtifacts",
+        "title": "Inspect Preview Artifacts",
+        "description": "Review human-surface.html and agent-surface.json before preview publication."
+      }
+    ]
+  },
+  "release": {
+    "steps": [
+      {
+        "key": "verify",
+        "title": "Run Capstan Verify",
+        "command": "capstan verify . --json"
+      },
+      {
+        "key": "build",
+        "title": "Build Generated App",
+        "command": "tsc -p tsconfig.json"
+      },
+      {
+        "key": "publishArtifacts",
+        "title": "Publish Compiled And Surface Artifacts",
+        "description": "Promote dist/, human-surface.html, and agent-surface.json to the target runtime."
+      },
+      {
+        "key": "confirmHealth",
+        "title": "Confirm Release Health",
+        "description": "Run the configured health checks before final promotion."
+      }
+    ]
+  },
+  "rollback": {
+    "strategy": "restore_previous_artifacts",
+    "steps": [
+      "Restore the previously known-good dist/ artifact bundle.",
+      "Restore the previous human-surface.html and agent-surface.json projections.",
+      "Rerun Capstan verify before reopening traffic."
+    ]
+  },
+  "trace": {
+    "captures": [
+      "verify_report",
+      "release_contract",
+      "artifact_inventory",
+      "health_results"
+    ]
+  }
+}
+`;
+}
+
+export function renderReleaseEnvironmentSnapshot(): string {
+  return `{
+  "version": 1,
+  "environments": [
+    {
+      "key": "preview",
+      "variables": {
+        "NODE_ENV": "production",
+        "PORT": "3000"
+      },
+      "secrets": []
+    },
+    {
+      "key": "release",
+      "variables": {
+        "NODE_ENV": "production"
+      },
+      "secrets": []
+    }
+  ]
+}
+`;
+}
+
+export function renderReleaseMigrationPlan(): string {
+  return `{
+  "version": 1,
+  "generatedBy": "capstan",
+  "status": "safe",
+  "steps": [
+    {
+      "key": "graphProjection",
+      "title": "Graph Projection Schema",
+      "status": "applied",
+      "description": "The generated graph projection is in sync with the current scaffolded schema."
+    }
+  ]
+}
+`;
+}

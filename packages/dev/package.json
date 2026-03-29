@@ -19,6 +19,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@capstan/agent": "*",
+    "@capstan/auth": "*",
     "@capstan/core": "*",
     "@capstan/router": "*",
     "hono": "^4.0.0"
