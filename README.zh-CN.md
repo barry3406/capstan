@@ -12,7 +12,7 @@
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Tests](https://img.shields.io/badge/tests-177%20passing-brightgreen?logo=bun&logoColor=white)](https://bun.sh)
+[![Tests](https://img.shields.io/badge/tests-569%20passing-brightgreen?logo=bun&logoColor=white)](https://bun.sh)
 [![Version](https://img.shields.io/badge/version-1.0.0--beta.5-orange)](https://github.com/barry3406/capstan)
 [![ESM](https://img.shields.io/badge/ESM-only-blue)](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Modules)
 
@@ -251,7 +251,7 @@ Capstan 内置的**验证器**专为 AI 编程助手设计。当 Claude Code、C
                                         └─────────────────────┘
 ```
 
-### 七步级联验证
+### 八步级联验证
 
 ```bash
 $ npx capstan verify --json
@@ -354,7 +354,7 @@ Capstan 内置多层安全防护：
 - **`defineModel()` 声明式数据模型** — Drizzle ORM + 自动 CRUD 路由生成
 - **`definePolicy()` 权限策略引擎** — allow / deny / approve / redact 四种效果
 - **文件路由** — `.page.tsx`、`.api.ts`、`_layout.tsx`、`_middleware.ts`
-- **AI TDD 自纠错循环** — `capstan verify --json` 七步级联验证 + 修复清单
+- **AI TDD 自纠错循环** — `capstan verify --json` 八步级联验证 + 修复清单
 
 ### 数据与 AI
 
@@ -500,7 +500,7 @@ git clone https://github.com/barry3406/capstan.git
 cd capstan
 npm install
 npm run build        # 构建 9 个运行时包
-npm run test:new     # Bun 测试（177 项测试，约 500ms）
+npm run test:new     # Bun 测试（569 项测试，约 6s）
 ```
 
 ### 开发规范

@@ -12,7 +12,7 @@ One `defineAPI()` call. Four protocol surfaces. Humans and AI agents, served sim
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Tests](https://img.shields.io/badge/tests-177%20passing-brightgreen?logo=bun&logoColor=white)](https://bun.sh)
+[![Tests](https://img.shields.io/badge/tests-569%20passing-brightgreen?logo=bun&logoColor=white)](https://bun.sh)
 [![Version](https://img.shields.io/badge/version-1.0.0--beta.5-orange)](https://github.com/barry3406/capstan)
 [![ESM](https://img.shields.io/badge/ESM-only-blue)](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Modules)
 
@@ -506,7 +506,7 @@ git clone https://github.com/barry3406/capstan.git
 cd capstan
 npm install
 npm run build        # Build 9 runtime packages
-npm run test:new     # Bun tests (177 tests, ~500ms)
+npm run test:new     # Bun tests (569 tests, ~6s)
 ```
 
 ### Conventions

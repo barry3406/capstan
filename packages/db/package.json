@@ -17,7 +17,7 @@
   },
   "peerDependencies": {
     "drizzle-orm": "^0.44.0",
-    "better-sqlite3": "^11.0.0",
+    "better-sqlite3": ">=9.0.0",
     "pg": "^8.0.0",
     "mysql2": "^3.0.0"
   },

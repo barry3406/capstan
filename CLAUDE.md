@@ -12,7 +12,7 @@ An AI Agent Native full-stack framework. Like Next.js but designed for both huma
 # Build all packages (18 packages, dependency order)
 npm run build
 
-# Run new tests (Bun — fast, 128 tests in ~500ms)
+# Run new tests (Bun — 569 tests in ~6s)
 npm run test:new
 
 # Run legacy tests (vitest — for old compiler packages)
@@ -88,7 +88,7 @@ Auto-generated endpoints:
 
 ## Verifier (AI TDD Self-Loop)
 
-`capstan verify --json` runs a 7-step cascade:
+`capstan verify --json` runs an 8-step cascade:
 1. **structure** — required files exist
 2. **config** — capstan.config.ts loads
 3. **routes** — API files export handlers, write endpoints have policies
@@ -96,6 +96,7 @@ Auto-generated endpoints:
 5. **typecheck** — tsc --noEmit
 6. **contracts** — models ↔ routes consistency, policy references valid
 7. **manifest** — agent manifest matches live routes
+8. **cross-protocol** — HTTP ↔ MCP ↔ A2A ↔ OpenAPI schema consistency
 
 Output includes `repairChecklist` with `fixCategory` and `autoFixable` for AI consumption.
 
