@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import type { KeyValueStore } from "./store.js";
+import { MemoryStore } from "./store.js";
 
 // ---------------------------------------------------------------------------
 // DPoP Proof Validation (RFC 9449)
@@ -18,29 +20,25 @@ const MAX_PROOF_AGE_SECONDS = 300; // 5 minutes
 /** Minimum age (in seconds) — reject proofs from the far future. */
 const MAX_CLOCK_SKEW_SECONDS = 60;
 
+/** TTL for JTI replay cache entries (proof age + clock skew). */
+const JTI_TTL_MS = (MAX_PROOF_AGE_SECONDS + MAX_CLOCK_SKEW_SECONDS) * 1000;
+
 /**
- * Track recently seen `jti` values to prevent replay.
+ * Pluggable store for tracking recently seen `jti` values to prevent replay.
  *
- * Map of jti -> expiry timestamp (ms).  Entries are lazily pruned.
+ * Each entry stores `true` as a sentinel value with a TTL equal to the proof
+ * window.  The `MemoryStore` default lazily expires entries on access; custom
+ * implementations (e.g. Redis) can use native TTL support.
  */
-const seenJtis = new Map<string, number>();
+let dpopReplayStore: KeyValueStore<true> = new MemoryStore();
 
-/** Periodic cleanup for the JTI replay cache. */
-let jtiCleanupTimer: ReturnType<typeof setInterval> | undefined;
-
-function ensureJtiCleanup(): void {
-  if (jtiCleanupTimer !== undefined) return;
-  jtiCleanupTimer = setInterval(() => {
-    const now = Date.now();
-    for (const [jti, expiresAt] of seenJtis) {
-      if (expiresAt <= now) {
-        seenJtis.delete(jti);
-      }
-    }
-  }, 60_000);
-  if (typeof jtiCleanupTimer === "object" && "unref" in jtiCleanupTimer) {
-    jtiCleanupTimer.unref();
-  }
+/**
+ * Replace the default in-memory DPoP replay store with a custom implementation.
+ *
+ * Call this at application startup before any DPoP proofs are validated.
+ */
+export function setDpopReplayStore(store: KeyValueStore<true>): void {
+  dpopReplayStore = store;
 }
 
 // ---------------------------------------------------------------------------
@@ -170,8 +168,6 @@ export async function validateDpopProof(
   url: string,
   accessToken?: string,
 ): Promise<DpopValidationResult | null> {
-  ensureJtiCleanup();
-
   // ── 1. Split compact serialization ──────────────────────────────
   const parts = proof.split(".");
   if (parts.length !== 3) return null;
@@ -305,13 +301,10 @@ export async function validateDpopProof(
 
   // jti — unique identifier, prevent replay
   if (typeof payload.jti !== "string" || payload.jti.length === 0) return null;
-  if (seenJtis.has(payload.jti)) return null;
+  if (await dpopReplayStore.has(payload.jti)) return null;
 
-  // Record the jti with an expiry matching the proof window.
-  seenJtis.set(
-    payload.jti,
-    Date.now() + (MAX_PROOF_AGE_SECONDS + MAX_CLOCK_SKEW_SECONDS) * 1000,
-  );
+  // Record the jti with a TTL matching the proof window.
+  await dpopReplayStore.set(payload.jti, true, JTI_TTL_MS);
 
   // ── 5. Access token hash binding (ath) ──────────────────────────
   if (accessToken !== undefined) {
@@ -337,6 +330,6 @@ export async function validateDpopProof(
  *
  * Useful for tests so state does not leak between test cases.
  */
-export function clearDpopReplayCache(): void {
-  seenJtis.clear();
+export async function clearDpopReplayCache(): Promise<void> {
+  await dpopReplayStore.clear();
 }

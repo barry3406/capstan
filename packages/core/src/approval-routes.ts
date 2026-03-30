@@ -66,7 +66,7 @@ function requireApprovalAuth(c: HonoContext): Response | null {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function mountApprovalRoutes(app: Hono<any>, handlerRegistry: HandlerRegistry): void {
   /** List all approvals, optionally filtered by ?status=pending|approved|denied */
-  app.get("/capstan/approvals", (c: HonoContext) => {
+  app.get("/capstan/approvals", async (c: HonoContext) => {
     const authErr = requireApprovalAuth(c);
     if (authErr) return authErr;
     const statusParam = new URL(c.req.url).searchParams.get("status") as
@@ -74,16 +74,16 @@ export function mountApprovalRoutes(app: Hono<any>, handlerRegistry: HandlerRegi
       | "approved"
       | "denied"
       | null;
-    const items = listApprovals(statusParam ?? undefined);
+    const items = await listApprovals(statusParam ?? undefined);
     return c.json({ approvals: items });
   });
 
   /** Get a single approval by ID */
-  app.get("/capstan/approvals/:id", (c: HonoContext) => {
+  app.get("/capstan/approvals/:id", async (c: HonoContext) => {
     const authErr = requireApprovalAuth(c);
     if (authErr) return authErr;
     const id = c.req.param("id")!;
-    const approval = getApproval(id);
+    const approval = await getApproval(id);
     if (!approval) {
       return c.json({ error: "Approval not found" }, 404);
     }
@@ -95,7 +95,7 @@ export function mountApprovalRoutes(app: Hono<any>, handlerRegistry: HandlerRegi
     const authErr = requireApprovalAuth(c);
     if (authErr) return authErr;
     const id = c.req.param("id")!;
-    const existing = getApproval(id);
+    const existing = await getApproval(id);
     if (!existing) {
       return c.json({ error: "Approval not found" }, 404);
     }
@@ -117,7 +117,7 @@ export function mountApprovalRoutes(app: Hono<any>, handlerRegistry: HandlerRegi
       // No body or invalid JSON -- that's fine.
     }
 
-    const approval = resolveApproval(id, "approved", resolvedBy);
+    const approval = await resolveApproval(id, "approved", resolvedBy);
     if (!approval) {
       return c.json({ error: "Approval not found" }, 404);
     }
@@ -153,7 +153,7 @@ export function mountApprovalRoutes(app: Hono<any>, handlerRegistry: HandlerRegi
     const authErr = requireApprovalAuth(c);
     if (authErr) return authErr;
     const id = c.req.param("id")!;
-    const existing = getApproval(id);
+    const existing = await getApproval(id);
     if (!existing) {
       return c.json({ error: "Approval not found" }, 404);
     }
@@ -178,7 +178,7 @@ export function mountApprovalRoutes(app: Hono<any>, handlerRegistry: HandlerRegi
       // No body or invalid JSON -- that's fine.
     }
 
-    const approval = resolveApproval(id, "denied", resolvedBy);
+    const approval = await resolveApproval(id, "denied", resolvedBy);
     if (!approval) {
       return c.json({ error: "Approval not found" }, 404);
     }

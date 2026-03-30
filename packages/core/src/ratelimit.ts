@@ -1,3 +1,5 @@
+import type { KeyValueStore } from "./store.js";
+import { MemoryStore } from "./store.js";
 import type { CapstanContext, MiddlewareDefinition } from "./types.js";
 
 // ---------------------------------------------------------------------------
@@ -27,35 +29,17 @@ interface SlidingWindowBucket {
 }
 
 /**
- * In-memory sliding window store.
- *
- * Keys are rate-limit identifiers (e.g. IP address, userId).  Each key maps
- * to an array of request timestamps within the current window.  Expired
- * entries are lazily pruned on every access.
+ * Pluggable store for sliding window buckets.  Defaults to in-memory.
  */
-const store = new Map<string, SlidingWindowBucket>();
+let rateLimitStore: KeyValueStore<SlidingWindowBucket> = new MemoryStore();
 
-/** Periodic cleanup interval handle (lazy-started). */
-let cleanupTimer: ReturnType<typeof setInterval> | undefined;
-
-const CLEANUP_INTERVAL_MS = 60_000; // 1 minute
-
-function ensureCleanupTimer(windowMs: number): void {
-  if (cleanupTimer !== undefined) return;
-  cleanupTimer = setInterval(() => {
-    const now = Date.now();
-    for (const [key, bucket] of store) {
-      // Remove timestamps older than the largest window we've seen.
-      bucket.timestamps = bucket.timestamps.filter((t) => now - t < windowMs);
-      if (bucket.timestamps.length === 0) {
-        store.delete(key);
-      }
-    }
-  }, CLEANUP_INTERVAL_MS);
-  // Allow the process to exit even if the timer is still running.
-  if (typeof cleanupTimer === "object" && "unref" in cleanupTimer) {
-    cleanupTimer.unref();
-  }
+/**
+ * Replace the default in-memory rate-limit store with a custom implementation.
+ *
+ * Call this at application startup before any requests are processed.
+ */
+export function setRateLimitStore(store: KeyValueStore<SlidingWindowBucket>): void {
+  rateLimitStore = store;
 }
 
 /**
@@ -110,17 +94,16 @@ function effectiveLimit(config: RateLimitConfig, ctx: CapstanContext): number {
  * - `retryAfter` – seconds until the oldest request in the window expires
  *                   (only meaningful when `allowed` is false)
  */
-function checkRateLimit(
+async function checkRateLimit(
   key: string,
   limit: number,
   windowMs: number,
-): { allowed: boolean; remaining: number; retryAfter: number } {
+): Promise<{ allowed: boolean; remaining: number; retryAfter: number }> {
   const now = Date.now();
 
-  let bucket = store.get(key);
+  let bucket = await rateLimitStore.get(key);
   if (!bucket) {
     bucket = { timestamps: [] };
-    store.set(key, bucket);
   }
 
   // Prune expired timestamps.
@@ -131,6 +114,8 @@ function checkRateLimit(
     const oldest = bucket.timestamps[0]!;
     const retryAfterMs = windowMs - (now - oldest);
     const retryAfterSec = Math.ceil(retryAfterMs / 1000);
+    // Persist the pruned bucket back to the store.
+    await rateLimitStore.set(key, bucket);
     return {
       allowed: false,
       remaining: 0,
@@ -139,6 +124,7 @@ function checkRateLimit(
   }
 
   bucket.timestamps.push(now);
+  await rateLimitStore.set(key, bucket);
 
   return {
     allowed: true,
@@ -171,15 +157,12 @@ function checkRateLimit(
 export function defineRateLimit(config: RateLimitConfig): MiddlewareDefinition {
   const windowMs = config.window * 1000;
 
-  // Kick off lazy periodic cleanup using the configured window.
-  ensureCleanupTimer(windowMs);
-
   return {
     name: "rateLimit",
     handler: async ({ request, ctx, next }) => {
       const key = extractKey(request, ctx, config.keyBy);
       const limit = effectiveLimit(config, ctx);
-      const { allowed, remaining, retryAfter } = checkRateLimit(
+      const { allowed, remaining, retryAfter } = await checkRateLimit(
         key,
         limit,
         windowMs,
@@ -228,10 +211,10 @@ export function defineRateLimit(config: RateLimitConfig): MiddlewareDefinition {
 }
 
 /**
- * Clear the in-memory rate-limit store.
+ * Clear the rate-limit store.
  *
  * Useful for tests so state does not leak between test cases.
  */
-export function clearRateLimitStore(): void {
-  store.clear();
+export async function clearRateLimitStore(): Promise<void> {
+  await rateLimitStore.clear();
 }

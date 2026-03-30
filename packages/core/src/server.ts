@@ -7,8 +7,11 @@ import { createContext } from "./context.js";
 import { enforcePolicies } from "./policy.js";
 import { createApproval } from "./approval.js";
 import { mountApprovalRoutes } from "./approval-routes.js";
+import { recordAuditEntry, getAuditLog } from "./compliance.js";
+import type { RiskLevel } from "./compliance.js";
 import type {
   APIDefinition,
+  CapstanAuthContext,
   CapstanConfig,
   CapstanContext,
   HttpMethod,
@@ -175,7 +178,7 @@ export function createCapstanApp(config: CapstanConfig): CapstanApp {
         if (policyResult.effect === "approve") {
           const reason =
             policyResult.reason ?? "This action requires approval";
-          const approval = createApproval({
+          const approval = await createApproval({
             method,
             path,
             input,
@@ -194,10 +197,41 @@ export function createCapstanApp(config: CapstanConfig): CapstanApp {
         }
       }
 
+      // Determine whether this route requires audit logging.
+      const compliance = apiDef.compliance;
+      const shouldAudit =
+        compliance?.auditLog === true || compliance?.riskLevel === "high";
+
       // Run handler (which already includes input/output validation)
+      const startTime = shouldAudit ? Date.now() : 0;
       try {
         const params = c.req.param() as Record<string, string>;
         const result = await apiDef.handler({ input, ctx, params });
+
+        if (shouldAudit) {
+          const authBag: { type: string; userId?: string; agentId?: string } = {
+            type: ctx.auth.type,
+          };
+          if (ctx.auth.userId !== undefined) authBag.userId = ctx.auth.userId;
+          if (ctx.auth.agentId !== undefined) authBag.agentId = ctx.auth.agentId;
+
+          const entry: Parameters<typeof recordAuditEntry>[0] = {
+            timestamp: new Date().toISOString(),
+            requestId: crypto.randomUUID(),
+            method,
+            path,
+            riskLevel: compliance?.riskLevel ?? ("minimal" as RiskLevel),
+            auth: authBag,
+            input,
+            output: result,
+            durationMs: Date.now() - startTime,
+          };
+          if (compliance?.transparency !== undefined) {
+            entry.transparency = compliance.transparency;
+          }
+          recordAuditEntry(entry);
+        }
+
         return c.json(result as object);
       } catch (err: unknown) {
         // Zod validation errors
@@ -241,6 +275,44 @@ export function createCapstanApp(config: CapstanConfig): CapstanApp {
   // ------------------------------------------------------------------
 
   mountApprovalRoutes(app, handlerRegistry);
+
+  // ------------------------------------------------------------------
+  // Audit log endpoint
+  // ------------------------------------------------------------------
+
+  app.get("/capstan/audit", (c: HonoContext) => {
+    const auth = c.get("capstanAuth") as CapstanAuthContext | undefined;
+
+    if (!auth || !auth.isAuthenticated) {
+      return c.json(
+        { error: "Authentication required to read audit log" },
+        401,
+      );
+    }
+
+    const perms: string[] = auth.permissions ?? [];
+    const isAdmin = auth.role === "admin";
+    const hasPermission = perms.includes("audit:read");
+
+    if (!isAdmin && !hasPermission) {
+      return c.json(
+        { error: "Forbidden: audit:read permission required" },
+        403,
+      );
+    }
+
+    const url = new URL(c.req.url);
+    const since = url.searchParams.get("since") ?? undefined;
+    const limitParam = url.searchParams.get("limit");
+    const limit = limitParam ? parseInt(limitParam, 10) : undefined;
+
+    const opts: { since?: string; limit?: number } = {};
+    if (since !== undefined) opts.since = since;
+    if (limit !== undefined && !Number.isNaN(limit)) opts.limit = limit;
+
+    const entries = getAuditLog(Object.keys(opts).length > 0 ? opts : undefined);
+    return c.json({ entries });
+  });
 
   // ------------------------------------------------------------------
   // Agent manifest endpoint

@@ -418,7 +418,7 @@ async function buildApp(
             // custom policies are treated as requiring approval in dev mode.
             if (policyName !== "requireAuth") {
               const reason = `Policy "${policyName}" requires approval`;
-              const approval = createApproval({
+              const approval = await createApproval({
                 method,
                 path: route.urlPattern,
                 input,

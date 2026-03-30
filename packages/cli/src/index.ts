@@ -4,6 +4,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import pc from "picocolors";
 
 // ---------------------------------------------------------------------------
 // Legacy package types — kept as opaque aliases so the CLI compiles without
@@ -38,6 +39,87 @@ async function requireLegacy<T = Record<string, unknown>>(
     process.exitCode = 1;
     throw new Error(`Missing legacy package: ${pkg}`);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Known commands for fuzzy matching
+// ---------------------------------------------------------------------------
+
+const PRIMARY_COMMANDS = [
+  "dev", "build", "start",
+  "add",
+  "db:migrate", "db:push", "db:status",
+  "verify",
+  "mcp",
+  "agent:manifest", "agent:openapi",
+] as const;
+
+const LEGACY_COMMANDS = [
+  "brief:check", "brief:inspect", "brief:graph", "brief:scaffold",
+  "graph:check", "graph:scaffold", "graph:inspect", "graph:diff",
+  "release:plan", "release:run", "release:history", "release:rollback",
+  "harness:start", "harness:get", "harness:list", "harness:pause",
+  "harness:resume", "harness:request-approval", "harness:approve",
+  "harness:request-input", "harness:provide-input", "harness:complete",
+  "harness:fail", "harness:cancel", "harness:retry", "harness:events",
+  "harness:replay", "harness:compact", "harness:summary",
+  "harness:summaries", "harness:memory", "harness:memories",
+] as const;
+
+const ALL_COMMANDS = [...PRIMARY_COMMANDS, ...LEGACY_COMMANDS];
+
+/**
+ * Compute Levenshtein edit distance between two strings.
+ */
+function levenshtein(a: string, b: string): number {
+  const an = a.length;
+  const bn = b.length;
+  const matrix: number[][] = [];
+
+  for (let i = 0; i <= an; i++) {
+    matrix[i] = [i];
+  }
+  for (let j = 0; j <= bn; j++) {
+    matrix[0]![j] = j;
+  }
+
+  for (let i = 1; i <= an; i++) {
+    for (let j = 1; j <= bn; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      matrix[i]![j] = Math.min(
+        matrix[i - 1]![j]! + 1,       // deletion
+        matrix[i]![j - 1]! + 1,       // insertion
+        matrix[i - 1]![j - 1]! + cost // substitution
+      );
+    }
+  }
+
+  return matrix[an]![bn]!;
+}
+
+/**
+ * Find the closest matching command using Levenshtein distance.
+ * Returns the match only if it's within a reasonable edit distance.
+ */
+function findClosestCommand(input: string, commands: readonly string[]): string | undefined {
+  let bestMatch: string | undefined;
+  let bestDistance = Infinity;
+
+  for (const cmd of commands) {
+    const dist = levenshtein(input, cmd);
+    if (dist < bestDistance) {
+      bestDistance = dist;
+      bestMatch = cmd;
+    }
+  }
+
+  // Only suggest if the edit distance is at most 3 or the input is a prefix
+  const maxAllowed = Math.max(2, Math.floor((bestMatch?.length ?? 0) / 2));
+  if (bestDistance <= Math.min(3, maxAllowed)) {
+    return bestMatch;
+  }
+
+  return undefined;
 }
 
 async function main(): Promise<void> {
@@ -177,12 +259,18 @@ async function main(): Promise<void> {
     case "--help":
     case "-h":
     case undefined:
-      printHelp();
+      printHelp(args.includes("--all"));
       return;
-    default:
-      console.error(`Unknown command: ${command}`);
-      printHelp();
+    default: {
+      console.error(pc.red(`Unknown command: "${command}"`));
+      const suggestion = findClosestCommand(command, ALL_COMMANDS);
+      if (suggestion) {
+        console.error(`\n  Did you mean ${pc.cyan(suggestion)}?\n`);
+      } else {
+        console.error(`\n  Run ${pc.cyan("capstan help")} to see available commands.\n`);
+      }
       process.exitCode = 1;
+    }
   }
 }
 
@@ -465,14 +553,14 @@ async function runVerify(args: string[], asJson: boolean): Promise<void> {
   }
 
   // Neither detected — try to give helpful guidance
-  console.error("Could not detect project type.");
-  console.error("  - For runtime apps: ensure app/routes/ directory exists.");
-  console.error("  - For generated apps: ensure capstan.app.json exists.");
+  console.error(pc.red("Could not detect project type."));
+  console.error(pc.dim("  - For runtime apps: ensure app/routes/ directory exists."));
+  console.error(pc.dim("  - For generated apps: ensure capstan.app.json exists."));
   if (target) {
-    console.error(`  Looked in: ${appRoot}`);
+    console.error(pc.dim(`  Looked in: ${appRoot}`));
   } else {
-    console.error(`  Looked in: ${process.cwd()}`);
-    console.error("  Tip: run from your project root, or pass the directory as an argument.");
+    console.error(pc.dim(`  Looked in: ${process.cwd()}`));
+    console.error(pc.yellow("  Tip: run from your project root, or pass the directory as an argument."));
   }
   process.exitCode = 1;
 }
@@ -1057,16 +1145,16 @@ async function runBuild(): Promise<void> {
   const distDir = join(cwd, "dist");
 
   // Step 1: TypeScript compilation
-  console.log("[capstan] Compiling TypeScript...");
+  console.log(pc.dim("[capstan]") + " Compiling TypeScript...");
   try {
     await exec("npx", ["tsc", "-p", "tsconfig.json"], { cwd });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error(`[capstan] TypeScript compilation failed:\n${message}`);
+    console.error(pc.red(`[capstan] TypeScript compilation failed:\n${message}`));
     process.exitCode = 1;
     return;
   }
-  console.log("[capstan] TypeScript compilation complete.");
+  console.log(pc.dim("[capstan]") + pc.green(" TypeScript compilation complete."));
 
   // Step 2: Load app config
   let appName = "capstan-app";
@@ -1089,7 +1177,7 @@ async function runBuild(): Promise<void> {
 
   // Step 3: Scan routes and build manifest with compiled paths
   const routesDir = join(cwd, "app", "routes");
-  console.log("[capstan] Scanning routes...");
+  console.log(pc.dim("[capstan]") + " Scanning routes...");
   const manifest = await scanRoutes(routesDir);
 
   // Rewrite file paths from source .ts/.tsx to compiled .js/.jsx
@@ -1117,7 +1205,7 @@ async function runBuild(): Promise<void> {
     join(distDir, "_capstan_manifest.json"),
     JSON.stringify(rewrittenManifest, null, 2),
   );
-  console.log("[capstan] Generated dist/_capstan_manifest.json");
+  console.log(pc.dim("[capstan]") + pc.green(" Generated dist/_capstan_manifest.json"));
 
   // Step 4: Generate agent-manifest.json and openapi.json
   const registryEntries = manifest.routes
@@ -1136,15 +1224,15 @@ async function runBuild(): Promise<void> {
 
   await writeFile(join(distDir, "agent-manifest.json"), JSON.stringify(agentManifest, null, 2));
   await writeFile(join(distDir, "openapi.json"), JSON.stringify(openApiSpec, null, 2));
-  console.log("[capstan] Generated dist/agent-manifest.json");
-  console.log("[capstan] Generated dist/openapi.json");
+  console.log(pc.dim("[capstan]") + pc.green(" Generated dist/agent-manifest.json"));
+  console.log(pc.dim("[capstan]") + pc.green(" Generated dist/openapi.json"));
 
   // Step 5: Copy public/ assets to dist/public/ (if the directory exists)
   const publicDir = join(cwd, "app", "public");
   try {
     await access(publicDir);
     await cp(publicDir, join(distDir, "public"), { recursive: true });
-    console.log("[capstan] Copied app/public/ to dist/public/");
+    console.log(pc.dim("[capstan]") + pc.green(" Copied app/public/ to dist/public/"));
   } catch {
     // No public directory — skip.
   }
@@ -1255,7 +1343,7 @@ async function main() {
           findAgentByKeyPrefix: appConfig?.findAgentByKeyPrefix ?? undefined,
         },
       );
-      console.log("[capstan] Auth middleware enabled (session + API key verification).");
+      console.log(pc.dim("[capstan]") + " Auth middleware enabled (session + API key verification).");
     } catch (err) {
       console.warn("[capstan] @zauso-ai/capstan-auth not available. Auth middleware disabled.", err?.message ?? "");
     }
@@ -1270,7 +1358,7 @@ async function main() {
         const authCtx = await resolveAuth(c.req.raw);
         c.set("capstanAuth", authCtx);
       } catch (err) {
-        console.error("[capstan] Auth resolution error:", err?.message ?? err);
+        console.error(pc.red("[capstan] Auth resolution error:"), err?.message ?? err);
         c.set("capstanAuth", { isAuthenticated: false, type: "anonymous", permissions: [] });
       }
     }
@@ -1324,7 +1412,7 @@ async function main() {
         }
       }
       if (policyRegistry.size > 0) {
-        console.log("[capstan] Loaded " + policyRegistry.size + " custom policies from app/policies/index.js");
+        console.log(pc.dim("[capstan]") + " Loaded " + policyRegistry.size + " custom policies from app/policies/index.js");
       }
     } catch (err) {
       console.warn("[capstan] Failed to load policies from " + policiesIndexPath + ":", err?.message ?? err);
@@ -1424,7 +1512,7 @@ async function main() {
       const moduleUrl = pathToFileURL(route.filePath).href;
       handlers = await import(moduleUrl);
     } catch (err) {
-      console.error("[capstan] Failed to load API route " + route.filePath + ":", err?.message ?? err);
+      console.error(pc.red("[capstan] Failed to load API route " + route.filePath + ":"), err?.message ?? err);
       continue;
     }
 
@@ -1479,7 +1567,7 @@ async function main() {
           if (err && typeof err === "object" && "issues" in err && Array.isArray(err.issues)) {
             return c.json({ error: "Validation Error", issues: err.issues }, 400);
           }
-          console.error("[capstan] Request error:", err);
+          console.error(pc.red("[capstan] Request error:"), err);
           const message = "Internal Server Error";
           return c.json({ error: message }, 500);
         }
@@ -1496,7 +1584,7 @@ async function main() {
       const moduleUrl = pathToFileURL(route.filePath).href;
       pageModule = await import(moduleUrl);
     } catch (err) {
-      console.error("[capstan] Failed to load page " + route.filePath + ":", err?.message ?? err);
+      console.error(pc.red("[capstan] Failed to load page " + route.filePath + ":"), err?.message ?? err);
       continue;
     }
 
@@ -1522,7 +1610,7 @@ async function main() {
             fetch: { get: async () => null, post: async () => null, put: async () => null, delete: async () => null },
           });
         } catch (err) {
-          console.error("[capstan] Loader error in " + route.filePath + ":", err?.message ?? err);
+          console.error(pc.red("[capstan] Loader error in " + route.filePath + ":"), err?.message ?? err);
         }
       }
 
@@ -1676,7 +1764,7 @@ async function main() {
         res.end(JSON.stringify({ error: "Payload Too Large" }));
         return;
       }
-      console.error("[capstan] Unhandled request error:", err);
+      console.error(pc.red("[capstan] Unhandled request error:"), err);
       if (!res.headersSent) res.writeHead(500, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "Internal Server Error" }));
     }
@@ -1692,12 +1780,12 @@ async function main() {
 
   server.listen(port, host, () => {
     console.log("");
-    console.log("  Capstan production server running");
-    console.log("  Local:  http://" + (host === "0.0.0.0" ? "localhost" : host) + ":" + port);
-    console.log("  Routes: " + (apiRouteCount + pageRouteCount) + " total (" + apiRouteCount + " API, " + pageRouteCount + " pages)");
-    if (resolveAuth) console.log("  Auth:   enabled");
-    else console.log("  Auth:   disabled (no auth config)");
-    if (policyRegistry.size > 0) console.log("  Policies: " + policyRegistry.size + " custom policies loaded");
+    console.log(pc.bold("  Capstan production server running"));
+    console.log("  Local:  " + pc.cyan("http://" + (host === "0.0.0.0" ? "localhost" : host) + ":" + port));
+    console.log(pc.dim("  Routes: " + (apiRouteCount + pageRouteCount) + " total (" + apiRouteCount + " API, " + pageRouteCount + " pages)"));
+    if (resolveAuth) console.log(pc.green("  Auth:   enabled"));
+    else console.log(pc.dim("  Auth:   disabled (no auth config)"));
+    if (policyRegistry.size > 0) console.log(pc.dim("  Policies: " + policyRegistry.size + " custom policies loaded"));
     console.log("");
   });
 
@@ -1732,14 +1820,14 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error("[capstan] Fatal error starting production server:", err);
+  console.error(pc.red("[capstan] Fatal error starting production server:"), err);
   process.exit(1);
 });
 `;
 
   await writeFile(join(distDir, "_capstan_server.js"), serverEntry);
-  console.log("[capstan] Generated dist/_capstan_server.js");
-  console.log("[capstan] Build complete.");
+  console.log(pc.dim("[capstan]") + pc.green(" Generated dist/_capstan_server.js"));
+  console.log(pc.dim("[capstan]") + pc.green(" Build complete."));
 }
 
 async function runStart(args: string[]): Promise<void> {
@@ -1754,8 +1842,8 @@ async function runStart(args: string[]): Promise<void> {
   try {
     await access(serverEntry);
   } catch {
-    console.error("[capstan] dist/_capstan_server.js not found.");
-    console.error("[capstan] Run `capstan build` first to compile the project.");
+    console.error(pc.red("[capstan] dist/_capstan_server.js not found."));
+    console.error(pc.yellow("[capstan] Run `capstan build` first to compile the project."));
     process.exitCode = 1;
     return;
   }
@@ -1794,7 +1882,7 @@ async function runStart(args: string[]): Promise<void> {
 async function runDbMigrate(args: string[]): Promise<void> {
   const name = readFlagValue(args, "--name");
   if (!name) {
-    console.error("Usage: capstan db:migrate --name <migration-name>");
+    console.error(pc.red("Usage: capstan db:migrate --name <migration-name>"));
     process.exitCode = 1;
     return;
   }
@@ -1840,7 +1928,7 @@ async function runDbMigrate(args: string[]): Promise<void> {
     : "-- empty migration\n";
 
   await writeFile(join(migrationsDir, filename), content);
-  console.log(`Created migration: app/migrations/${filename}`);
+  console.log(pc.green(`Created migration: app/migrations/${filename}`));
 }
 
 async function loadDbConfig(): Promise<{ provider: "sqlite" | "postgres" | "mysql"; url: string }> {
@@ -1915,12 +2003,12 @@ async function runDbPush(): Promise<void> {
   const executed = applyTrackedMigrations(client, migrations, provider);
 
   if (executed.length === 0) {
-    console.log("No pending migrations. Database is up to date.");
+    console.log(pc.green("No pending migrations. Database is up to date."));
   } else {
     for (const name of executed) {
-      console.log(`Applied: ${name}`);
+      console.log(pc.green(`Applied: ${name}`));
     }
-    console.log(`\n${executed.length} migration(s) applied.`);
+    console.log(pc.dim(`\n${executed.length} migration(s) applied.`));
   }
 }
 
@@ -1965,25 +2053,25 @@ async function runDbStatus(): Promise<void> {
     };
   }
 
-  console.log(`Migration status (${provider}):\n`);
+  console.log(`Migration status ${pc.dim(`(${provider})`)}:\n`);
 
   if (status.applied.length > 0) {
-    console.log(`Applied (${status.applied.length}):`);
+    console.log(`Applied ${pc.dim(`(${status.applied.length})`)}:`);
     for (const m of status.applied) {
-      console.log(`  ✓ ${m.name}  (${m.appliedAt})`);
+      console.log(pc.green(`  \u2713 ${m.name}`) + pc.dim(`  (${m.appliedAt})`));
     }
   }
 
   if (status.pending.length > 0) {
     if (status.applied.length > 0) console.log("");
-    console.log(`Pending (${status.pending.length}):`);
+    console.log(`Pending ${pc.dim(`(${status.pending.length})`)}:`);
     for (const name of status.pending) {
-      console.log(`  • ${name}`);
+      console.log(pc.yellow(`  \u2022 ${name}`));
     }
   }
 
   if (status.applied.length > 0 && status.pending.length === 0) {
-    console.log("\nDatabase is up to date.");
+    console.log(pc.green("\nDatabase is up to date."));
   }
 }
 
@@ -2528,7 +2616,7 @@ async function runAdd(args: string[]): Promise<void> {
   const name = args[1];
 
   if (!subcommand || !name) {
-    console.error("Usage: capstan add <model|api|page|policy> <name>");
+    console.error(pc.red("Usage: capstan add <model|api|page|policy> <name>"));
     process.exitCode = 1;
     return;
   }
@@ -2537,7 +2625,7 @@ async function runAdd(args: string[]): Promise<void> {
     case "model": {
       const filePath = join(process.cwd(), "app/models", `${name}.model.ts`);
       if (existsSync(filePath)) {
-        console.error(`File already exists: app/models/${name}.model.ts`);
+        console.error(pc.red(`File already exists: app/models/${name}.model.ts`));
         process.exitCode = 1;
         return;
       }
@@ -2556,14 +2644,14 @@ export const ${pascalName} = defineModel("${name}", {
 `;
       await mkdir(join(process.cwd(), "app/models"), { recursive: true });
       await writeFile(filePath, content, "utf-8");
-      console.log(`\u2713 Created app/models/${name}.model.ts`);
+      console.log(pc.green(`\u2713 Created app/models/${name}.model.ts`));
       break;
     }
     case "api": {
       const dirPath = join(process.cwd(), "app/routes", name);
       const filePath = join(dirPath, "index.api.ts");
       if (existsSync(filePath)) {
-        console.error(`File already exists: app/routes/${name}/index.api.ts`);
+        console.error(pc.red(`File already exists: app/routes/${name}/index.api.ts`));
         process.exitCode = 1;
         return;
       }
@@ -2611,14 +2699,14 @@ export const POST = defineAPI({
 `;
       await mkdir(dirPath, { recursive: true });
       await writeFile(filePath, content, "utf-8");
-      console.log(`\u2713 Created app/routes/${name}/index.api.ts`);
+      console.log(pc.green(`\u2713 Created app/routes/${name}/index.api.ts`));
       break;
     }
     case "page": {
       const dirPath = join(process.cwd(), "app/routes", name);
       const filePath = join(dirPath, "index.page.tsx");
       if (existsSync(filePath)) {
-        console.error(`File already exists: app/routes/${name}/index.page.tsx`);
+        console.error(pc.red(`File already exists: app/routes/${name}/index.page.tsx`));
         process.exitCode = 1;
         return;
       }
@@ -2634,7 +2722,7 @@ export const POST = defineAPI({
 `;
       await mkdir(dirPath, { recursive: true });
       await writeFile(filePath, content, "utf-8");
-      console.log(`\u2713 Created app/routes/${name}/index.page.tsx`);
+      console.log(pc.green(`\u2713 Created app/routes/${name}/index.page.tsx`));
       break;
     }
     case "policy": {
@@ -2657,118 +2745,108 @@ export const ${camelName} = definePolicy({
         // Append to existing policies file
         const existing = await readFile(policiesFile, "utf-8");
         await writeFile(policiesFile, existing + policySnippet, "utf-8");
-        console.log(`\u2713 Appended policy "${camelName}" to app/policies/index.ts`);
+        console.log(pc.green(`\u2713 Appended policy "${camelName}" to app/policies/index.ts`));
       } else {
         // Create new policies file with import
         const content = `import { definePolicy } from "@zauso-ai/capstan-core";
 ${policySnippet}`;
         await mkdir(policiesDir, { recursive: true });
         await writeFile(policiesFile, content, "utf-8");
-        console.log(`\u2713 Created app/policies/index.ts with policy "${camelName}"`);
+        console.log(pc.green(`\u2713 Created app/policies/index.ts with policy "${camelName}"`));
       }
       break;
     }
     default:
-      console.error(`Unknown add subcommand: ${subcommand}`);
-      console.error("Usage: capstan add <model|api|page|policy> <name>");
+      console.error(pc.red(`Unknown add subcommand: ${subcommand}`));
+      console.error(pc.red("Usage: capstan add <model|api|page|policy> <name>"));
       process.exitCode = 1;
   }
 }
 
-function printHelp(): void {
-  console.log(`Capstan CLI
+function printHelp(showAll = false): void {
+  console.log(`\n${pc.bold("Capstan")} ${pc.dim("v1.0.0-beta.5")}\n`);
 
-Commands:
-  capstan dev [--port 3000] [--host localhost]
-                             Start the development server with HMR
-  capstan build              Build the project (tsc + route manifest + server entry)
-  capstan start [--port 3000] [--host 0.0.0.0]
-                             Start the production server from built output
+  const group = (title: string, cmds: [string, string][]) => {
+    console.log(`  ${pc.bold(title)}`);
+    for (const [name, desc] of cmds) {
+      console.log(`    ${pc.cyan(name.padEnd(15))}${desc}`);
+    }
+    console.log();
+  };
 
-  capstan add <model|api|page|policy> <name>
-                             Scaffold a model, API route, page, or policy
+  group("Development", [
+    ["dev",   "Start dev server with live reload"],
+    ["build", "Build for production"],
+    ["start", "Start production server"],
+  ]);
 
-  capstan db:migrate --name <name>
-                             Generate a new migration file in app/migrations/
-  capstan db:push            Apply pending migrations to the database
-  capstan db:status          Show migration status
+  group("Scaffolding", [
+    ["add model",  "Add a data model"],
+    ["add api",    "Add API routes"],
+    ["add page",   "Add a page component"],
+    ["add policy", "Add a permission policy"],
+  ]);
 
-  capstan mcp                Start an MCP server on stdio transport
-  capstan agent:manifest     Print the agent manifest JSON to stdout
-  capstan agent:openapi      Print the OpenAPI spec JSON to stdout
+  group("Database", [
+    ["db:migrate", "Generate migration SQL"],
+    ["db:push",    "Apply pending migrations"],
+    ["db:status",  "Show migration status"],
+  ]);
 
-  capstan brief:check <path> [--pack-registry <path>]
-                             Validate a Capstan brief and its compiled App Graph
-  capstan brief:inspect <path> [--pack-registry <path>]
-                             Print brief summary plus compiled App Graph introspection
-  capstan brief:graph <path> [--pack-registry <path>]
-                             Compile a Capstan brief into an App Graph JSON document
-  capstan brief:scaffold <brief> <dir> [--force] [--pack-registry <path>]
-                             Generate a deterministic app skeleton directly from a Capstan brief
-  capstan graph:check <path> [--pack-registry <path>]
-                             Validate an App Graph from a JSON or ESM module
-  capstan graph:scaffold <graph> <dir> [--force] [--pack-registry <path>]
-                             Generate a deterministic app skeleton from an App Graph
-  capstan graph:inspect <path> [--pack-registry <path>]
-                             Print graph metadata, summary, validation, and normalized output
-  capstan graph:diff <before> <after> [--pack-registry <path>]
-                             Print a machine-readable diff between two App Graphs
-  capstan verify [app-dir] [--json]
-                             Verify a Capstan app (auto-detects runtime vs generated)
-  capstan release:plan <app-dir> [--json] [--env <path>] [--migrations <path>]
-                             Generate a machine-readable preview/release plan
-  capstan release:run <app-dir> <preview|release> [--json] [--env <path>] [--migrations <path>]
-                             Execute a framework-managed preview/release run and emit a trace
-  capstan release:history <app-dir> [--json]
-                             List persisted preview/release/rollback traces for an app
-  capstan release:rollback <app-dir> [--json] [--trace <path>]
-                             Execute a framework-managed rollback from a persisted release run
-  capstan harness:start <app-dir> <task-key> [--json] [--input <path>] [--note <text>]
-                             Start a durable harness run for a generated task
-  capstan harness:get <app-dir> <run-id> [--json]
-                             Read a persisted harness run
-  capstan harness:list <app-dir> [--json] [--task <task-key>]
-                             List persisted harness runs
-  capstan harness:pause <app-dir> <run-id> [--json] [--note <text>]
-                             Pause a running harness run
-  capstan harness:resume <app-dir> <run-id> [--json] [--note <text>]
-                             Resume a paused harness run
-  capstan harness:request-approval <app-dir> <run-id> [--json] [--note <text>]
-                             Move a harness run into approval_required
-  capstan harness:approve <app-dir> <run-id> [--json] [--note <text>]
-                             Approve a waiting harness run and resume execution
-  capstan harness:request-input <app-dir> <run-id> [--json] [--note <text>]
-                             Move a harness run into input_required
-  capstan harness:provide-input <app-dir> <run-id> --input <path> [--json] [--note <text>]
-                             Attach structured human input and resume execution
-  capstan harness:complete <app-dir> <run-id> [--json] [--output <path>] [--note <text>]
-                             Complete a harness run with structured output
-  capstan harness:fail <app-dir> <run-id> --message <text> [--json]
-                             Fail a harness run with an error message
-  capstan harness:cancel <app-dir> <run-id> [--json] [--note <text>]
-                             Cancel a harness run while preserving durable history
-  capstan harness:retry <app-dir> <run-id> [--json] [--note <text>]
-                             Retry a failed or cancelled harness run
-  capstan harness:events <app-dir> [--json] [--run <run-id>]
-                             List persisted harness lifecycle events
-  capstan harness:replay <app-dir> <run-id> [--json]
-                             Rebuild run state from persisted harness events
-  capstan harness:compact <app-dir> <run-id> [--json] [--tail <count>]
-                             Persist a compact runtime summary for a harness run
-  capstan harness:summary <app-dir> <run-id> [--json] [--refresh] [--tail <count>]
-                             Read or refresh a persisted compact summary for a harness run
-  capstan harness:summaries <app-dir> [--json]
-                             List persisted harness summaries
-  capstan harness:memory <app-dir> <run-id> [--json] [--refresh] [--tail <count>]
-                             Read or refresh a bounded runtime memory artifact for a harness run
-  capstan harness:memories <app-dir> [--json]
-                             List persisted runtime memory artifacts
-  capstan help                Show this help message
-`);
+  group("Verification", [
+    ["verify", "Run 8-step verification cascade"],
+  ]);
+
+  group("Agent Protocols", [
+    ["mcp",            "Start MCP server (stdio)"],
+    ["agent:manifest", "Print agent manifest JSON"],
+    ["agent:openapi",  "Print OpenAPI spec JSON"],
+  ]);
+
+  if (showAll) {
+    group("Brief (legacy)", [
+      ["brief:check",    "Validate a Capstan brief"],
+      ["brief:inspect",  "Print brief summary + App Graph introspection"],
+      ["brief:graph",    "Compile a brief into an App Graph JSON"],
+      ["brief:scaffold", "Generate app skeleton from a brief"],
+    ]);
+
+    group("Graph (legacy)", [
+      ["graph:check",    "Validate an App Graph"],
+      ["graph:scaffold", "Generate app skeleton from an App Graph"],
+      ["graph:inspect",  "Print graph metadata and validation"],
+      ["graph:diff",     "Diff two App Graphs"],
+    ]);
+
+    group("Release (legacy)", [
+      ["release:plan",     "Generate a preview/release plan"],
+      ["release:run",      "Execute a preview/release run"],
+      ["release:history",  "List release traces"],
+      ["release:rollback", "Rollback from a release run"],
+    ]);
+
+    group("Harness (legacy)", [
+      ["harness:start",   "Start a durable harness run"],
+      ["harness:get",     "Read a persisted harness run"],
+      ["harness:list",    "List persisted harness runs"],
+      ["harness:pause",   "Pause a running harness run"],
+      ["harness:resume",  "Resume a paused harness run"],
+      ["harness:events",  "List harness lifecycle events"],
+      ["harness:replay",  "Rebuild run state from events"],
+      ["harness:compact", "Persist a compact runtime summary"],
+      ["harness:summary", "Read/refresh a compact summary"],
+      ["harness:memory",  "Read/refresh a runtime memory artifact"],
+    ]);
+  } else {
+    console.log(pc.dim(`  Run ${pc.cyan("capstan help --all")} to include legacy commands.`));
+    console.log();
+  }
+
+  console.log(`  Run ${pc.cyan("capstan <command> --help")} for details.\n`);
 }
 
 void main().catch((error: unknown) => {
   const message = error instanceof Error ? error.stack ?? error.message : String(error);
-  console.error(message);
+  console.error(pc.red(message));
   process.exitCode = 1;
 });

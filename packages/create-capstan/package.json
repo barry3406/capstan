@@ -38,5 +38,9 @@
     "mcp",
     "a2a",
     "typescript"
-  ]
+  ],
+  "dependencies": {
+    "@clack/prompts": "^1.1.0",
+    "picocolors": "^1.1.1"
+  }
 }

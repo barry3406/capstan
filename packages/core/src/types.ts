@@ -1,5 +1,6 @@
 import type { Context as HonoContext } from "hono";
 import type { z } from "zod";
+import type { ComplianceConfig } from "./compliance.js";
 
 /** Authentication context attached to every request. */
 export interface CapstanAuthContext {
@@ -38,6 +39,7 @@ export interface APIDefinition<TInput = unknown, TOutput = unknown> {
   capability?: "read" | "write" | "external";
   resource?: string;
   policy?: string;
+  compliance?: ComplianceConfig;
   handler: (args: APIHandlerInput<TInput>) => Promise<TOutput>;
 }
 

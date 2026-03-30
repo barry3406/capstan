@@ -1,8 +1,11 @@
 #!/usr/bin/env node
 
-import { runPrompts, prompt, select } from "./prompts.js";
+import { runPrompts, prompt, select, confirmPrompt } from "./prompts.js";
 import { scaffoldProject } from "./scaffold.js";
 import { join } from "node:path";
+import { execSync } from "node:child_process";
+import * as p from "@clack/prompts";
+import pc from "picocolors";
 
 // ---------------------------------------------------------------------------
 // CLI argument parsing (no external deps)
@@ -13,16 +16,19 @@ type Template = (typeof VALID_TEMPLATES)[number];
 
 function printHelp(): void {
   console.log(`
-Usage: create-capstan-app [project-name] [options]
+${pc.bold("Usage:")} create-capstan-app [project-name] [options]
 
-Options:
-  --template, -t <name>   Template to use (blank, tickets)
-  --help, -h              Show this help message
+${pc.bold("Options:")}
+  ${pc.cyan("--template, -t")} <name>   Template to use (blank, tickets)
+  ${pc.cyan("--install")}              Auto-install dependencies after scaffolding
+  ${pc.cyan("--no-install")}           Skip dependency install prompt
+  ${pc.cyan("--help, -h")}             Show this help message
 
-Examples:
+${pc.bold("Examples:")}
   npx create-capstan-app
   npx create-capstan-app my-app
   npx create-capstan-app my-app --template tickets
+  npx create-capstan-app my-app --template tickets --install
 `);
 }
 
@@ -30,16 +36,28 @@ function parseArgs(argv: string[]): {
   projectName: string | undefined;
   template: Template | undefined;
   help: boolean;
+  install: boolean | undefined;
 } {
   let projectName: string | undefined;
   let template: Template | undefined;
   let help = false;
+  let install: boolean | undefined;
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;
 
     if (arg === "--help" || arg === "-h") {
       help = true;
+      continue;
+    }
+
+    if (arg === "--install") {
+      install = true;
+      continue;
+    }
+
+    if (arg === "--no-install") {
+      install = false;
       continue;
     }
 
@@ -50,13 +68,13 @@ function parseArgs(argv: string[]): {
           template = next as Template;
         } else {
           console.error(
-            `  Error: unknown template "${next}". Valid templates: ${VALID_TEMPLATES.join(", ")}`,
+            pc.red(`  Error: unknown template "${next}". Valid templates: ${VALID_TEMPLATES.join(", ")}`),
           );
           process.exit(1);
         }
         i++; // skip the value
       } else {
-        console.error("  Error: --template requires a value");
+        console.error(pc.red("  Error: --template requires a value"));
         process.exit(1);
       }
       continue;
@@ -64,7 +82,7 @@ function parseArgs(argv: string[]): {
 
     // Unknown flag
     if (arg.startsWith("-")) {
-      console.error(`  Error: unknown option "${arg}"`);
+      console.error(pc.red(`  Error: unknown option "${arg}"`));
       printHelp();
       process.exit(1);
     }
@@ -75,7 +93,7 @@ function parseArgs(argv: string[]): {
     }
   }
 
-  return { projectName, template, help };
+  return { projectName, template, help, install };
 }
 
 // ---------------------------------------------------------------------------
@@ -83,7 +101,7 @@ function parseArgs(argv: string[]): {
 // ---------------------------------------------------------------------------
 
 async function main() {
-  const { projectName: argName, template: argTemplate, help } = parseArgs(
+  const { projectName: argName, template: argTemplate, help, install: argInstall } = parseArgs(
     process.argv.slice(2),
   );
 
@@ -92,7 +110,7 @@ async function main() {
     process.exit(0);
   }
 
-  console.log("\n  Create Capstan App\n");
+  p.intro(pc.bold("Create Capstan App"));
 
   let projectName: string;
   let template: Template;
@@ -117,11 +135,36 @@ async function main() {
 
   await scaffoldProject({ projectName, template, outputDir });
 
-  console.log(`\n  Project created at ./${projectName}\n`);
-  console.log("  Next steps:");
-  console.log(`    cd ${projectName}`);
-  console.log("    npm install");
-  console.log("    npx capstan dev\n");
+  // Auto-install option
+  let shouldInstall = argInstall;
+
+  if (shouldInstall === undefined) {
+    shouldInstall = await confirmPrompt("Install dependencies?");
+  }
+
+  if (shouldInstall) {
+    const s = p.spinner();
+    s.start("Installing dependencies...");
+    try {
+      execSync("npm install", { cwd: outputDir, stdio: "ignore" });
+      s.stop(pc.green("Dependencies installed."));
+    } catch {
+      s.stop(pc.red("Failed to install dependencies."));
+      p.log.warn(`Run ${pc.cyan("npm install")} manually in the project directory.`);
+    }
+  }
+
+  console.log("");
+  p.note(
+    [
+      `cd ${projectName}`,
+      ...(shouldInstall ? [] : ["npm install"]),
+      "npx capstan dev",
+    ].join("\n"),
+    "Next steps",
+  );
+
+  p.outro(pc.green("Your app is ready!"));
 }
 
 main().catch(console.error);

@@ -17,6 +17,7 @@
     "@zauso-ai/capstan-db": "1.0.0-beta.5",
     "@zauso-ai/capstan-dev": "1.0.0-beta.5",
     "@zauso-ai/capstan-router": "1.0.0-beta.5",
+    "picocolors": "^1.1.1",
     "tsx": "^4.19.0"
   },
   "optionalDependencies": {

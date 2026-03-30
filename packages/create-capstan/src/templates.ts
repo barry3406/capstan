@@ -850,6 +850,39 @@ Environment variables:
 - Use \`import type\` for type-only imports (TypeScript strict mode)
 - ESM only — use \`.js\` extensions in relative imports
 - Run \`capstan verify --json\` after every change to catch issues early
+
+## Plugins
+
+Extend your Capstan app with reusable plugins. Plugins can add routes, policies, and middleware.
+
+\`\`\`typescript
+// capstan.config.ts
+import { defineConfig } from "@zauso-ai/capstan-core";
+import stripePlugin from "capstan-plugin-stripe";
+
+export default defineConfig({
+  plugins: [
+    stripePlugin({ apiKey: process.env.STRIPE_KEY }),
+  ],
+});
+\`\`\`
+
+### Writing a Plugin
+
+\`\`\`typescript
+import { definePlugin } from "@zauso-ai/capstan-core";
+
+export default definePlugin({
+  name: "my-plugin",
+  version: "1.0.0",
+  setup(ctx) {
+    // ctx.addRoute(method, path, handler) — register an API route
+    // ctx.addPolicy(policy)               — register a policy
+    // ctx.addMiddleware(path, middleware)  — register middleware
+    // ctx.config                          — read-only app configuration
+  },
+});
+\`\`\`
 `;
 }
 
