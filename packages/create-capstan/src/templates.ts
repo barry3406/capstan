@@ -323,26 +323,47 @@ Every \`defineAPI()\` call automatically generates:
 
 No extra code needed. The \`description\`, \`input\`, \`output\` fields drive all four.
 
-## Page Routes (.page.tsx) — SSR with Data Loading
+## Page Routes (.page.tsx) — Streaming SSR with Data Loading
+
+Capstan uses React 18 streaming SSR (\`renderToReadableStream\`) for optimal TTFB.
 
 \`\`\`typescript
 // app/routes/users/index.page.tsx
+import { useLoaderData } from "@zauso-ai/capstan-react";
 
-// Server-side data loader (runs on every request)
+// Server-side data loader (runs on every request, before render)
 export async function loader({ params, request, ctx, fetch }) {
-  // fetch.get/post/put/delete call your own API routes internally
+  // fetch.get/post/put/delete call your own API routes in-process (no HTTP round-trip)
   const data = await fetch.get("/api/users");
   return { users: data.users };
 }
 
-// React component (server-rendered)
+// React component (server-rendered, then hydrated on client)
 export default function UsersPage() {
+  const { users } = useLoaderData<typeof loader>();
   return (
     <div>
-      <h1>Users</h1>
-      {/* Loader data is available via window.__CAPSTAN_DATA__ on client */}
+      <h1>Users ({users.length})</h1>
+      <ul>
+        {users.map(u => <li key={u.id}>{u.name}</li>)}
+      </ul>
     </div>
   );
+}
+\`\`\`
+
+### Loader context
+
+\`\`\`typescript
+export async function loader({ params, request, ctx, fetch }) {
+  // params:   route parameters (e.g. params.id for [id].page.tsx)
+  // request:  raw Web API Request object
+  // ctx.auth: { isAuthenticated, type: "human"|"agent"|"anonymous", userId?, permissions[] }
+  // fetch:    in-process fetch to call your own API routes without HTTP overhead
+  //           fetch.get<T>(path, queryParams?)
+  //           fetch.post<T>(path, body?)
+  //           fetch.put<T>(path, body?)
+  //           fetch.delete<T>(path)
 }
 \`\`\`
 
@@ -350,8 +371,11 @@ export default function UsersPage() {
 
 ### Layout (\`_layout.tsx\`) — wraps all routes in the same directory and below
 
+The **root layout** must provide the full HTML document structure (\`<html>\`, \`<head>\`, \`<body>\`).
+This is where you add CSS, fonts, meta tags, and other \`<head>\` content.
+
 \`\`\`typescript
-// app/routes/_layout.tsx
+// app/routes/_layout.tsx  (root layout — provides the HTML document)
 import { Outlet } from "@zauso-ai/capstan-react";
 
 export default function RootLayout() {
@@ -370,6 +394,38 @@ export default function RootLayout() {
   );
 }
 \`\`\`
+
+### Nested layouts — build a layout hierarchy
+
+Layouts nest automatically by directory. Each \`_layout.tsx\` wraps all sibling and child routes:
+
+\`\`\`
+app/routes/
+  _layout.tsx              ← Root: <html>, <head>, <body>
+  index.page.tsx           ← Wrapped by root layout only
+  dashboard/
+    _layout.tsx            ← Dashboard shell: sidebar + nav
+    index.page.tsx         ← Wrapped by root → dashboard
+    settings.page.tsx      ← Wrapped by root → dashboard
+\`\`\`
+
+Nested layouts render only their own UI and an \`<Outlet />\` (no \`<html>\`/\`<head>\`):
+
+\`\`\`typescript
+// app/routes/dashboard/_layout.tsx
+import { Outlet } from "@zauso-ai/capstan-react";
+
+export default function DashboardLayout() {
+  return (
+    <div className="dashboard">
+      <nav>Dashboard Nav</nav>
+      <main><Outlet /></main>
+    </div>
+  );
+}
+\`\`\`
+
+All layout modules for a route are loaded in parallel for performance.
 
 ### Middleware (\`_middleware.ts\`) — runs before all routes in the same directory and below
 
