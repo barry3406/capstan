@@ -6,6 +6,12 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
+// Module names as variables so TypeScript does not attempt compile-time
+// resolution of these optional peer packages (they may not have their
+// dist/ yet when core is built first in the monorepo).
+const ROUTER_PKG = "@zauso-ai/capstan-router";
+const AGENT_PKG = "@zauso-ai/capstan-agent";
+
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
@@ -362,10 +368,10 @@ async function checkRoutes(appRoot: string): Promise<VerifyDiagnostic[]> {
   }
 
   // Use the router scanner to discover routes
-  const { scanRoutes } = await import("@zauso-ai/capstan-router");
+  const { scanRoutes } = await import(ROUTER_PKG) as any;
   const manifest = await scanRoutes(routesDir);
 
-  const apiRoutes = manifest.routes.filter((r) => r.type === "api");
+  const apiRoutes = manifest.routes.filter((r: any) => r.type === "api");
 
   if (apiRoutes.length === 0) {
     diagnostics.push({
@@ -723,9 +729,9 @@ async function checkContracts(appRoot: string): Promise<VerifyDiagnostic[]> {
 
   // Check API route files for meta.resource references to models
   if (await isDirectory(routesDir)) {
-    const { scanRoutes } = await import("@zauso-ai/capstan-router");
+    const { scanRoutes } = await import(ROUTER_PKG) as any;
     const manifest = await scanRoutes(routesDir);
-    const apiRoutes = manifest.routes.filter((r) => r.type === "api");
+    const apiRoutes = manifest.routes.filter((r: any) => r.type === "api");
 
     for (const route of apiRoutes) {
       const relPath = relative(appRoot, route.filePath);
@@ -782,8 +788,8 @@ async function checkManifest(appRoot: string): Promise<VerifyDiagnostic[]> {
   }
 
   // Generate a fresh manifest from the current routes
-  const { scanRoutes } = await import("@zauso-ai/capstan-router");
-  const { generateRouteManifest } = await import("@zauso-ai/capstan-router");
+  const { scanRoutes } = await import(ROUTER_PKG) as any;
+  const { generateRouteManifest } = await import(ROUTER_PKG) as any;
 
   const routeManifest = await scanRoutes(routesDir);
   const { apiRoutes } = generateRouteManifest(routeManifest);
@@ -815,8 +821,8 @@ async function checkManifest(appRoot: string): Promise<VerifyDiagnostic[]> {
   }
 
   // Check for API route files that exist on disk but are NOT in the manifest
-  const manifestFilePaths = new Set(apiRoutes.map((r) => r.filePath));
-  const diskApiRoutes = routeManifest.routes.filter((r) => r.type === "api");
+  const manifestFilePaths = new Set(apiRoutes.map((r: any) => r.filePath));
+  const diskApiRoutes = routeManifest.routes.filter((r: any) => r.type === "api");
 
   for (const route of diskApiRoutes) {
     if (!manifestFilePaths.has(route.filePath)) {
@@ -872,17 +878,17 @@ async function checkCrossProtocol(appRoot: string): Promise<VerifyDiagnostic[]> 
 
   // ---- 1. Build a CapabilityRegistry from the route manifest ----
 
-  const { scanRoutes } = await import("@zauso-ai/capstan-router");
+  const { scanRoutes } = await import(ROUTER_PKG) as any;
   const routeManifest = await scanRoutes(routesDir);
-  const apiRoutes = routeManifest.routes.filter((r) => r.type === "api");
+  const apiRoutes = routeManifest.routes.filter((r: any) => r.type === "api");
 
   if (apiRoutes.length === 0) {
     return diagnostics;
   }
 
   // Build RouteRegistryEntry list by reading source files for defineAPI metadata
-  const { CapabilityRegistry } = await import("@zauso-ai/capstan-agent");
-  const { routeToToolName } = await import("@zauso-ai/capstan-agent");
+  const { CapabilityRegistry } = await import(AGENT_PKG) as any;
+  const { routeToToolName } = await import(AGENT_PKG) as any;
 
   // Minimal config for projection
   const agentConfig = { name: "verify-check", description: "Cross-protocol verification" };
@@ -1013,8 +1019,10 @@ async function checkCrossProtocol(appRoot: string): Promise<VerifyDiagnostic[]> 
   const a2aSkills = a2aCard.skills;
 
   // Build lookup maps
-  const mcpToolsByName = new Map(mcpTools.map((t) => [t.name, t]));
-  const a2aSkillsById = new Map(a2aSkills.map((s) => [s.id, s]));
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const mcpToolsByName = new Map<string, any>(mcpTools.map((t: any) => [t.name, t]));
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const a2aSkillsById = new Map<string, any>(a2aSkills.map((s: any) => [s.id, s]));
 
   // Build a set of OpenAPI operation keys: "METHOD /path"
   const openApiOperations = new Set<string>();
@@ -1206,7 +1214,7 @@ async function checkCrossProtocol(appRoot: string): Promise<VerifyDiagnostic[]> 
   // 5f. Check for MCP tools that have no corresponding registered route (orphaned tools)
   for (const tool of mcpTools) {
     const matchesRoute = registeredRoutes.some(
-      (r) => routeToToolName(r.method, r.path) === tool.name,
+      (r: any) => routeToToolName(r.method, r.path) === tool.name,
     );
     if (!matchesRoute) {
       diagnostics.push({
@@ -1223,7 +1231,7 @@ async function checkCrossProtocol(appRoot: string): Promise<VerifyDiagnostic[]> 
   // 5g. Check for A2A skills that have no corresponding registered route (orphaned skills)
   for (const skill of a2aSkills) {
     const matchesRoute = registeredRoutes.some(
-      (r) => routeToToolName(r.method, r.path) === skill.id,
+      (r: any) => routeToToolName(r.method, r.path) === skill.id,
     );
     if (!matchesRoute) {
       diagnostics.push({
