@@ -39,6 +39,11 @@ function DocumentShell(props: { children?: ReactElement }) {
         name: "viewport",
         content: "width=device-width, initial-scale=1",
       }),
+      createElement("link", {
+        rel: "stylesheet",
+        href: "/styles.css",
+        precedence: "default",
+      }),
     ),
     createElement(
       "body",

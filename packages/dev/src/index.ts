@@ -1,7 +1,9 @@
 export { createDevServer } from "./server.js";
-export { watchRoutes } from "./watcher.js";
+export { watchRoutes, watchStyles } from "./watcher.js";
 export { loadRouteModule, loadApiHandlers, loadPageModule } from "./loader.js";
 export { printStartupBanner } from "./printer.js";
+export { buildCSS, detectCSSMode, buildTailwind, startTailwindWatch } from "./css.js";
+export type { CSSMode } from "./css.js";
 export type { DevServerConfig, DevServerInstance } from "./types.js";
 export type { ServerAdapter } from "./adapter.js";
 export { createNodeAdapter } from "./adapter-node.js";

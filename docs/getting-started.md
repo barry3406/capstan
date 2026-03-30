@@ -42,6 +42,8 @@ my-app/
       api/
         health.api.ts      # Health check endpoint
     models/                # Data model definitions (empty in blank template)
+    styles/
+      main.css             # CSS entry point (Lightning CSS or Tailwind)
     migrations/            # Database migration files
     policies/
       index.ts             # Permission policies (requireAuth)

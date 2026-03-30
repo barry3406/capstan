@@ -26,6 +26,14 @@
     "hono": "^4.0.0",
     "tsx": "^4.0.0"
   },
+  "peerDependencies": {
+    "lightningcss": "^1.0.0"
+  },
+  "peerDependenciesMeta": {
+    "lightningcss": {
+      "optional": true
+    }
+  },
   "description": "Dev server for Capstan — file watching, hot route reload, MCP/A2A endpoints",
   "repository": {
     "type": "git",

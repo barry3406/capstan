@@ -101,6 +101,7 @@ Think of it as **Next.js if it were designed from day one for a world where half
 - **Plugin system** — `definePlugin()` to add routes, policies, and middleware; load via `plugins: []` in config
 - **Pluggable state stores** — `KeyValueStore<T>` interface with `MemoryStore` default; swap to Redis or any external backend via `setApprovalStore()`, `setRateLimitStore()`, `setDpopReplayStore()`
 - **EU AI Act compliance** — `defineCompliance()` with risk level, audit logging, and transparency; automatic `GET /capstan/audit` endpoint
+- **CSS pipeline** — Lightning CSS processing built-in, Tailwind v4 auto-detection, zero-config
 - **Interactive CLI** — colored output, grouped help, fuzzy command matching, `@clack/prompts` interactive scaffolder with auto-install
 
 ---
@@ -524,7 +525,6 @@ npm run test:new     # Bun tests (569 tests, ~6s)
 
 - Additional scaffolder templates (beyond `blank` and `tickets`)
 - More integration, end-to-end, and MCP contract tests
-- CSS pipeline (Tailwind / vanilla-extract integration)
 - OAuth providers (Google, GitHub, etc.)
 - Additional embedding adapters (Cohere, local models)
 

@@ -16,11 +16,12 @@ import {
 import type { APIDefinition, HttpMethod, CapstanContext, CapstanAuthContext } from "@zauso-ai/capstan-core";
 
 import { loadApiHandlers, loadLayoutModule, loadPageModule, invalidateModuleCache } from "./loader.js";
-import { watchRoutes } from "./watcher.js";
+import { watchRoutes, watchStyles } from "./watcher.js";
 import { printStartupBanner } from "./printer.js";
 import type { DevServerConfig, DevServerInstance } from "./types.js";
 import type { ServerAdapter } from "./adapter.js";
 import { createNodeAdapter, notifyLiveReloadClients } from "./adapter-node.js";
+import { detectCSSMode, buildCSS, startTailwindWatch } from "./css.js";
 
 // ---------------------------------------------------------------------------
 // Live Reload
@@ -1029,6 +1030,58 @@ export async function createDevServer(
     void rebuildRoutes(changedFile);
   });
 
+  // --- CSS processing -------------------------------------------------------
+
+  const stylesDir = path.join(config.rootDir, "app", "styles");
+  const cssEntry = path.join(stylesDir, "main.css");
+  const cssOutFile = path.join(
+    config.publicDir ?? path.join(config.rootDir, "app", "public"),
+    "_capstan",
+    "styles.css",
+  );
+
+  const cssMode = await detectCSSMode(config.rootDir);
+
+  let cssStylesWatcher: { close: () => void } | null = null;
+  let tailwindHandle: { stop: () => void } | null = null;
+
+  if (cssMode === "lightningcss") {
+    // Initial build
+    try {
+      await buildCSS(cssEntry, cssOutFile, true);
+      // eslint-disable-next-line no-console
+      console.log("[capstan] CSS built (Lightning CSS)");
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        "[capstan] CSS build failed:",
+        err instanceof Error ? err.message : err,
+      );
+    }
+
+    // Watch for CSS changes and rebuild
+    cssStylesWatcher = watchStyles(stylesDir, () => {
+      void (async () => {
+        try {
+          await buildCSS(cssEntry, cssOutFile, true);
+          notifyLiveReloadClients();
+          // eslint-disable-next-line no-console
+          console.log("[capstan] CSS rebuilt");
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.error(
+            "[capstan] CSS rebuild failed:",
+            err instanceof Error ? err.message : err,
+          );
+        }
+      })();
+    });
+  } else if (cssMode === "tailwind") {
+    tailwindHandle = startTailwindWatch(cssEntry, cssOutFile);
+    // eslint-disable-next-line no-console
+    console.log("[capstan] Tailwind CSS watch started");
+  }
+
   // --- DevServerInstance ----------------------------------------------------
 
   let shuttingDown = false;
@@ -1063,8 +1116,14 @@ export async function createDevServer(
       // eslint-disable-next-line no-console
       console.log("[capstan] Shutting down gracefully...");
 
-      // 1. Close the file watcher so no more rebuilds are triggered.
+      // 1. Close watchers so no more rebuilds are triggered.
       watcher.close();
+      if (cssStylesWatcher) {
+        cssStylesWatcher.close();
+      }
+      if (tailwindHandle) {
+        tailwindHandle.stop();
+      }
 
       // 2. Close the server via the adapter (handles SSE cleanup, connection
       //    draining, etc. for the Node adapter; simple stop for Bun).

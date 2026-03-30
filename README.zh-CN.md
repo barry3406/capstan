@@ -366,6 +366,7 @@ Capstan 内置多层安全防护：
 - **React SSR + Loader** — 服务端渲染，数据加载器、布局组件、`Outlet`
 - **选择性 hydration** — 支持 `full`（完整水合）、`visible`（可见时水合）、`none`（纯静态）三种模式，精细控制客户端 JavaScript 加载
 - **React Server Components 基础** — 服务端组件支持，减少客户端 bundle 体积
+- **CSS 管线** — 内建 Lightning CSS 处理，Tailwind v4 自动检测，零配置
 
 ### Agent 协议
 
@@ -524,7 +525,6 @@ npm run test:new     # Bun 测试（569 项测试，约 6s）
 
 - 更多脚手架模板（目前支持 `blank` 和 `tickets`）
 - 更多集成和端到端测试
-- CSS 管线（Tailwind / vanilla-extract 集成）
 - OAuth 提供者（Google、GitHub 等）
 
 ---

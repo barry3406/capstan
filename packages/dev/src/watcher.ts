@@ -86,3 +86,81 @@ export function watchRoutes(
     },
   };
 }
+
+/**
+ * Watch a styles directory for CSS file changes and invoke a callback.
+ *
+ * Uses `node:fs.watch` in recursive mode with a 100ms debounce (shorter
+ * than route watching because CSS rebuilds are fast and users expect
+ * near-instant feedback on style changes).
+ *
+ * If the directory does not exist, returns a no-op watcher.
+ */
+export function watchStyles(
+  stylesDir: string,
+  onChange: (changedFile?: string) => void,
+): { close: () => void } {
+  if (!existsSync(stylesDir)) {
+    return { close: () => {} };
+  }
+
+  let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  let closed = false;
+  let lastChangedFile: string | undefined;
+
+  const DEBOUNCE_MS = 100;
+
+  function isCSSFile(filename: string | null): boolean {
+    if (!filename) return false;
+    return filename.endsWith(".css");
+  }
+
+  function scheduleCallback(changedFile?: string): void {
+    if (closed) return;
+
+    lastChangedFile = changedFile;
+
+    if (debounceTimer !== null) {
+      clearTimeout(debounceTimer);
+    }
+
+    debounceTimer = setTimeout(() => {
+      debounceTimer = null;
+      if (!closed) {
+        onChange(lastChangedFile);
+        lastChangedFile = undefined;
+      }
+    }, DEBOUNCE_MS);
+  }
+
+  let watcher: FSWatcher;
+
+  try {
+    watcher = watch(stylesDir, { recursive: true }, (_eventType, filename) => {
+      if (isCSSFile(filename ?? null)) {
+        const fullPath = filename
+          ? path.join(stylesDir, filename)
+          : undefined;
+        scheduleCallback(fullPath);
+      }
+    });
+  } catch {
+    return { close: () => {} };
+  }
+
+  watcher.on("error", () => {
+    // Intentionally swallowed. The server remains usable even if the
+    // watcher encounters a transient filesystem error.
+  });
+
+  return {
+    close: () => {
+      closed = true;
+      if (debounceTimer !== null) {
+        clearTimeout(debounceTimer);
+        debounceTimer = null;
+      }
+      watcher.close();
+    },
+  };
+}

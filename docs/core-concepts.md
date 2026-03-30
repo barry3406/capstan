@@ -508,3 +508,57 @@ Traces include:
 - `capstan.capability`: read, write, or external
 - `capstan.auth.type`: human, agent, or anonymous
 - `capstan.policy.effect`: the policy decision (allow, deny, approve, redact)
+
+## CSS & Styling
+
+Capstan includes a zero-config CSS pipeline that processes stylesheets automatically during development and production builds.
+
+### File Location
+
+Place CSS files in `app/styles/`. The entry point is `app/styles/main.css`, which is processed and served as `/styles.css`.
+
+### Lightning CSS (Default)
+
+By default, Capstan processes CSS with [Lightning CSS](https://lightningcss.dev/), providing:
+
+- **`@import` resolution** -- inline imported CSS files automatically
+- **Vendor prefixing** -- add browser prefixes where needed
+- **CSS nesting** -- use nested selectors (CSS Nesting spec)
+- **Minification** -- compress output in production builds
+
+No configuration required. Write modern CSS and Capstan handles the rest.
+
+### Tailwind CSS (Auto-Detected)
+
+If `app/styles/main.css` contains `@import "tailwindcss"`, Capstan auto-detects Tailwind v4 and runs the Tailwind CLI instead of Lightning CSS:
+
+```css
+/* app/styles/main.css */
+@import "tailwindcss";
+```
+
+Install Tailwind as a project dependency:
+
+```bash
+npm install tailwindcss @tailwindcss/cli
+```
+
+Tailwind v4 scans your source files automatically -- no `tailwind.config.js` needed.
+
+### Referencing in Layouts
+
+The root layout (or any layout) should include a `<link>` tag pointing to `/styles.css`. Use React 19's `precedence` prop to auto-hoist the tag into `<head>` and prevent FOUC (Flash of Unstyled Content):
+
+```tsx
+<link rel="stylesheet" href="/styles.css" precedence="default" />
+```
+
+The scaffolded root layout includes this by default. When no layout exists, Capstan's fallback `DocumentShell` also includes the stylesheet link with `precedence="default"`.
+
+### Static CSS
+
+You can also place pre-built CSS files directly in `app/public/` for static serving without processing:
+
+```
+app/public/vendor.css  -->  GET /vendor.css
+```

@@ -95,6 +95,7 @@
 - **React SSR** — 搭配 loader 的伺服器端渲染、版面配置、`Outlet`、hydration
 - **選擇性 hydration** — `full` / `visible` / `none` 三種 hydration 模式
 - **React Server Components 基礎** — RSC 基礎架構支援
+- **CSS 管線** — 內建 Lightning CSS 處理，Tailwind v4 自動偵測，零設定
 
 ### Agent 協定
 - **MCP 伺服器** — stdio 傳輸，供 Claude Desktop / Cursor 使用
@@ -503,7 +504,6 @@ npm run test:new     # Bun 測試（569 項測試，約 6s）
 
 - 更多鷹架範本（除 `blank` 與 `tickets` 之外）
 - 更多整合測試與端對端測試
-- CSS 管線（Tailwind / vanilla-extract 整合）
 - OAuth 提供者（Google、GitHub 等）
 
 ---

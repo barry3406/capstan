@@ -113,6 +113,7 @@ export default function RootLayout() {
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <title>${title}</title>
+        <link rel="stylesheet" href="/styles.css" precedence="default" />
       </head>
       <body>
         <Outlet />
@@ -187,6 +188,35 @@ dist/
 *.db
 .env
 .env.local
+`;
+}
+
+export function mainCss(): string {
+  return `/* app/styles/main.css — processed by Lightning CSS or Tailwind */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+}
+
+body {
+  font-family: system-ui, -apple-system, sans-serif;
+  line-height: 1.6;
+  color: #1a1a2e;
+  background: #f8f9fa;
+}
+
+a { color: #0066cc; text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+code {
+  font-family: ui-monospace, 'Cascadia Code', monospace;
+  background: #e9ecef;
+  padding: 0.15em 0.3em;
+  border-radius: 3px;
+  font-size: 0.9em;
+}
 `;
 }
 
@@ -450,7 +480,7 @@ export default function RootLayout() {
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <title>${projectName}</title>
-        <link rel="stylesheet" href="/styles.css" />  {/* from app/public/styles.css */}
+        <link rel="stylesheet" href="/styles.css" precedence="default" />
       </head>
       <body>
         <Outlet />  {/* Child route renders here */}
@@ -706,12 +736,30 @@ Reference in API routes: \`policy: "requireAuth"\` or \`policy: "requireAdmin"\`
 Place files in \`app/public/\`. They are served at the root URL:
 
 \`\`\`
-app/public/styles.css     → GET /styles.css
 app/public/logo.png       → GET /logo.png
 app/public/js/app.js      → GET /js/app.js
 \`\`\`
 
-Reference in layouts: \`<link rel="stylesheet" href="/styles.css" />\`
+## CSS & Styling
+
+Place CSS files in \`app/styles/\`. The entry point is \`app/styles/main.css\`.
+
+### Default (Lightning CSS)
+Capstan auto-processes CSS with Lightning CSS: \`@import\` resolution, vendor prefixing, CSS nesting, and minification.
+
+### With Tailwind CSS
+If \`main.css\` contains \`@import "tailwindcss"\`, Capstan auto-detects and runs the Tailwind CLI:
+\`\`\`css
+/* app/styles/main.css */
+@import "tailwindcss";
+\`\`\`
+Install Tailwind: \`npm install tailwindcss @tailwindcss/cli\`
+
+### Referencing in layouts
+\`\`\`tsx
+<link rel="stylesheet" href="/styles.css" precedence="default" />
+\`\`\`
+React 19 auto-hoists \`<link>\` tags to \`<head>\` and prevents FOUC.
 
 ## Auto-generated Endpoints
 
