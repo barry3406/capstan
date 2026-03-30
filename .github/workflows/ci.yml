@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        node-version: [20, 22]
+
+    name: Node ${{ matrix.node-version }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: "npm"
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.x"
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build packages
+        run: npm run build
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Run tests (bun)
+        run: npm run test:new
+
+      - name: Run legacy tests (vitest)
+        run: npm test
