@@ -16,10 +16,10 @@ jobs:
     name: Build & Test
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -33,12 +33,32 @@ jobs:
       - name: Install dependencies
         run: npm install --legacy-peer-deps
 
-      - name: Build runtime packages
-        run: |
-          for pkg in core router db auth agent react dev cli create-capstan; do
-            echo "--- Building packages/$pkg ---"
-            npm run build --workspace "packages/$pkg" 2>&1 || { echo "::error::Build failed for packages/$pkg"; exit 1; }
-          done
+      - name: Build core
+        run: npm run build --workspace packages/core
+
+      - name: Build router
+        run: npm run build --workspace packages/router
+
+      - name: Build db
+        run: npm run build --workspace packages/db
+
+      - name: Build auth
+        run: npm run build --workspace packages/auth
+
+      - name: Build agent
+        run: npm run build --workspace packages/agent
+
+      - name: Build react
+        run: npm run build --workspace packages/react
+
+      - name: Build dev
+        run: npm run build --workspace packages/dev
+
+      - name: Build cli
+        run: npm run build --workspace packages/cli
+
+      - name: Build create-capstan-app
+        run: npm run build --workspace packages/create-capstan
 
       - name: Run tests
         run: npm run test:new
