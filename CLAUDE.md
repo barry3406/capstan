@@ -106,6 +106,12 @@ Output includes `repairChecklist` with `fixCategory` and `autoFixable` for AI co
 - Target: ES2022
 - `import type` for type-only imports
 
+## Scaffolding Template Sync
+
+`packages/create-capstan/src/templates.ts` contains the `agentsMd()` function that generates the `AGENTS.md` for every new Capstan project. This file is the primary documentation surface for AI agents working on Capstan apps.
+
+**Rule:** Whenever you add, change, or remove a user-facing framework capability (new API, new hook, new config option, behavioral change, etc.), you MUST update `agentsMd()` in `templates.ts` to reflect the change in the same commit. The scaffolded AGENTS.md must always accurately describe what the framework can do.
+
 ## Testing
 
 - New packages: `bun test` (tests/unit/core,router,db,auth,agent + tests/integration/dev-server,full-pipeline)
