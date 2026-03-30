@@ -36,9 +36,8 @@ jobs:
       - name: Build runtime packages
         run: |
           for pkg in core router db auth agent react dev cli create-capstan; do
-            echo "::group::Building @zauso-ai/capstan-$pkg"
-            npm run build --workspace "packages/$pkg" || exit 1
-            echo "::endgroup::"
+            echo "--- Building packages/$pkg ---"
+            npm run build --workspace "packages/$pkg" 2>&1 || { echo "::error::Build failed for packages/$pkg"; exit 1; }
           done
 
       - name: Run tests

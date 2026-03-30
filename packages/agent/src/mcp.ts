@@ -1,6 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { z } from "zod";
 import type { ZodTypeAny } from "zod";
 
@@ -267,14 +266,8 @@ export function createMcpHttpHandler(
     input: unknown,
   ) => Promise<unknown>,
 ): (req: Request) => Promise<Response> {
-  // Map of session ID -> { transport, server } so we can reuse sessions.
-  const sessions = new Map<
-    string,
-    {
-      transport: WebStandardStreamableHTTPServerTransport;
-      server: McpServer;
-    }
-  >();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const sessions = new Map<string, { transport: any; server: McpServer }>();
 
   /**
    * Build a new McpServer with all the current routes registered.
@@ -289,10 +282,11 @@ export function createMcpHttpHandler(
    * Create a fresh transport + server pair, wire them together, and
    * store in the session map.
    */
-  async function createSession(): Promise<{
-    transport: WebStandardStreamableHTTPServerTransport;
-    server: McpServer;
-  }> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  async function createSession(): Promise<{ transport: any; server: McpServer }> {
+    const { WebStandardStreamableHTTPServerTransport } = await import(
+      "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js"
+    );
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: () => crypto.randomUUID(),
       onsessioninitialized(sessionId: string) {

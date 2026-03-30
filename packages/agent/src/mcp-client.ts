@@ -8,9 +8,8 @@
  * support Streamable HTTP).
  */
 
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+// SDK imports are dynamic to avoid resolution failures when subpath
+// exports are not declared in the package.json exports map.
 import { withSpan } from "./telemetry.js";
 
 // ---------------------------------------------------------------------------
@@ -49,10 +48,13 @@ export interface McpClient {
 // ---------------------------------------------------------------------------
 
 class SdkMcpClient implements McpClient {
-  private client: Client;
-  private transport: StreamableHTTPClientTransport;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private client: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private transport: any;
 
-  constructor(client: Client, transport: StreamableHTTPClientTransport) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  constructor(client: any, transport: any) {
     this.client = client;
     this.transport = transport;
   }
@@ -63,7 +65,8 @@ class SdkMcpClient implements McpClient {
       {},
       async () => {
         const result = await this.client.listTools();
-        return result.tools.map((t) => ({
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return result.tools.map((t: any) => ({
           name: t.name,
           description: t.description,
           inputSchema: t.inputSchema as Record<string, unknown> | undefined,
@@ -390,25 +393,23 @@ export async function createMcpClient(
     };
   }
 
-  // --- Attempt 1: SDK transport ---
+  // --- Attempt 1: SDK transport (lazy import) ---
   try {
-    const transport = new StreamableHTTPClientTransport(url, {
-      requestInit,
-    });
+    const clientMod = await import("@modelcontextprotocol/sdk/client/index.js");
+    const transportMod = await import("@modelcontextprotocol/sdk/client/streamableHttp.js");
+    const SdkClient = clientMod.Client;
+    const SdkTransport = transportMod.StreamableHTTPClientTransport;
 
-    const client = new Client(
+    const transport = new SdkTransport(url, { requestInit });
+    const client = new SdkClient(
       { name: clientName, version: "1.0.0" },
       { capabilities: {} },
     );
-
-    // Cast needed: StreamableHTTPClientTransport.sessionId is
-    // `string | undefined` while Transport declares `sessionId?: string`.
-    // Under exactOptionalPropertyTypes these are incompatible.
-    await client.connect(transport as unknown as Transport);
-
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await client.connect(transport as any);
     return new SdkMcpClient(client, transport);
   } catch {
-    // SDK transport failed — fall back to raw JSON-RPC.
+    // SDK transport failed or not available — fall back to raw JSON-RPC.
   }
 
   // --- Attempt 2: Raw JSON-RPC 2.0 ---
