@@ -272,6 +272,72 @@ derivePermission("external");
 // { resource: "external", action: "write" }
 ```
 
+## OAuth Providers
+
+Capstan ships built-in OAuth provider helpers for social login. Use `googleProvider()` or `githubProvider()` to configure a provider, then `createOAuthHandlers()` to get route handlers that manage the full authorization code flow -- including state parameter validation, token exchange, user info fetching, and automatic JWT session creation.
+
+### Setup
+
+```typescript
+import {
+  googleProvider,
+  githubProvider,
+  createOAuthHandlers,
+} from "@zauso-ai/capstan-auth";
+
+const oauthHandlers = createOAuthHandlers({
+  providers: [
+    googleProvider({
+      clientId: process.env.GOOGLE_CLIENT_ID!,
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+    }),
+    githubProvider({
+      clientId: process.env.GITHUB_CLIENT_ID!,
+      clientSecret: process.env.GITHUB_CLIENT_SECRET!,
+    }),
+  ],
+  callbackPath: "/auth/callback", // optional, default
+  sessionSecret: process.env.SESSION_SECRET!,
+});
+```
+
+### Routes
+
+The returned `oauthHandlers` object provides two handlers:
+
+| Handler | Route | Description |
+|---------|-------|-------------|
+| `login(request, providerName)` | `GET /auth/login/:provider` | Redirects to the OAuth provider's authorize URL |
+| `callback(request)` | `GET /auth/callback` | Handles the OAuth callback, exchanges code for token, fetches user info, creates a JWT session cookie, and redirects to `/` |
+
+### Login Flow
+
+1. User visits `/auth/login/google` (or `/auth/login/github`)
+2. Capstan sets a `capstan_oauth_state` cookie and redirects to the provider
+3. After the user authorizes, the provider redirects back to `/auth/callback`
+4. Capstan validates the state parameter, exchanges the code for an access token, fetches user info, creates a signed JWT session, and sets the `capstan_session` cookie
+5. User is redirected to `/` as an authenticated human session
+
+### Provider Configuration
+
+Each provider returns an `OAuthProvider` object:
+
+```typescript
+interface OAuthProvider {
+  name: string;         // "google" | "github"
+  authorizeUrl: string; // Provider's OAuth authorize endpoint
+  tokenUrl: string;     // Provider's token exchange endpoint
+  userInfoUrl: string;  // Provider's user info endpoint
+  clientId: string;
+  clientSecret: string;
+  scopes: string[];     // Default scopes for each provider
+}
+```
+
+You can also create custom providers by building an `OAuthProvider` object directly.
+
+---
+
 ## DPoP (Sender-Constrained Tokens)
 
 Capstan supports Demonstrating Proof-of-Possession (RFC 9449) to bind access tokens to a specific client key pair. This prevents token replay if a bearer token is intercepted.

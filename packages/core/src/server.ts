@@ -9,6 +9,7 @@ import { createApproval } from "./approval.js";
 import { mountApprovalRoutes } from "./approval-routes.js";
 import { recordAuditEntry, getAuditLog } from "./compliance.js";
 import type { RiskLevel } from "./compliance.js";
+import { counter, histogram, serializeMetrics } from "./metrics.js";
 import type {
   APIDefinition,
   CapstanAuthContext,
@@ -74,7 +75,7 @@ function buildRouteMetadata(
  * - `routeRegistry` -- array of route metadata for the agent manifest
  * - `registerAPI()` -- helper to register an API definition as an HTTP route
  */
-export function createCapstanApp(config: CapstanConfig): CapstanApp {
+export async function createCapstanApp(config: CapstanConfig): Promise<CapstanApp> {
   // Reset the global API registry so that previous app instances (e.g. from
   // hot reload or prior test cases) don't leak stale definitions.
   clearAPIRegistry();
@@ -103,6 +104,28 @@ export function createCapstanApp(config: CapstanConfig): CapstanApp {
     const ctx = createContext(c as unknown as HonoContext);
     c.set("capstanCtx", ctx);
     await next();
+  });
+
+  // Request metrics middleware — counts requests and records duration.
+  const reqCounter = counter("capstan_http_requests_total");
+  const reqDuration = histogram("capstan_http_request_duration_ms");
+
+  app.use("*", async (c, next) => {
+    const start = Date.now();
+    await next();
+    const durationMs = Date.now() - start;
+    const method = c.req.method;
+    const status = String(c.res.status);
+    reqCounter.inc({ method, status });
+    reqDuration.observe({ method }, durationMs);
+  });
+
+  // ------------------------------------------------------------------
+  // Prometheus-compatible metrics endpoint
+  // ------------------------------------------------------------------
+
+  app.get("/metrics", (c) => {
+    return c.text(serializeMetrics());
   });
 
   // ------------------------------------------------------------------
@@ -328,6 +351,53 @@ export function createCapstanApp(config: CapstanConfig): CapstanApp {
     };
     return c.json(manifest);
   });
+
+  // --- Load plugins -------------------------------------------------------
+  if (config.plugins) {
+    for (const plugin of config.plugins) {
+      const ctx = {
+        addRoute(method: string, path: string, handler: unknown) {
+          const entry: (typeof routeRegistry)[number] = { method: method as HttpMethod, path };
+          if (
+            handler &&
+            typeof handler === "object" &&
+            "description" in handler
+          ) {
+            const h = handler as Record<string, unknown>;
+            if (h["description"] !== undefined)
+              entry.description = h["description"] as string;
+            if (h["capability"] !== undefined)
+              entry.capability = h["capability"] as "read" | "write" | "external";
+          }
+          routeRegistry.push(entry);
+          // Mount the handler on the Hono app
+          const m = method.toLowerCase() as "get" | "post" | "put" | "delete" | "patch";
+          if (typeof handler === "function") {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            (app as any)[m](path, handler);
+          }
+        },
+        addPolicy(_policy: unknown) {
+          // Policies are referenced by key in defineAPI, stored externally
+        },
+        addMiddleware(path: string, middleware: unknown) {
+          if (
+            middleware &&
+            typeof middleware === "object" &&
+            "handler" in middleware
+          ) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const mw = middleware as { handler: (args: any) => Promise<unknown> };
+            app.use(path, async (c, next) => {
+              await mw.handler({ ctx: c, next });
+            });
+          }
+        },
+        config: config as unknown as Record<string, unknown>,
+      };
+      await plugin.setup(ctx);
+    }
+  }
 
   return { app, routeRegistry, registerAPI };
 }

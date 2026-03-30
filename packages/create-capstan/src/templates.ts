@@ -799,6 +799,32 @@ const langchainTools = registry.toLangChain({ baseUrl: "http://localhost:3000" }
 // Use with LangChain agents, chains, or other LangChain-compatible tooling
 \`\`\`
 
+## OAuth Providers (Social Login)
+
+Capstan includes built-in OAuth helpers for Google and GitHub. \`createOAuthHandlers()\` manages the full authorization code flow: CSRF state, token exchange, user info fetching, and JWT session creation.
+
+\`\`\`typescript
+import { googleProvider, githubProvider, createOAuthHandlers } from "@zauso-ai/capstan-auth";
+
+const oauth = createOAuthHandlers({
+  providers: [
+    googleProvider({
+      clientId: process.env.GOOGLE_CLIENT_ID!,
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+    }),
+    githubProvider({
+      clientId: process.env.GITHUB_CLIENT_ID!,
+      clientSecret: process.env.GITHUB_CLIENT_SECRET!,
+    }),
+  ],
+  sessionSecret: process.env.SESSION_SECRET!,
+});
+
+// Mount these handlers:
+// GET /auth/login/:provider  — redirects to OAuth provider
+// GET /auth/callback         — handles callback, creates session, redirects to /
+\`\`\`
+
 ## Authentication — Advanced
 
 ### DPoP Sender-Constrained Tokens (RFC 9449)
@@ -934,23 +960,30 @@ export default definePlugin({
 
 ## Pluggable State Stores (KeyValueStore)
 
-Capstan uses a \`KeyValueStore<T>\` interface for approvals, rate limiting, and DPoP replay detection. By default, an in-memory \`MemoryStore\` is used. For production, swap to Redis or any external backend:
+Capstan uses a \`KeyValueStore<T>\` interface for approvals, rate limiting, DPoP replay detection, and audit logging. By default, an in-memory \`MemoryStore\` is used. For production, use the built-in \`RedisStore\` or implement a custom adapter:
 
 \`\`\`typescript
+import Redis from "ioredis";
 import {
+  RedisStore,
   setApprovalStore,
   setRateLimitStore,
   setDpopReplayStore,
+  setAuditStore,
 } from "@zauso-ai/capstan-core";
-import { createRedisStore } from "./my-redis-store.js"; // your adapter
+
+const redis = new Redis(process.env.REDIS_URL);
 
 // Replace in-memory stores with Redis-backed stores
-setApprovalStore(createRedisStore("approvals"));
-setRateLimitStore(createRedisStore("rate-limits"));
-setDpopReplayStore(createRedisStore("dpop-replay"));
+setApprovalStore(new RedisStore(redis, "approvals:"));
+setRateLimitStore(new RedisStore(redis, "ratelimit:"));
+setDpopReplayStore(new RedisStore(redis, "dpop:"));
+setAuditStore(new RedisStore(redis, "audit:"));
 \`\`\`
 
-Implement the \`KeyValueStore<T>\` interface:
+\`RedisStore\` uses \`ioredis\` (optional peer dependency), supports TTL-based expiration, and prefixes keys to avoid collisions.
+
+The \`KeyValueStore<T>\` interface:
 
 \`\`\`typescript
 interface KeyValueStore<T> {
@@ -958,7 +991,7 @@ interface KeyValueStore<T> {
   set(key: string, value: T, ttlMs?: number): Promise<void>;
   delete(key: string): Promise<void>;
   has(key: string): Promise<boolean>;
-  values(): Promise<T[]>;
+  keys(): Promise<string[]>;
   clear(): Promise<void>;
 }
 \`\`\`

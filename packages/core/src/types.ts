@@ -104,6 +104,7 @@ export interface CapstanConfig {
     port?: number;
     host?: string;
   };
+  plugins?: Array<{ name: string; version?: string; setup: (ctx: unknown) => void | Promise<void> }>;
 }
 
 /** Route metadata for the agent manifest system. */

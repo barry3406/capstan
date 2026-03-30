@@ -57,5 +57,35 @@ export { RedisStore } from "./redis-store.js";
 export { defineRateLimit, clearRateLimitStore } from "./ratelimit.js";
 export type { RateLimitConfig } from "./ratelimit.js";
 
+export {
+  Counter,
+  Histogram,
+  counter,
+  histogram,
+  serializeMetrics,
+  resetMetrics,
+} from "./metrics.js";
+
+export { definePlugin } from "./plugin.js";
+export type { CapstanPlugin, CapstanPluginContext } from "./plugin.js";
+
+export { setApprovalStore } from "./approval.js";
+export { setRateLimitStore } from "./ratelimit.js";
+
+export {
+  defineEvent,
+  onEvent,
+  emitEvent,
+  getEventBus,
+  resetEventBus,
+} from "./events.js";
+export type { EventDefinition } from "./events.js";
+
+export { defineWorker } from "./worker.js";
+export type { WorkerDefinition } from "./worker.js";
+
+export { CircuitBreaker, CircuitOpenError } from "./circuit-breaker.js";
+export type { CircuitBreakerConfig, CircuitState } from "./circuit-breaker.js";
+
 export { verifyCapstanApp, renderRuntimeVerifyText } from "./verify.js";
 export type { VerifyReport, VerifyDiagnostic, VerifyStep } from "./verify.js";

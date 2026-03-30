@@ -12,7 +12,7 @@
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Tests](https://img.shields.io/badge/tests-599%20passing-brightgreen?logo=bun&logoColor=white)](https://bun.sh)
+[![Tests](https://img.shields.io/badge/tests-628%20passing-brightgreen?logo=bun&logoColor=white)](https://bun.sh)
 [![Version](https://img.shields.io/badge/version-1.0.0--beta.6-orange)](https://github.com/barry3406/capstan)
 [![ESM](https://img.shields.io/badge/ESM-only-blue)](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Modules)
 
@@ -380,6 +380,7 @@ Capstan 内置多层安全防护：
 
 ### 安全与身份
 
+- **OAuth 社交登录** — 内置 Google、GitHub 提供者，`createOAuthHandlers()` 自动完成授权流程与会话创建
 - **JWT 会话 + Agent API Key 认证** — 人类与 Agent 双轨认证
 - **DPoP（RFC 9449）** — 令牌绑定证明，防止令牌重放攻击
 - **SPIFFE / mTLS 工作负载身份** — 服务间零信任通信，基于 SPIFFE ID 的工作负载级身份验证
@@ -390,7 +391,10 @@ Capstan 内置多层安全防护：
 ### 插件与扩展
 
 - **`definePlugin()` 插件系统** — 通过 `addRoute`、`addPolicy`、`addMiddleware` 扩展应用；在 config 中通过 `plugins: []` 加载
-- **可插拔状态存储** — `KeyValueStore<T>` 接口，默认使用 `MemoryStore`；通过 `setApprovalStore()`、`setRateLimitStore()`、`setDpopReplayStore()` 切换到 Redis 或其他外部后端
+- **可插拔状态存储** — `KeyValueStore<T>` 接口，默认使用 `MemoryStore`；通过 `setApprovalStore()`、`setRateLimitStore()`、`setDpopReplayStore()`、`setAuditStore()` 切换到 Redis 或其他外部后端
+- **Redis 状态后端** — 内置 `RedisStore` 适配器，用于生产环境的持久化状态存储
+- **OAuth 提供者** — 内置 `googleProvider()`、`githubProvider()` 和 `createOAuthHandlers()`，支持社交登录并自动创建会话
+- **部署适配器** — 内含 Vercel 和 Fly.io 部署骨架
 
 ### 合规
 
@@ -457,7 +461,7 @@ npx capstan start
 | `@zauso-ai/capstan-core` | Hono 服务器、`defineAPI`、`defineMiddleware`、`definePolicy`、审批工作流、验证器 |
 | `@zauso-ai/capstan-router` | 文件路由（`.page.tsx`、`.api.ts`、`_layout.tsx`、`_middleware.ts`） |
 | `@zauso-ai/capstan-db` | Drizzle ORM、`defineModel`、字段/关联辅助函数、数据迁移、自动 CRUD（SQLite、PostgreSQL、MySQL） |
-| `@zauso-ai/capstan-auth` | JWT 会话、Agent API Key 认证、权限检查（`"human"` / `"agent"` / `"anonymous"`） |
+| `@zauso-ai/capstan-auth` | JWT 会话、Agent API Key 认证、OAuth 提供者（Google、GitHub）、权限检查（`"human"` / `"agent"` / `"anonymous"`） |
 | `@zauso-ai/capstan-agent` | `CapabilityRegistry`、MCP 服务器（带类型参数）、A2A 适配器（SSE）、OpenAPI 生成器 |
 | `@zauso-ai/capstan-react` | SSR + loader、布局组件、`Outlet`、客户端水合 |
 | `@zauso-ai/capstan-dev` | 开发服务器，支持文件监听、路由热重载、MCP/A2A 端点 |
@@ -511,7 +515,7 @@ git clone https://github.com/barry3406/capstan.git
 cd capstan
 npm install
 npm run build        # 构建 9 个运行时包
-npm run test:new     # Bun 测试（599 项测试，约 6s）
+npm run test:new     # Bun 测试（628 项测试，约 7s）
 ```
 
 ### 开发规范
@@ -525,7 +529,8 @@ npm run test:new     # Bun 测试（599 项测试，约 6s）
 
 - 更多脚手架模板（目前支持 `blank` 和 `tickets`）
 - 更多集成和端到端测试
-- OAuth 提供者（Google、GitHub 等）
+- 更多 OAuth 提供者（Google 和 GitHub 之外的）
+- 更多部署适配器（AWS Lambda、Cloudflare Workers）
 
 ---
 

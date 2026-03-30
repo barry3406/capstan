@@ -562,3 +562,64 @@ You can also place pre-built CSS files directly in `app/public/` for static serv
 ```
 app/public/vendor.css  -->  GET /vendor.css
 ```
+
+## OAuth Providers
+
+Capstan includes built-in OAuth provider helpers for social login with Google and GitHub. The `createOAuthHandlers()` function returns route handlers that manage the full authorization code flow automatically.
+
+```typescript
+import { googleProvider, githubProvider, createOAuthHandlers } from "@zauso-ai/capstan-auth";
+
+const oauth = createOAuthHandlers({
+  providers: [
+    googleProvider({
+      clientId: process.env.GOOGLE_CLIENT_ID!,
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+    }),
+    githubProvider({
+      clientId: process.env.GITHUB_CLIENT_ID!,
+      clientSecret: process.env.GITHUB_CLIENT_SECRET!,
+    }),
+  ],
+  sessionSecret: process.env.SESSION_SECRET!,
+});
+
+// Mount: GET /auth/login/:provider  and  GET /auth/callback
+```
+
+The flow handles CSRF state validation, token exchange, user info retrieval, and JWT session creation. After a successful login, the user receives a `capstan_session` cookie and is redirected to `/`.
+
+## Redis State Backend
+
+By default, Capstan stores approval state, rate limit counters, DPoP replay caches, and audit logs in memory. For production deployments that require persistence or multi-instance sharing, swap to the built-in `RedisStore`:
+
+```typescript
+import Redis from "ioredis";
+import { RedisStore, setApprovalStore, setRateLimitStore, setDpopReplayStore, setAuditStore } from "@zauso-ai/capstan-core";
+
+const redis = new Redis(process.env.REDIS_URL);
+
+setApprovalStore(new RedisStore(redis, "approvals:"));
+setRateLimitStore(new RedisStore(redis, "ratelimit:"));
+setDpopReplayStore(new RedisStore(redis, "dpop:"));
+setAuditStore(new RedisStore(redis, "audit:"));
+```
+
+`RedisStore` implements the `KeyValueStore<T>` interface and supports TTL-based expiration, key enumeration via `keys()`, and configurable key prefixes to avoid collisions when multiple apps share a Redis instance.
+
+## Deployment
+
+### Production Build & Start
+
+```bash
+npx capstan build    # Compile TS, generate route manifest, production server entry
+npx capstan start    # Start the production server
+```
+
+### Vercel
+
+Capstan includes a Vercel deployment adapter skeleton. Configure your `vercel.json` to use the Capstan build output.
+
+### Fly.io
+
+Capstan includes a Fly.io deployment adapter skeleton. Use `fly launch` with a Dockerfile that runs `capstan build && capstan start`.

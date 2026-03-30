@@ -416,6 +416,39 @@ function setDpopReplayStore(store: KeyValueStore<boolean>): void
 
 ---
 
+### setAuditStore(store)
+
+Replace the default in-memory audit log store with a custom `KeyValueStore`.
+
+```typescript
+function setAuditStore(store: KeyValueStore<AuditEntry>): void
+```
+
+---
+
+### RedisStore
+
+Redis-backed implementation of `KeyValueStore<T>`. Uses `ioredis` (optional peer dependency) for communication. All keys are prefixed with a configurable namespace to avoid collisions.
+
+```typescript
+class RedisStore<T> implements KeyValueStore<T> {
+  constructor(redis: any, prefix?: string); // default prefix: "capstan:"
+}
+```
+
+**Usage:**
+
+```typescript
+import Redis from "ioredis";
+import { RedisStore, setApprovalStore, setAuditStore } from "@zauso-ai/capstan-core";
+
+const redis = new Redis();
+setApprovalStore(new RedisStore(redis, "myapp:approvals:"));
+setAuditStore(new RedisStore(redis, "myapp:audit:"));
+```
+
+---
+
 ### defineCompliance(config)
 
 Declare EU AI Act compliance metadata and enable audit logging.
@@ -850,9 +883,75 @@ function derivePermission(
 
 ---
 
+### googleProvider(opts)
+
+Create a pre-configured Google OAuth provider.
+
+```typescript
+function googleProvider(opts: {
+  clientId: string;
+  clientSecret: string;
+}): OAuthProvider
+```
+
+Returns an `OAuthProvider` configured with Google's authorize, token, and user info endpoints and `["openid", "email", "profile"]` scopes.
+
+---
+
+### githubProvider(opts)
+
+Create a pre-configured GitHub OAuth provider.
+
+```typescript
+function githubProvider(opts: {
+  clientId: string;
+  clientSecret: string;
+}): OAuthProvider
+```
+
+Returns an `OAuthProvider` configured with GitHub's authorize, token, and user info endpoints and `["user:email"]` scopes.
+
+---
+
+### createOAuthHandlers(config, fetchFn?)
+
+Create OAuth route handlers for the full authorization code flow.
+
+```typescript
+function createOAuthHandlers(
+  config: OAuthConfig,
+  fetchFn?: typeof globalThis.fetch,
+): OAuthHandlers
+
+interface OAuthConfig {
+  providers: OAuthProvider[];
+  callbackPath?: string; // default: "/auth/callback"
+  sessionSecret: string;
+}
+
+interface OAuthHandlers {
+  login: (request: Request, providerName: string) => Response;
+  callback: (request: Request) => Promise<Response>;
+}
+```
+
+The `login` handler redirects to the OAuth provider with a CSRF state parameter. The `callback` handler validates state, exchanges the authorization code for an access token, fetches user info, and creates a signed JWT session cookie.
+
+---
+
 ### Types
 
 ```typescript
+interface OAuthProvider {
+  name: string;
+  authorizeUrl: string;
+  tokenUrl: string;
+  userInfoUrl: string;
+  clientId: string;
+  clientSecret: string;
+  scopes: string[];
+}
+
 interface SessionPayload {
   userId: string;
   email?: string;

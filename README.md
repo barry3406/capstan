@@ -12,7 +12,7 @@ One `defineAPI()` call. Four protocol surfaces. Humans and AI agents, served sim
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Tests](https://img.shields.io/badge/tests-599%20passing-brightgreen?logo=bun&logoColor=white)](https://bun.sh)
+[![Tests](https://img.shields.io/badge/tests-628%20passing-brightgreen?logo=bun&logoColor=white)](https://bun.sh)
 [![Version](https://img.shields.io/badge/version-1.0.0--beta.6-orange)](https://github.com/barry3406/capstan)
 [![ESM](https://img.shields.io/badge/ESM-only-blue)](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Modules)
 
@@ -101,6 +101,9 @@ Think of it as **Next.js if it were designed from day one for a world where half
 - **Plugin system** — `definePlugin()` to add routes, policies, and middleware; load via `plugins: []` in config
 - **Pluggable state stores** — `KeyValueStore<T>` interface with `MemoryStore` default; swap to Redis or any external backend via `setApprovalStore()`, `setRateLimitStore()`, `setDpopReplayStore()`
 - **EU AI Act compliance** — `defineCompliance()` with risk level, audit logging, and transparency; automatic `GET /capstan/audit` endpoint
+- **OAuth providers** — built-in `googleProvider()`, `githubProvider()`, and `createOAuthHandlers()` for social login with automatic session creation
+- **Redis state backend** — `RedisStore` adapter for `KeyValueStore<T>`, plus `setAuditStore()` for Redis-backed audit logging
+- **Deployment adapters** — Vercel and Fly.io deployment skeletons included
 - **CSS pipeline** — Lightning CSS processing built-in, Tailwind v4 auto-detection, zero-config
 - **Interactive CLI** — colored output, grouped help, fuzzy command matching, `@clack/prompts` interactive scaffolder with auto-install
 
@@ -457,7 +460,7 @@ Capstan ships 9 runtime packages:
 | `@zauso-ai/capstan-core` | Hono server, `defineAPI`, `defineMiddleware`, `definePolicy`, approval workflow, 8-step verifier |
 | `@zauso-ai/capstan-router` | File-based routing (`.page.tsx`, `.api.ts`, `_layout.tsx`, `_middleware.ts`) |
 | `@zauso-ai/capstan-db` | Drizzle ORM, `defineModel`, field/relation helpers, migrations, auto CRUD, vector fields, `defineEmbedding`, hybrid search (SQLite, PostgreSQL, MySQL) |
-| `@zauso-ai/capstan-auth` | JWT sessions, API key auth, DPoP (RFC 9449), SPIFFE/mTLS, token-aware rate limiting (`"human"` / `"agent"` / `"anonymous"`) |
+| `@zauso-ai/capstan-auth` | JWT sessions, API key auth, OAuth providers (Google, GitHub), DPoP (RFC 9449), SPIFFE/mTLS, token-aware rate limiting (`"human"` / `"agent"` / `"anonymous"`) |
 | `@zauso-ai/capstan-agent` | `CapabilityRegistry`, MCP server (stdio + Streamable HTTP), MCP client, A2A adapter (SSE), OpenAPI generator, LangChain integration |
 | `@zauso-ai/capstan-react` | SSR with loaders, layouts, `Outlet`, selective hydration (`full` / `visible` / `none`), RSC foundations |
 | `@zauso-ai/capstan-dev` | Dev server with file watching, hot route reload, MCP/A2A endpoints |
@@ -511,7 +514,7 @@ git clone https://github.com/barry3406/capstan.git
 cd capstan
 npm install
 npm run build        # Build 9 runtime packages
-npm run test:new     # Bun tests (599 tests, ~6s)
+npm run test:new     # Bun tests (628 tests, ~7s)
 ```
 
 ### Conventions
@@ -525,8 +528,9 @@ npm run test:new     # Bun tests (599 tests, ~6s)
 
 - Additional scaffolder templates (beyond `blank` and `tickets`)
 - More integration, end-to-end, and MCP contract tests
-- OAuth providers (Google, GitHub, etc.)
+- Additional OAuth providers (beyond Google and GitHub)
 - Additional embedding adapters (Cohere, local models)
+- More deployment adapters (AWS Lambda, Cloudflare Workers)
 
 ---
 

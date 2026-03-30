@@ -12,7 +12,7 @@
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Tests](https://img.shields.io/badge/tests-599%20passing-brightgreen?logo=bun&logoColor=white)](https://bun.sh)
+[![Tests](https://img.shields.io/badge/tests-628%20passing-brightgreen?logo=bun&logoColor=white)](https://bun.sh)
 [![Version](https://img.shields.io/badge/version-1.0.0--beta.6-orange)](https://github.com/barry3406/capstan)
 [![ESM](https://img.shields.io/badge/ESM-only-blue)](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Modules)
 
@@ -106,6 +106,7 @@
 - **Capstan Agent 清單** — `/.well-known/capstan.json` 能力探索
 
 ### 安全性
+- **OAuth 社交登入** — 內建 Google、GitHub 提供者，`createOAuthHandlers()` 自動完成授權流程與工作階段建立
 - **DPoP (RFC 9449)** — 展示證明持有者（Demonstration of Proof-of-Possession）令牌綁定
 - **SPIFFE/mTLS 工作負載身份** — 服務間安全通訊的工作負載身份驗證
 - **Token 級別限流** — 區分人類與 Agent 的差異化限流策略
@@ -115,7 +116,10 @@
 
 ### 外掛與擴充
 - **`definePlugin()` 外掛系統** — 透過 `addRoute`、`addPolicy`、`addMiddleware` 擴充應用；在 config 中以 `plugins: []` 載入
-- **可插拔狀態存儲** — `KeyValueStore<T>` 介面，預設使用 `MemoryStore`；透過 `setApprovalStore()`、`setRateLimitStore()`、`setDpopReplayStore()` 切換至 Redis 或其他外部後端
+- **可插拔狀態存儲** — `KeyValueStore<T>` 介面，預設使用 `MemoryStore`；透過 `setApprovalStore()`、`setRateLimitStore()`、`setDpopReplayStore()`、`setAuditStore()` 切換至 Redis 或其他外部後端
+- **Redis 狀態後端** — 內建 `RedisStore` 適配器，用於正式環境的持久化狀態儲存
+- **OAuth 提供者** — 內建 `googleProvider()`、`githubProvider()` 與 `createOAuthHandlers()`，支援社交登入並自動建立工作階段
+- **部署適配器** — 內含 Vercel 與 Fly.io 部署骨架
 
 ### 合規
 - **EU AI Act 合規原語** — `defineCompliance()` 設定風險等級、稽核日誌與透明度聲明；自動產生 `GET /capstan/audit` 端點
@@ -453,7 +457,7 @@ Capstan 包含 9 個執行時期套件：
 | `@zauso-ai/capstan-core` | Hono 伺服器、`defineAPI`、`defineMiddleware`、`definePolicy`、核准工作流程、驗證器 |
 | `@zauso-ai/capstan-router` | 檔案式路由（`.page.tsx`、`.api.ts`、`_layout.tsx`、`_middleware.ts`） |
 | `@zauso-ai/capstan-db` | Drizzle ORM、`defineModel`、欄位/關聯輔助函式、遷移、自動 CRUD（SQLite、PostgreSQL、MySQL） |
-| `@zauso-ai/capstan-auth` | JWT 工作階段、Agent 用 API 金鑰驗證、權限檢查（`"human"` / `"agent"` / `"anonymous"`） |
+| `@zauso-ai/capstan-auth` | JWT 工作階段、Agent 用 API 金鑰驗證、OAuth 提供者（Google、GitHub）、權限檢查（`"human"` / `"agent"` / `"anonymous"`） |
 | `@zauso-ai/capstan-agent` | `CapabilityRegistry`、MCP 伺服器（型別化參數）、A2A 轉接器（SSE）、OpenAPI 產生器 |
 | `@zauso-ai/capstan-react` | 搭配 loader 的 SSR、版面配置、`Outlet`、hydration |
 | `@zauso-ai/capstan-dev` | 開發伺服器，含檔案監看、即時路由重新載入、MCP/A2A 端點 |
@@ -490,7 +494,7 @@ git clone https://github.com/barry3406/capstan.git
 cd capstan
 npm install
 npm run build        # 建置 9 個執行時期套件
-npm run test:new     # Bun 測試（599 項測試，約 6s）
+npm run test:new     # Bun 測試（628 項測試，約 7s）
 ```
 
 ### 開發慣例
@@ -504,7 +508,8 @@ npm run test:new     # Bun 測試（599 項測試，約 6s）
 
 - 更多鷹架範本（除 `blank` 與 `tickets` 之外）
 - 更多整合測試與端對端測試
-- OAuth 提供者（Google、GitHub 等）
+- 更多 OAuth 提供者（Google 與 GitHub 之外的）
+- 更多部署適配器（AWS Lambda、Cloudflare Workers）
 
 ---
 
