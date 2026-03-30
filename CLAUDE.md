@@ -106,11 +106,22 @@ Output includes `repairChecklist` with `fixCategory` and `autoFixable` for AI co
 - Target: ES2022
 - `import type` for type-only imports
 
-## Scaffolding Template Sync
+## Documentation Sync
 
-`packages/create-capstan/src/templates.ts` contains the `agentsMd()` function that generates the `AGENTS.md` for every new Capstan project. This file is the primary documentation surface for AI agents working on Capstan apps.
+Whenever you add, change, or remove a user-facing framework capability (new API, new hook, new config option, behavioral change, etc.), you MUST update **all** of the following in the same commit:
 
-**Rule:** Whenever you add, change, or remove a user-facing framework capability (new API, new hook, new config option, behavioral change, etc.), you MUST update `agentsMd()` in `templates.ts` to reflect the change in the same commit. The scaffolded AGENTS.md must always accurately describe what the framework can do.
+1. **Scaffolding template** — `packages/create-capstan/src/templates.ts` → `agentsMd()` function. This generates the `AGENTS.md` that ships with every new Capstan project.
+2. **README files** — `README.md`, `README.zh-CN.md`, `README.zh-TW.md`. Keep feature lists, code examples, and comparison tables current across all three languages.
+3. **Docs** — the relevant file(s) under `docs/`:
+   - `docs/getting-started.md` — setup & quick start
+   - `docs/core-concepts.md` — defineAPI, multi-protocol
+   - `docs/api-reference.md` — API surface for @zauso-ai/capstan-core
+   - `docs/database.md` — defineModel, CRUD, migrations
+   - `docs/authentication.md` — JWT sessions, API key auth
+   - `docs/deployment.md` — production build & start
+   - `docs/comparison.md` — Capstan vs Next.js feature table
+
+Only update the files relevant to the change — not every file every time. The goal is that docs, READMEs, and scaffolded AGENTS.md never drift from the framework's actual capabilities.
 
 ## Testing
 
