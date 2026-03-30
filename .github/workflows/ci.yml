@@ -31,7 +31,7 @@ jobs:
           bun-version: "1.x"
 
       - name: Install dependencies
-        run: npm install --legacy-peer-deps
+        run: npm ci
 
       - name: Build core
         run: npm run build --workspace packages/core
