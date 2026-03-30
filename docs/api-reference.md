@@ -332,6 +332,152 @@ function renderRuntimeVerifyText(report: VerifyReport): string
 
 ---
 
+### definePlugin(def)
+
+Define a reusable plugin that can add routes, policies, and middleware to a Capstan app.
+
+```typescript
+function definePlugin(def: PluginDefinition): PluginDefinition
+
+interface PluginDefinition {
+  name: string;
+  version?: string;
+  setup: (ctx: PluginSetupContext) => void;
+}
+
+interface PluginSetupContext {
+  addRoute: (method: HttpMethod, path: string, handler: APIDefinition) => void;
+  addPolicy: (policy: PolicyDefinition) => void;
+  addMiddleware: (path: string, handler: MiddlewareDefinition["handler"]) => void;
+  config: Readonly<CapstanConfig>;
+}
+```
+
+Load plugins via the `plugins` array in `defineConfig()`.
+
+---
+
+### KeyValueStore\<T\>
+
+Pluggable key-value store interface used by approvals, rate limiting, and DPoP replay detection. Swap the default in-memory store for Redis or any external backend.
+
+```typescript
+interface KeyValueStore<T> {
+  get(key: string): Promise<T | undefined>;
+  set(key: string, value: T, ttlMs?: number): Promise<void>;
+  delete(key: string): Promise<void>;
+  has(key: string): Promise<boolean>;
+  values(): Promise<T[]>;
+  clear(): Promise<void>;
+}
+```
+
+---
+
+### MemoryStore
+
+Default in-memory implementation of `KeyValueStore<T>`.
+
+```typescript
+class MemoryStore<T> implements KeyValueStore<T> {
+  constructor();
+}
+```
+
+---
+
+### setApprovalStore(store)
+
+Replace the default in-memory approval store with a custom `KeyValueStore`.
+
+```typescript
+function setApprovalStore(store: KeyValueStore<PendingApproval>): void
+```
+
+---
+
+### setRateLimitStore(store)
+
+Replace the default in-memory rate limit store.
+
+```typescript
+function setRateLimitStore(store: KeyValueStore<RateLimitEntry>): void
+```
+
+---
+
+### setDpopReplayStore(store)
+
+Replace the default in-memory DPoP replay cache.
+
+```typescript
+function setDpopReplayStore(store: KeyValueStore<boolean>): void
+```
+
+---
+
+### defineCompliance(config)
+
+Declare EU AI Act compliance metadata and enable audit logging.
+
+```typescript
+function defineCompliance(config: ComplianceConfig): void
+
+interface ComplianceConfig {
+  riskLevel: "minimal" | "limited" | "high" | "unacceptable";
+  auditLog?: boolean;
+  transparency?: {
+    description?: string;
+    provider?: string;
+    contact?: string;
+  };
+}
+```
+
+When `auditLog` is `true`, every `defineAPI()` handler invocation is automatically recorded. The audit log is served at `GET /capstan/audit`.
+
+---
+
+### recordAuditEntry(entry)
+
+Manually record a custom audit log entry.
+
+```typescript
+function recordAuditEntry(entry: {
+  action: string;
+  authType?: string;
+  userId?: string;
+  resource?: string;
+  detail?: unknown;
+}): void
+```
+
+---
+
+### getAuditLog(filter?)
+
+Retrieve audit log entries, optionally filtered.
+
+```typescript
+function getAuditLog(filter?: {
+  action?: string;
+  authType?: string;
+  since?: string;
+}): AuditEntry[]
+```
+
+---
+
+### clearAuditLog()
+
+Clear all audit log entries (useful in tests).
+
+```typescript
+function clearAuditLog(): void
+```
+
+---
+
 ### Types
 
 ```typescript

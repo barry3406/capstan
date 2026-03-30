@@ -411,6 +411,80 @@ Each diagnostic includes:
 
 This output is designed for AI agents to consume, understand, and act on -- enabling a self-repair loop where the agent runs `verify`, reads the diagnostics, applies fixes, and re-verifies.
 
+## Plugin System
+
+Extend your Capstan app with reusable plugins. A plugin can add routes, policies, and middleware via the setup context.
+
+```typescript
+import { definePlugin } from "@zauso-ai/capstan-core";
+
+export default definePlugin({
+  name: "my-analytics",
+  version: "1.0.0",
+  setup(ctx) {
+    // Add an API route
+    ctx.addRoute("GET", "/analytics/events", {
+      description: "List analytics events",
+      capability: "read",
+      handler: async ({ input, ctx }) => ({ events: [] }),
+    });
+
+    // Add a policy
+    ctx.addPolicy({
+      key: "analyticsAccess",
+      title: "Analytics Access",
+      effect: "deny",
+      async check({ ctx }) {
+        if (ctx.auth.role !== "analyst") {
+          return { effect: "deny", reason: "Analyst role required" };
+        }
+        return { effect: "allow" };
+      },
+    });
+
+    // Add middleware scoped to a path
+    ctx.addMiddleware("/analytics", async ({ request, ctx, next }) => {
+      console.log("Analytics request:", request.url);
+      return next();
+    });
+  },
+});
+```
+
+Load plugins in your config:
+
+```typescript
+// capstan.config.ts
+import { defineConfig } from "@zauso-ai/capstan-core";
+import analyticsPlugin from "./plugins/analytics.js";
+
+export default defineConfig({
+  plugins: [
+    analyticsPlugin,
+  ],
+});
+```
+
+## EU AI Act Compliance
+
+Capstan provides built-in compliance primitives for the EU AI Act. Use `defineCompliance()` to declare risk level, enable audit logging, and attach transparency metadata.
+
+```typescript
+import { defineCompliance } from "@zauso-ai/capstan-core";
+
+defineCompliance({
+  riskLevel: "limited",              // "minimal" | "limited" | "high" | "unacceptable"
+  auditLog: true,                    // Enable automatic audit logging
+  transparency: {
+    description: "AI-powered ticket routing system",
+    provider: "Acme Corp",
+    contact: "compliance@acme.example",
+  },
+});
+```
+
+When `auditLog` is enabled, every `defineAPI()` handler invocation is recorded with timestamp, auth context, capability, and input/output summaries. The audit log is queryable at `GET /capstan/audit` (requires authentication). Use `recordAuditEntry()` for custom entries, `getAuditLog()` to read programmatically, and `clearAuditLog()` for testing.
+
 ## OpenTelemetry Tracing
 
 Capstan instruments all protocol surfaces with OpenTelemetry, providing unified tracing across HTTP, MCP, A2A, and OpenAPI requests. Each request produces a trace span tagged with the protocol, route, capability, and auth type.

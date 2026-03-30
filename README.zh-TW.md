@@ -112,7 +112,15 @@
 - **CSRF 防護** — 跨站請求偽造防護
 - **可設定 CORS** — 彈性的跨來源資源共享設定
 
+### 外掛與擴充
+- **`definePlugin()` 外掛系統** — 透過 `addRoute`、`addPolicy`、`addMiddleware` 擴充應用；在 config 中以 `plugins: []` 載入
+- **可插拔狀態存儲** — `KeyValueStore<T>` 介面，預設使用 `MemoryStore`；透過 `setApprovalStore()`、`setRateLimitStore()`、`setDpopReplayStore()` 切換至 Redis 或其他外部後端
+
+### 合規
+- **EU AI Act 合規原語** — `defineCompliance()` 設定風險等級、稽核日誌與透明度聲明；自動產生 `GET /capstan/audit` 端點
+
 ### 開發與建置
+- **互動式 CLI** — 彩色輸出、分組說明、模糊比對、`@clack/prompts` 互動式鷹架及自動安裝
 - **多執行環境適配器** — 同時支援 Node.js 與 Bun 執行環境
 - **Turborepo 並行建構** — 利用 Turborepo 實現多套件並行建置
 - **OpenTelemetry 跨協議追蹤** — HTTP、MCP、A2A 跨協議的可觀測性追蹤

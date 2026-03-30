@@ -883,6 +883,57 @@ export default definePlugin({
   },
 });
 \`\`\`
+
+## Pluggable State Stores (KeyValueStore)
+
+Capstan uses a \`KeyValueStore<T>\` interface for approvals, rate limiting, and DPoP replay detection. By default, an in-memory \`MemoryStore\` is used. For production, swap to Redis or any external backend:
+
+\`\`\`typescript
+import {
+  setApprovalStore,
+  setRateLimitStore,
+  setDpopReplayStore,
+} from "@zauso-ai/capstan-core";
+import { createRedisStore } from "./my-redis-store.js"; // your adapter
+
+// Replace in-memory stores with Redis-backed stores
+setApprovalStore(createRedisStore("approvals"));
+setRateLimitStore(createRedisStore("rate-limits"));
+setDpopReplayStore(createRedisStore("dpop-replay"));
+\`\`\`
+
+Implement the \`KeyValueStore<T>\` interface:
+
+\`\`\`typescript
+interface KeyValueStore<T> {
+  get(key: string): Promise<T | undefined>;
+  set(key: string, value: T, ttlMs?: number): Promise<void>;
+  delete(key: string): Promise<void>;
+  has(key: string): Promise<boolean>;
+  values(): Promise<T[]>;
+  clear(): Promise<void>;
+}
+\`\`\`
+
+## EU AI Act Compliance
+
+Declare compliance metadata and enable automatic audit logging:
+
+\`\`\`typescript
+import { defineCompliance } from "@zauso-ai/capstan-core";
+
+defineCompliance({
+  riskLevel: "limited",           // "minimal" | "limited" | "high" | "unacceptable"
+  auditLog: true,                 // Log every handler invocation automatically
+  transparency: {
+    description: "AI ticket routing",
+    provider: "Acme Corp",
+    contact: "compliance@acme.example",
+  },
+});
+\`\`\`
+
+When \`auditLog: true\`, every \`defineAPI()\` handler call is recorded with timestamp, auth context, and I/O summary. Query the log at \`GET /capstan/audit\` or use \`getAuditLog()\` / \`clearAuditLog()\` programmatically.
 `;
 }
 

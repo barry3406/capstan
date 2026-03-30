@@ -386,8 +386,18 @@ Capstan 内置多层安全防护：
 - **CSRF 保护** — 自动防御跨站请求伪造攻击
 - **可配置 CORS** — 灵活的跨域资源共享策略
 
+### 插件与扩展
+
+- **`definePlugin()` 插件系统** — 通过 `addRoute`、`addPolicy`、`addMiddleware` 扩展应用；在 config 中通过 `plugins: []` 加载
+- **可插拔状态存储** — `KeyValueStore<T>` 接口，默认使用 `MemoryStore`；通过 `setApprovalStore()`、`setRateLimitStore()`、`setDpopReplayStore()` 切换到 Redis 或其他外部后端
+
+### 合规
+
+- **EU AI Act 合规原语** — `defineCompliance()` 配置风险等级、审计日志和透明度声明；自动生成 `GET /capstan/audit` 端点
+
 ### 基础设施与工具
 
+- **交互式 CLI** — 彩色输出、分组帮助信息、模糊匹配、`@clack/prompts` 交互式脚手架及自动安装
 - **多运行时适配器** — 同时支持 Node.js 和 Bun 运行时，自动选择最优适配器
 - **Turborepo 并行构建** — 利用 Turborepo 实现包级别的并行编译，大幅缩短构建时间
 - **OpenTelemetry 跨协议追踪** — 统一的可观测性，HTTP、MCP、A2A 请求链路全程追踪

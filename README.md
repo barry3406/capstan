@@ -98,6 +98,10 @@ Think of it as **Next.js if it were designed from day one for a world where half
 - **OpenTelemetry cross-protocol tracing** — traces span HTTP, MCP, and A2A calls automatically
 - **MCP test harness** — test your MCP tools in isolation with `capstan test:mcp`
 - **Cross-protocol contract testing** — verifier step 8 checks that HTTP, MCP, A2A, and OpenAPI all agree
+- **Plugin system** — `definePlugin()` to add routes, policies, and middleware; load via `plugins: []` in config
+- **Pluggable state stores** — `KeyValueStore<T>` interface with `MemoryStore` default; swap to Redis or any external backend via `setApprovalStore()`, `setRateLimitStore()`, `setDpopReplayStore()`
+- **EU AI Act compliance** — `defineCompliance()` with risk level, audit logging, and transparency; automatic `GET /capstan/audit` endpoint
+- **Interactive CLI** — colored output, grouped help, fuzzy command matching, `@clack/prompts` interactive scaffolder with auto-install
 
 ---
 
