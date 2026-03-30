@@ -101,6 +101,44 @@ defineAPI() --> CapabilityRegistry
    - **A2A**: Each route becomes a skill. A JSON-RPC handler processes `tasks/send` requests by routing to the matching skill.
    - **OpenAPI**: Each route becomes an operation. Path parameters, query parameters, request bodies, and response schemas are generated from the Zod definitions.
 
+### MCP Transports
+
+Capstan supports two MCP transports:
+
+- **stdio** -- for local tool use with Claude Desktop, Cursor, and similar clients. Start with `npx capstan mcp`.
+- **Streamable HTTP** -- for remote MCP access over HTTP. Automatically mounted at `POST /.well-known/mcp` when the dev server starts. Supports session management and server-sent events for streaming responses.
+
+### MCP Client
+
+Capstan can also act as an MCP client, consuming tools from external MCP servers:
+
+```typescript
+import { createMcpClient } from "@zauso-ai/capstan-agent";
+
+const client = createMcpClient({
+  url: "https://other-service.example.com/.well-known/mcp",
+  transport: "streamable-http", // or "stdio"
+});
+
+const tools = await client.listTools();
+const result = await client.callTool("get_weather", { city: "Tokyo" });
+```
+
+This enables composing capabilities from multiple MCP-compatible services within your Capstan handlers.
+
+### LangChain Integration
+
+Export your registered capabilities as LangChain-compatible tools:
+
+```typescript
+import { toLangChainTools } from "@zauso-ai/capstan-agent";
+
+const tools = toLangChainTools(registry, {
+  filter: (route) => route.capability === "read",
+});
+// Returns LangChain StructuredTool[] for use with agents/chains
+```
+
 ### Auto-Generated Endpoints
 
 | Endpoint                         | Protocol   | Description                          |
@@ -108,7 +146,7 @@ defineAPI() --> CapabilityRegistry
 | `GET /.well-known/capstan.json`  | Capstan    | Agent manifest with all capabilities |
 | `GET /.well-known/agent.json`    | A2A        | Agent card with skills list          |
 | `POST /.well-known/a2a`         | A2A        | JSON-RPC task handler                |
-| `POST /.well-known/mcp`         | MCP        | MCP tool discovery                   |
+| `POST /.well-known/mcp`         | MCP        | Streamable HTTP MCP endpoint         |
 | `GET /openapi.json`             | OpenAPI    | OpenAPI 3.1 specification            |
 | `GET /capstan/approvals`        | Capstan    | Approval workflow management         |
 
@@ -350,6 +388,7 @@ npx capstan verify --json   # Structured JSON for AI agent consumption
 | typecheck   | `tsc --noEmit` passes                                            |
 | contracts   | Models match routes, policy references are valid                  |
 | manifest    | Agent manifest matches live routes on disk                        |
+| protocols   | Cross-protocol contract testing: verifies MCP tool schemas, A2A skill definitions, and OpenAPI spec all stay consistent with the source `defineAPI()` definitions |
 
 Steps are run in order. If an early step fails, dependent steps are skipped.
 
@@ -371,3 +410,27 @@ Each diagnostic includes:
 - `autoFixable`: Whether the issue can be fixed automatically
 
 This output is designed for AI agents to consume, understand, and act on -- enabling a self-repair loop where the agent runs `verify`, reads the diagnostics, applies fixes, and re-verifies.
+
+## OpenTelemetry Tracing
+
+Capstan instruments all protocol surfaces with OpenTelemetry, providing unified tracing across HTTP, MCP, A2A, and OpenAPI requests. Each request produces a trace span tagged with the protocol, route, capability, and auth type.
+
+Enable tracing in the config:
+
+```typescript
+export default defineConfig({
+  telemetry: {
+    enabled: true,
+    exporter: "otlp", // "otlp" | "console" | "none"
+    endpoint: env("OTEL_EXPORTER_OTLP_ENDPOINT"),
+    serviceName: "my-capstan-app",
+  },
+});
+```
+
+Traces include:
+- `capstan.protocol`: which protocol surface handled the request (http, mcp, a2a)
+- `capstan.route`: the matched route path
+- `capstan.capability`: read, write, or external
+- `capstan.auth.type`: human, agent, or anonymous
+- `capstan.policy.effect`: the policy decision (allow, deny, approve, redact)

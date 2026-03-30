@@ -19,6 +19,13 @@
 | **Approval workflow**       | Built-in human-in-the-loop                 | Not available                        |
 | **Verification**            | `capstan verify` (7-step AI TDD loop)      | `tsc` + linting                      |
 | **SSR**                     | React SSR with loaders                     | React Server Components              |
+| **Selective hydration**     | `<ServerOnly>` component                   | React Server Components (partial)    |
+| **RAG / vector search**     | Built-in `field.vector()`, `defineEmbedding()` | Not available                    |
+| **MCP client**              | Built-in `createMcpClient()`               | Not available                        |
+| **Rate limiting**           | Built-in `defineRateLimit()` per auth type | Requires middleware / third-party    |
+| **OpenTelemetry**           | Built-in cross-protocol tracing            | Requires manual instrumentation      |
+| **Workload identity**       | SPIFFE/mTLS via `X-Client-Cert`            | Not available                        |
+| **LangChain integration**   | `toLangChainTools()` from registry         | Not available                        |
 | **Ecosystem maturity**      | Early stage                                | Mature, large ecosystem              |
 
 ### When to use Capstan over Next.js
@@ -55,7 +62,7 @@ Mastra is a TypeScript framework for building AI agents and workflows.
 | **Policy engine**           | Built-in with approval workflow            | Not available                        |
 | **LLM integration**         | Framework-agnostic (agents call your APIs) | Built-in LLM orchestration          |
 | **Workflows**               | Via API composition                        | Built-in workflow engine             |
-| **RAG**                     | Not built-in                               | Built-in RAG pipeline                |
+| **RAG**                     | Built-in vector fields + embeddings        | Built-in RAG pipeline                |
 
 ### When to use Capstan over Mastra
 
@@ -125,9 +132,15 @@ LangGraph is a framework for building stateful, multi-actor AI applications usin
 | Policy engine                |    +    |    -    |   -    |     -     |
 | Approval workflow            |    +    |    -    |   -    |     ~     |
 | AI TDD verification          |    +    |    -    |   -    |     -     |
+| RAG / vector search          |    +    |    -    |   +    |     ~     |
+| MCP client                   |    +    |    -    |   +    |     -     |
+| Selective hydration          |    +    |    ~    |   -    |     -     |
+| Rate limiting (per auth type)|    +    |    -    |   -    |     -     |
+| OpenTelemetry tracing        |    +    |    -    |   -    |     -     |
+| Workload identity (SPIFFE)   |    +    |    -    |   -    |     -     |
+| LangChain integration        |    +    |    -    |   ~    |     +     |
 | LLM orchestration            |    -    |    -    |   +    |     +     |
 | Multi-agent workflows        |    -    |    -    |   +    |     +     |
-| RAG pipeline                 |    -    |    -    |   +    |     ~     |
 | Graph-based state machines   |    -    |    -    |   -    |     +     |
 | TypeScript-first             |    +    |    +    |   +    |     ~     |
 | Production maturity          |   beta  | mature  |  early |   early   |

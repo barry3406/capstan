@@ -46,15 +46,16 @@ Think of it as **Next.js if it were designed from day one for a world where half
               ┌──────────┐┌────────┐┌───────────┐┌─────────┐┌────────────┐
               │ HTTP/JSON ││  MCP   ││    A2A    ││ OpenAPI ││  Capstan   │
               │   API     ││ Tools  ││  Skills   ││  3.1    ││  Manifest  │
-              │  (Hono)   ││ (stdio)││ (Google)  ││  Spec   ││   .json    │
+              │  (Hono)   ││(stdio/ ││ (Google)  ││  Spec   ││   .json    │
+              │           ││ HTTP)  ││           ││         ││            │
               └──────────┘└────────┘└───────────┘└─────────┘└────────────┘
                    │           │          │            │           │
                 Browsers    Claude     Agent         Swagger    Agent
                  & apps    Desktop    networks       & SDKs   discovery
-                                    (SSE stream)
+                          & remote   (SSE stream)
 ```
 
-**Write once. Serve everywhere.** Your `defineAPI()` call becomes an HTTP endpoint, an MCP tool with typed Zod parameters for Claude Desktop, an A2A skill with SSE streaming for Google's agent-to-agent protocol, and an OpenAPI spec — all automatically.
+**Write once. Serve everywhere.** Your `defineAPI()` call becomes an HTTP endpoint, an MCP tool with typed Zod parameters for Claude Desktop (via stdio or Streamable HTTP), an A2A skill with SSE streaming for Google's agent-to-agent protocol, and an OpenAPI spec — all automatically.
 
 ---
 
@@ -72,10 +73,31 @@ Think of it as **Next.js if it were designed from day one for a world where half
 | **AI TDD loop** | None | None | `capstan verify --json` with repair checklist |
 | **Auto CRUD** | None | None | `defineModel()` generates typed route files |
 | **Database** | BYO | SQLAlchemy | Drizzle ORM (SQLite, PostgreSQL, MySQL) |
+| **Vector search / RAG** | Manual integration | Manual integration | Native `field.vector()`, `defineEmbedding`, hybrid search |
+| **MCP Client** | None | None | Consume external MCP servers from your handlers |
+| **Rate limiting by auth type** | DIY | DIY | Token-aware limits (human vs agent) built-in |
+| **Selective hydration** | Partial (RSC) | N/A | `full` / `visible` / `none` per page |
+| **OpenTelemetry** | Via plugin | Via middleware | Built-in cross-protocol tracing |
 | **Production** | `next build` / `next start` | Uvicorn | `capstan build` / `capstan start` |
 | **Full stack** | React SSR + API | API only | React SSR + API + Agent protocols |
 
 **The key insight:** every API you build is already an AI tool. No wrappers, no adapters, no second codebase.
+
+### Feature Highlights
+
+- **Multi-protocol from one definition** — HTTP, MCP (stdio + Streamable HTTP), A2A, OpenAPI from a single `defineAPI()` call
+- **MCP Client** — consume external MCP servers from within your handlers via `connectMCP()`
+- **Vector fields & RAG primitives** — `field.vector()`, `defineEmbedding`, and hybrid search built into the ORM
+- **LangChain integration** — use Capstan APIs as LangChain tools, or call LangChain chains from handlers
+- **Selective hydration** — per-page control (`full` / `visible` / `none`) to ship minimal JS to the client
+- **React Server Components foundations** — streaming SSR with async component support
+- **DPoP (RFC 9449) & SPIFFE/mTLS** — proof-of-possession tokens and workload identity for service-to-service auth
+- **Token-aware rate limiting** — separate rate-limit buckets for human sessions vs agent API keys
+- **Multi-runtime adapters** — runs on both Node.js and Bun
+- **Turborepo parallel builds** — monorepo packages build in dependency order with caching
+- **OpenTelemetry cross-protocol tracing** — traces span HTTP, MCP, and A2A calls automatically
+- **MCP test harness** — test your MCP tools in isolation with `capstan test:mcp`
+- **Cross-protocol contract testing** — verifier step 8 checks that HTTP, MCP, A2A, and OpenAPI all agree
 
 ---
 
@@ -210,6 +232,29 @@ export const Ticket = defineModel("ticket", {
 
 Run `capstan add api tickets` and Capstan generates fully typed CRUD route files with Zod validation, policy enforcement, and agent metadata — ready to customize. Database provider (SQLite, PostgreSQL, or MySQL) is configured in `capstan.config.ts` — all three are optional peer dependencies.
 
+### Vector Fields & RAG — Embeddings built into the ORM
+
+```typescript
+import { defineModel, field, defineEmbedding, openaiEmbeddings } from "@zauso-ai/capstan-db";
+
+// Vector field in model
+const Article = defineModel("article", {
+  fields: {
+    content: field.text(),
+    embedding: field.vector(1536),
+  },
+});
+
+// Auto-embed on insert
+defineEmbedding("article", {
+  sourceField: "content",
+  vectorField: "embedding",
+  adapter: openaiEmbeddings({ apiKey: process.env.OPENAI_API_KEY! }),
+});
+```
+
+`defineEmbedding` hooks into insert/update and generates embeddings automatically. Query with `vectorSearch("article", queryVec, { limit: 10 })` or use hybrid search to combine vector similarity with SQL filters.
+
 ### `definePolicy` — Permission policies with agent-aware effects
 
 ```typescript
@@ -250,7 +295,7 @@ When a policy returns `approve`, the request enters the **approval workflow** �
 
 ## 🔄 AI TDD Self-Loop
 
-Capstan includes a **verifier** designed for AI coding agents. When Claude Code, Cursor, or any AI assistant works on your project, it runs `capstan verify --json` after every change and uses the structured output to self-correct.
+Capstan includes an **8-step verifier** designed for AI coding agents. When Claude Code, Cursor, or any AI assistant works on your project, it runs `capstan verify --json` after every change and uses the structured output to self-correct.
 
 ```
    ┌───────────┐      ┌────────────┐      ┌─────────────────┐
@@ -272,7 +317,7 @@ Capstan includes a **verifier** designed for AI coding agents. When Claude Code,
                                         └─────────────────────┘
 ```
 
-### The 7-step verification cascade
+### The 8-step verification cascade
 
 ```bash
 $ npx capstan verify --json
@@ -298,7 +343,8 @@ $ npx capstan verify --json
     { "name": "models",     "status": "passed", "durationMs": 3 },
     { "name": "typecheck",  "status": "failed", "durationMs": 1200 },
     { "name": "contracts",  "status": "skipped" },
-    { "name": "manifest",   "status": "skipped" }
+    { "name": "manifest",   "status": "skipped" },
+    { "name": "protocols",  "status": "skipped" }
   ],
   "repairChecklist": [
     {
@@ -313,9 +359,11 @@ $ npx capstan verify --json
 }
 ```
 
-**Steps cascade**: structure → config → routes → models → typecheck → contracts → manifest. Early failures skip dependent steps to reduce noise.
+**Steps cascade**: structure → config → routes → models → typecheck → contracts → manifest → protocols. Early failures skip dependent steps to reduce noise.
 
-**Fix categories**: `type_error` · `schema_mismatch` · `missing_file` · `policy_violation` · `contract_drift` · `missing_export`
+Step 8 (**protocols**) is cross-protocol contract testing: it verifies that every `defineAPI()` route produces identical schemas across HTTP, MCP, A2A, and OpenAPI surfaces — catching drift before it reaches production.
+
+**Fix categories**: `type_error` · `schema_mismatch` · `missing_file` · `policy_violation` · `contract_drift` · `missing_export` · `protocol_mismatch`
 
 ---
 
@@ -330,6 +378,7 @@ When you run `capstan dev`, these endpoints are auto-generated:
 | `POST /.well-known/a2a` | A2A | JSON-RPC handler with SSE streaming |
 | `GET /openapi.json` | OpenAPI 3.1 | Full API specification |
 | `GET /capstan/approvals` | Capstan | Authenticated approval queue |
+| `POST /mcp` | MCP (Streamable HTTP) | Remote MCP tool access for any client |
 | `npx capstan mcp` | MCP (stdio) | For Claude Desktop / Cursor |
 
 ### Connect to Claude Desktop
@@ -372,11 +421,11 @@ app/
     logo.svg
 ```
 
-**Stack:** [Hono](https://hono.dev) (HTTP) · [Drizzle](https://orm.drizzle.team) (ORM — SQLite, PostgreSQL, MySQL) · [React](https://react.dev) (SSR) · [Zod](https://zod.dev) (validation) · [Bun](https://bun.sh) (testing)
+**Stack:** [Hono](https://hono.dev) (HTTP) · [Drizzle](https://orm.drizzle.team) (ORM — SQLite, PostgreSQL, MySQL) · [React](https://react.dev) (SSR with selective hydration) · [Zod](https://zod.dev) (validation) · [OpenTelemetry](https://opentelemetry.io) (tracing) · [Bun](https://bun.sh) or Node.js (runtime)
 
-**Dev features:** live reload (SSE), static asset serving from `app/public/`, structured JSON logging
+**Dev features:** live reload (SSE), static asset serving from `app/public/`, structured JSON logging, Turborepo parallel builds
 
-**Security:** CSRF protection, request body limits, configurable CORS, authenticated approval endpoints
+**Security:** CSRF protection, request body limits, configurable CORS, authenticated approval endpoints, DPoP (RFC 9449) proof-of-possession tokens, SPIFFE/mTLS workload identity, token-aware rate limiting
 
 ---
 
@@ -400,12 +449,12 @@ Capstan ships 9 runtime packages:
 
 | Package | Description |
 |---------|-------------|
-| `@zauso-ai/capstan-core` | Hono server, `defineAPI`, `defineMiddleware`, `definePolicy`, approval workflow, verifier |
+| `@zauso-ai/capstan-core` | Hono server, `defineAPI`, `defineMiddleware`, `definePolicy`, approval workflow, 8-step verifier |
 | `@zauso-ai/capstan-router` | File-based routing (`.page.tsx`, `.api.ts`, `_layout.tsx`, `_middleware.ts`) |
-| `@zauso-ai/capstan-db` | Drizzle ORM, `defineModel`, field/relation helpers, migrations, auto CRUD (SQLite, PostgreSQL, MySQL) |
-| `@zauso-ai/capstan-auth` | JWT sessions, API key auth for agents, permission checking (`"human"` / `"agent"` / `"anonymous"`) |
-| `@zauso-ai/capstan-agent` | `CapabilityRegistry`, MCP server (typed params), A2A adapter (SSE), OpenAPI generator |
-| `@zauso-ai/capstan-react` | SSR with loaders, layouts, `Outlet`, hydration |
+| `@zauso-ai/capstan-db` | Drizzle ORM, `defineModel`, field/relation helpers, migrations, auto CRUD, vector fields, `defineEmbedding`, hybrid search (SQLite, PostgreSQL, MySQL) |
+| `@zauso-ai/capstan-auth` | JWT sessions, API key auth, DPoP (RFC 9449), SPIFFE/mTLS, token-aware rate limiting (`"human"` / `"agent"` / `"anonymous"`) |
+| `@zauso-ai/capstan-agent` | `CapabilityRegistry`, MCP server (stdio + Streamable HTTP), MCP client, A2A adapter (SSE), OpenAPI generator, LangChain integration |
+| `@zauso-ai/capstan-react` | SSR with loaders, layouts, `Outlet`, selective hydration (`full` / `visible` / `none`), RSC foundations |
 | `@zauso-ai/capstan-dev` | Dev server with file watching, hot route reload, MCP/A2A endpoints |
 | `@zauso-ai/capstan-cli` | CLI: `dev`, `build`, `start`, `verify`, `add`, `mcp`, `db:*` |
 | `create-capstan-app` | Project scaffolder (`--template blank`, `--template tickets`) |
@@ -470,9 +519,10 @@ npm run test:new     # Bun tests (177 tests, ~500ms)
 ### Help wanted
 
 - Additional scaffolder templates (beyond `blank` and `tickets`)
-- More integration and end-to-end tests
+- More integration, end-to-end, and MCP contract tests
 - CSS pipeline (Tailwind / vanilla-extract integration)
 - OAuth providers (Google, GitHub, etc.)
+- Additional embedding adapters (Cohere, local models)
 
 ---
 

@@ -47,6 +47,7 @@ The `field` helper provides builders for all supported scalar types:
 | `field.datetime()` | `datetime`   | TEXT (ISO)     | Date and time                            |
 | `field.json()`     | `json`       | TEXT (JSON)    | JSON-serialized data                     |
 | `field.enum()`     | `string`     | TEXT           | Constrained string with allowed values   |
+| `field.vector()`   | `float32[]`  | F32_BLOB / vector | Fixed-dimension float vector (for embeddings) |
 
 ### Field Options
 
@@ -92,6 +93,9 @@ field.enum(["low", "medium", "high"], { default: "medium" })
 
 // Foreign key reference
 field.string({ references: "user" })
+
+// Vector embedding (1536 dimensions for OpenAI ada-002)
+field.vector(1536)
 ```
 
 ## Relations
@@ -130,6 +134,7 @@ Capstan supports three database providers. Each uses Drizzle ORM with a provider
 | Provider   | Driver          | Drizzle Adapter          | Connection URL Example                        |
 | ---------- | --------------- | ------------------------ | --------------------------------------------- |
 | `sqlite`   | better-sqlite3  | drizzle-orm/better-sqlite3 | `./data.db` or `:memory:`                   |
+| `libsql`   | @libsql/client  | drizzle-orm/libsql       | `file:./data.db` or `libsql://db-name-org.turso.io` |
 | `postgres` | pg (node-postgres) | drizzle-orm/node-postgres | `postgres://user:pass@host:5432/db`        |
 | `mysql`    | mysql2          | drizzle-orm/mysql2       | `mysql://user:pass@host:3306/db`              |
 
@@ -138,6 +143,9 @@ Install the driver for your chosen provider:
 ```bash
 # SQLite
 npm install better-sqlite3 drizzle-orm
+
+# libSQL / Turso
+npm install @libsql/client drizzle-orm
 
 # PostgreSQL
 npm install pg drizzle-orm
@@ -162,6 +170,18 @@ export default defineConfig({
     url: env("DATABASE_URL") || "./data.db",
   },
 });
+```
+
+### Using Turso
+
+For edge-deployed apps, use the `libsql` provider with a Turso database:
+
+```typescript
+database: {
+  provider: "libsql",
+  url: env("TURSO_DATABASE_URL"),  // libsql://db-name-org.turso.io
+  authToken: env("TURSO_AUTH_TOKEN"),
+},
 ```
 
 ### Using Environment Variables
@@ -299,6 +319,53 @@ The CLI scaffolder uses this internally:
 
 ```bash
 npx capstan add api tickets    # Generates CRUD routes for tickets
+```
+
+## RAG Primitives
+
+Capstan provides built-in support for vector embeddings and similarity search, enabling retrieval-augmented generation (RAG) workflows.
+
+### defineEmbedding()
+
+Configure an embedding model to generate vectors from text:
+
+```typescript
+import { defineEmbedding, openaiEmbeddings } from "@zauso-ai/capstan-db";
+
+export const embeddings = defineEmbedding("text-embedding-3-small", {
+  dimensions: 1536,
+  adapter: openaiEmbeddings({ apiKey: env("OPENAI_API_KEY") }),
+});
+```
+
+### Model with Vector Field
+
+Add a `field.vector()` column to store embeddings alongside your data:
+
+```typescript
+export const Document = defineModel("document", {
+  fields: {
+    id: field.id(),
+    content: field.text({ required: true }),
+    embedding: field.vector(1536),
+  },
+});
+```
+
+### Vector Search
+
+Query by similarity using cosine distance:
+
+```typescript
+import { vectorSearch } from "@zauso-ai/capstan-db";
+
+const results = await vectorSearch(db, {
+  table: "documents",
+  column: "embedding",
+  query: await embeddings.embed("How do I reset my password?"),
+  limit: 5,
+});
+// Returns rows ordered by cosine similarity
 ```
 
 ## Table Naming

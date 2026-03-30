@@ -252,6 +252,7 @@ capstan mcp                 # Start MCP server (stdio, for Claude Desktop)
 capstan db:migrate          # Generate migration SQL from models
 capstan db:push             # Apply pending migrations to database
 capstan db:status           # Show migration status
+turbo:build                 # Parallel builds with caching (Turborepo)
 \`\`\`
 
 ## defineAPI() — Complete Reference
@@ -313,6 +314,24 @@ interface CapstanContext {
 //   GET /tickets/abc123 → params.id === "abc123"
 \`\`\`
 
+### Rate Limiting
+
+\`\`\`typescript
+import { defineRateLimit } from "@zauso-ai/capstan-core";
+
+export const rateLimit = defineRateLimit({
+  limit: 100,                         // Max requests per window
+  window: "1m",                       // Window duration
+  byAuthType: {                       // Per-auth-type overrides (optional)
+    human: { limit: 200, window: "1m" },
+    agent: { limit: 500, window: "1m" },
+    anonymous: { limit: 20, window: "1m" },
+  },
+});
+\`\`\`
+
+Returns \`429 Too Many Requests\` with \`Retry-After\` and \`X-RateLimit-*\` headers when exceeded.
+
 ### Multi-protocol: one defineAPI() → four surfaces
 
 Every \`defineAPI()\` call automatically generates:
@@ -347,6 +366,52 @@ export default function UsersPage() {
       <ul>
         {users.map(u => <li key={u.id}>{u.name}</li>)}
       </ul>
+    </div>
+  );
+}
+\`\`\`
+
+### Selective Hydration
+
+Pages can export a \`hydration\` constant to control client-side JS behavior:
+
+\`\`\`typescript
+// "none" = zero client JS (server-only rendering, no hydration)
+// "visible" = lazy hydration via IntersectionObserver (hydrates when scrolled into view)
+// "full" = default behavior (immediate hydration)
+export const hydration = "none";
+
+export default function StaticPage() {
+  return <div>This page ships zero client JS</div>;
+}
+\`\`\`
+
+### Client Components
+
+Pages with \`"use client"\` at the top are detected as client components:
+
+\`\`\`typescript
+"use client";
+export default function InteractivePage() {
+  const [count, setCount] = useState(0);
+  return <button onClick={() => setCount(c => c + 1)}>{count}</button>;
+}
+\`\`\`
+
+### ServerOnly Wrapper
+
+Use \`ServerOnly\` to exclude content from client bundles entirely:
+
+\`\`\`typescript
+import { ServerOnly } from "@zauso-ai/capstan-react";
+
+export default function Page() {
+  return (
+    <div>
+      <p>This renders everywhere</p>
+      <ServerOnly>
+        <SecretAdminPanel />  {/* Never sent to client */}
+      </ServerOnly>
     </div>
   );
 }
@@ -487,6 +552,54 @@ export const User = defineModel("user", {
 | field.datetime()  | TEXT      | TIMESTAMP       | DATETIME        |
 | field.json()      | TEXT      | JSONB           | JSON            |
 | field.enum()      | TEXT      | VARCHAR(255)    | VARCHAR(255)    |
+| field.vector(dim) | BLOB      | vector(dim)     | BLOB            |
+
+### Vector Search & RAG
+
+Use \`field.vector(dimensions)\` for semantic search and RAG pipelines:
+
+\`\`\`typescript
+import { defineModel, field } from "@zauso-ai/capstan-db";
+import { defineEmbedding, openaiEmbeddings } from "@zauso-ai/capstan-db";
+
+export const Document = defineModel("document", {
+  fields: {
+    id: field.id(),
+    content: field.text({ required: true }),
+    embedding: field.vector(1536),          // Vector field (1536 dims for OpenAI ada-002)
+  },
+});
+
+// Auto-embed: whenever "content" changes, re-compute "embedding"
+export const docEmbedding = defineEmbedding({
+  sourceField: "content",
+  vectorField: "embedding",
+  adapter: openaiEmbeddings({
+    apiKey: process.env.OPENAI_API_KEY!,
+    model: "text-embedding-ada-002",        // optional, default
+    dimensions: 1536,                        // optional, default
+  }),
+});
+\`\`\`
+
+Search utilities:
+
+\`\`\`typescript
+import { cosineDistance, findNearest, hybridSearch } from "@zauso-ai/capstan-db";
+
+// Find nearest vectors by cosine distance
+const results = await findNearest(db, "document", queryVector, { limit: 10 });
+
+// Cosine distance for custom queries
+const dist = cosineDistance(vectorA, vectorB);
+
+// Hybrid search: combines vector similarity + full-text keyword matching
+const results = await hybridSearch(db, "document", {
+  query: "deployment architecture",
+  vector: queryVector,
+  limit: 10,
+});
+\`\`\`
 
 ## Database Configuration
 
@@ -494,10 +607,11 @@ export const User = defineModel("user", {
 // capstan.config.ts
 export default defineConfig({
   database: {
-    provider: "sqlite",                    // "sqlite" | "postgres" | "mysql"
+    provider: "sqlite",                    // "sqlite" | "postgres" | "mysql" | "libsql"
     url: env("DATABASE_URL") || "./data.db",
     // PostgreSQL: "postgres://user:pass@host:5432/dbname"
     // MySQL: "mysql://user:pass@host:3306/dbname"
+    // libSQL/Turso: "libsql://your-db.turso.io?authToken=..."
   },
 });
 \`\`\`
@@ -507,6 +621,7 @@ Install the driver for your provider:
 npm install better-sqlite3              # SQLite
 npm install pg                          # PostgreSQL
 npm install mysql2                      # MySQL
+npm install @libsql/client              # libSQL / Turso
 \`\`\`
 
 ## Querying the Database in Handlers
@@ -607,10 +722,84 @@ These are created automatically by the framework:
 | \`GET /.well-known/capstan.json\` | Agent discovery manifest |
 | \`GET /.well-known/agent.json\` | A2A agent card |
 | \`POST /.well-known/a2a\` | A2A JSON-RPC handler |
+| \`POST /.well-known/mcp\` | MCP Streamable HTTP transport |
 | \`GET /openapi.json\` | OpenAPI 3.1 specification |
 | \`GET /capstan/approvals\` | List pending approval requests |
 | \`POST /capstan/approvals/:id/approve\` | Approve a pending action |
 | \`POST /capstan/approvals/:id/deny\` | Deny a pending action |
+
+MCP is available via both **stdio** (\`capstan mcp\`) and **Streamable HTTP** (\`POST /.well-known/mcp\`).
+
+### MCP Client — Consuming External MCP Servers
+
+\`\`\`typescript
+import { createMcpClient } from "@zauso-ai/capstan-agent";
+
+const client = createMcpClient({ url: "https://other-service.example.com/.well-known/mcp" });
+const tools = await client.listTools();
+const result = await client.callTool("toolName", { arg: "value" });
+\`\`\`
+
+### LangChain Integration
+
+Convert your CapabilityRegistry into LangChain-compatible tools:
+
+\`\`\`typescript
+import { registry } from "@zauso-ai/capstan-agent";
+
+const langchainTools = registry.toLangChain({ baseUrl: "http://localhost:3000" });
+// Use with LangChain agents, chains, or other LangChain-compatible tooling
+\`\`\`
+
+## Authentication — Advanced
+
+### DPoP Sender-Constrained Tokens (RFC 9449)
+
+Capstan supports DPoP (Demonstrating Proof-of-Possession) for sender-constrained tokens, preventing token theft and replay attacks.
+
+### Agent Workload Identity
+
+For service-to-service authentication, Capstan supports SPIFFE/mTLS via \`X-Client-Cert\` headers:
+
+\`\`\`typescript
+// capstan.config.ts
+export default defineConfig({
+  auth: {
+    trustedDomains: ["spiffe://cluster.local/ns/prod/sa/my-service"],
+    // mTLS certificates validated via X-Client-Cert header
+  },
+});
+\`\`\`
+
+## Testing
+
+### MCP Test Harness
+
+Test MCP tools in-process without starting a server:
+
+\`\`\`typescript
+import { McpTestHarness } from "@zauso-ai/capstan-agent";
+
+const harness = new McpTestHarness(registry);
+const result = await harness.callTool("listTickets", { status: "open" });
+// Assert against result
+\`\`\`
+
+### MCP HTTP Test Client
+
+Test MCP endpoints over HTTP:
+
+\`\`\`typescript
+import { McpHttpTestClient } from "@zauso-ai/capstan-agent";
+
+const client = new McpHttpTestClient("http://localhost:3000/.well-known/mcp");
+const tools = await client.listTools();
+const result = await client.callTool("createTicket", { title: "Bug" });
+\`\`\`
+
+### Cross-Protocol Contract Testing
+
+\`capstan verify --json\` includes step 8: **cross-protocol** — validates that HTTP, MCP, A2A, and OpenAPI surfaces all expose consistent schemas and capabilities.
 
 ## Verification — AI TDD Self-Loop
 
@@ -624,7 +813,7 @@ Output includes \`repairChecklist\` with:
 - \`autoFixable\`: boolean — whether the AI agent can fix it automatically
 - \`description\`: what is wrong and how to fix it
 
-The 7-step verification cascade:
+The 8-step verification cascade:
 1. **structure** — required files exist
 2. **config** — capstan.config.ts loads
 3. **routes** — API files export handlers, write endpoints have policies
@@ -632,6 +821,7 @@ The 7-step verification cascade:
 5. **typecheck** — tsc --noEmit
 6. **contracts** — models ↔ routes consistency, policy references valid
 7. **manifest** — agent manifest matches live routes
+8. **cross-protocol** — HTTP, MCP, A2A, OpenAPI schema consistency
 
 ## Production Deployment
 

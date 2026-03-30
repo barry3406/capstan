@@ -272,6 +272,70 @@ derivePermission("external");
 // { resource: "external", action: "write" }
 ```
 
+## DPoP (Sender-Constrained Tokens)
+
+Capstan supports Demonstrating Proof-of-Possession (RFC 9449) to bind access tokens to a specific client key pair. This prevents token replay if a bearer token is intercepted.
+
+Enable DPoP in the auth config:
+
+```typescript
+auth: {
+  session: {
+    strategy: "jwt",
+    secret: env("SESSION_SECRET"),
+    dpop: true, // Require DPoP proof on token-protected requests
+  },
+},
+```
+
+When `dpop: true` is set, the auth middleware validates the `DPoP` header alongside the `Authorization` header. Requests missing a valid DPoP proof receive a `401` with a `DPoP-Nonce` header for retry.
+
+## Agent Workload Identity
+
+For service-to-service (agent-to-agent) communication, Capstan supports SPIFFE-based workload identity via mTLS. The `X-Client-Cert` header (set by a TLS-terminating proxy) is verified against trusted SPIFFE IDs.
+
+```typescript
+auth: {
+  workloadIdentity: {
+    trustDomain: "example.org",
+    trustedDomains: ["example.org", "partner.com"],
+    certHeader: "X-Client-Cert", // default
+  },
+},
+```
+
+The `trustedDomains` option restricts which SPIFFE trust domains are accepted. When a request arrives with a valid client certificate, the auth context is populated with `type: "agent"` and the SPIFFE ID as the agent identifier.
+
+## Rate Limiting
+
+`defineRateLimit()` configures request rate limiting with per-auth-type windows:
+
+```typescript
+import { defineRateLimit } from "@zauso-ai/capstan-core";
+
+export const apiLimits = defineRateLimit({
+  default: { requests: 100, window: "1m" },
+  perAuthType: {
+    anonymous: { requests: 20, window: "1m" },
+    human: { requests: 200, window: "1m" },
+    agent: { requests: 1000, window: "1m" },
+  },
+});
+```
+
+Apply rate limiting in the config:
+
+```typescript
+export default defineConfig({
+  agent: {
+    rateLimit: {
+      default: { requests: 100, window: "1m" },
+      perAgent: true, // Track limits per agent API key
+    },
+  },
+});
+```
+
 ## CSRF Protection
 
 Capstan uses the `SameSite=Lax` cookie attribute by default for session cookies. For additional CSRF protection in production:

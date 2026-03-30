@@ -129,6 +129,25 @@ interface PolicyCheckResult {
 
 ---
 
+### defineRateLimit(config)
+
+Define rate limiting rules with per-auth-type windows.
+
+```typescript
+function defineRateLimit(config: RateLimitConfig): RateLimitConfig
+
+interface RateLimitConfig {
+  default: { requests: number; window: string };
+  perAuthType?: {
+    anonymous?: { requests: number; window: string };
+    human?: { requests: number; window: string };
+    agent?: { requests: number; window: string };
+  };
+}
+```
+
+---
+
 ### enforcePolicies(policies, ctx, input?)
 
 Run all provided policies and return the most restrictive result.
@@ -387,6 +406,7 @@ const field: {
   datetime(opts?: FieldOptions): FieldDefinition;
   json<T = unknown>(opts?: FieldOptions): FieldDefinition;
   enum(values: readonly string[], opts?: FieldOptions): FieldDefinition;
+  vector(dimensions: number): FieldDefinition;
 }
 ```
 
@@ -489,6 +509,42 @@ Naive English pluralizer for model-to-table name conversion.
 
 ```typescript
 function pluralize(word: string): string
+```
+
+---
+
+### defineEmbedding(modelName, config)
+
+Configure an embedding model for vector generation.
+
+```typescript
+function defineEmbedding(
+  modelName: string,
+  config: {
+    dimensions: number;
+    adapter: EmbeddingAdapter;
+  },
+): EmbeddingInstance
+
+interface EmbeddingInstance {
+  embed(text: string): Promise<number[]>;
+  embedBatch(texts: string[]): Promise<number[][]>;
+  dimensions: number;
+}
+```
+
+---
+
+### openaiEmbeddings(opts)
+
+Create an embedding adapter using the OpenAI embeddings API.
+
+```typescript
+function openaiEmbeddings(opts: {
+  apiKey: string;
+  model?: string;      // default: inferred from defineEmbedding modelName
+  baseUrl?: string;     // for compatible providers
+}): EmbeddingAdapter
 ```
 
 ---
@@ -867,6 +923,59 @@ interface A2AAgentCard {
 
 ---
 
+### createMcpClient(options)
+
+Create an MCP client to consume tools from an external MCP server.
+
+```typescript
+function createMcpClient(options: McpClientOptions): McpClient
+
+interface McpClientOptions {
+  url?: string;                        // Streamable HTTP endpoint
+  command?: string;                    // stdio command (alternative to url)
+  args?: string[];                     // stdio command args
+  transport?: "streamable-http" | "stdio";
+}
+
+interface McpClient {
+  listTools(): Promise<Array<{ name: string; description?: string; inputSchema: unknown }>>;
+  callTool(name: string, args?: unknown): Promise<unknown>;
+  close(): Promise<void>;
+}
+```
+
+---
+
+### McpTestHarness
+
+Test harness for verifying MCP tool behavior without a live server.
+
+```typescript
+class McpTestHarness {
+  constructor(registry: CapabilityRegistry);
+
+  listTools(): Array<{ name: string; description: string; inputSchema: unknown }>;
+  callTool(name: string, args?: unknown): Promise<unknown>;
+}
+```
+
+---
+
+### toLangChainTools(registry, options?)
+
+Convert registered capabilities into LangChain-compatible `StructuredTool` instances.
+
+```typescript
+function toLangChainTools(
+  registry: CapabilityRegistry,
+  options?: {
+    filter?: (route: RouteRegistryEntry) => boolean;
+  },
+): StructuredTool[]
+```
+
+---
+
 ### createA2AHandler(config, routes, executeRoute)
 
 Create an A2A JSON-RPC handler supporting `tasks/send`, `tasks/get`, and `agent/card` methods.
@@ -1005,6 +1114,16 @@ Context provider for the outlet system.
 
 ```typescript
 function OutletProvider(props: { children: React.ReactNode }): JSX.Element
+```
+
+---
+
+### ServerOnly
+
+React component that renders its children only during SSR. Children are excluded from the client hydration bundle, enabling selective hydration.
+
+```typescript
+function ServerOnly(props: { children: React.ReactNode }): JSX.Element | null
 ```
 
 ---
