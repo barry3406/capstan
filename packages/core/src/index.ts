@@ -37,5 +37,8 @@ export type {
 
 export { createRequestLogger } from "./logger.js";
 
+export { defineRateLimit, clearRateLimitStore } from "./ratelimit.js";
+export type { RateLimitConfig } from "./ratelimit.js";
+
 export { verifyCapstanApp, renderRuntimeVerifyText } from "./verify.js";
 export type { VerifyReport, VerifyDiagnostic, VerifyStep } from "./verify.js";

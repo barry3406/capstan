@@ -1,5 +1,6 @@
 import type { AgentConfig, RouteRegistryEntry } from "./types.js";
 import { routeToToolName } from "./mcp.js";
+import { withSpan } from "./telemetry.js";
 
 // ---------------------------------------------------------------------------
 // A2A Types — Google's Agent-to-Agent protocol
@@ -248,21 +249,35 @@ export function createA2AHandler(
     // Transition to working.
     task.status = "working";
 
-    try {
-      const result = await executeRoute(
-        resolved.method,
-        resolved.path,
-        params["input"],
-      );
-      task.status = "completed";
-      task.output = result;
-    } catch (err: unknown) {
-      task.status = "failed";
-      task.error =
-        err instanceof Error ? err.message : "Unknown error during execution";
-    }
+    return withSpan(
+      "capstan.a2a.tasks/send",
+      {
+        "capstan.a2a.method": "tasks/send",
+        "capstan.a2a.taskId": taskId,
+        "capstan.a2a.skill": skillId,
+      },
+      async (span) => {
+        try {
+          const result = await executeRoute(
+            resolved.method,
+            resolved.path,
+            params["input"],
+          );
+          task.status = "completed";
+          task.output = result;
+          span?.setAttribute("capstan.a2a.status", "completed");
+        } catch (err: unknown) {
+          task.status = "failed";
+          task.error =
+            err instanceof Error
+              ? err.message
+              : "Unknown error during execution";
+          span?.setAttribute("capstan.a2a.status", "failed");
+        }
 
-    return successResponse(reqId, task);
+        return successResponse(reqId, task);
+      },
+    );
   }
 
   /**
@@ -365,20 +380,37 @@ export function createA2AHandler(
 
     const params = rpc.params ?? {};
 
-    switch (rpc.method) {
-      case "tasks/send":
-        return handleTasksSend(rpc.id, params);
-      case "tasks/get":
-        return handleTasksGet(rpc.id, params);
-      case "agent/card":
-        return successResponse(rpc.id, agentCard);
-      default:
-        return errorResponse(
-          rpc.id,
-          -32601,
-          `Method not found: ${rpc.method}`,
+    return withSpan(
+      `capstan.a2a.${rpc.method}`,
+      {
+        "capstan.a2a.method": rpc.method,
+      },
+      async (span) => {
+        let response: A2AJsonRpcResponse;
+        switch (rpc.method) {
+          case "tasks/send":
+            response = await handleTasksSend(rpc.id, params);
+            break;
+          case "tasks/get":
+            response = handleTasksGet(rpc.id, params);
+            break;
+          case "agent/card":
+            response = successResponse(rpc.id, agentCard);
+            break;
+          default:
+            response = errorResponse(
+              rpc.id,
+              -32601,
+              `Method not found: ${rpc.method}`,
+            );
+        }
+        span?.setAttribute(
+          "capstan.a2a.status",
+          response.error ? "error" : "ok",
         );
-    }
+        return response;
+      },
+    );
   }
 
   /**

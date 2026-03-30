@@ -6,6 +6,7 @@ export { hydrateCapstanPage } from "./hydrate.js";
 export type {
   LoaderArgs,
   LoaderFunction,
+  HydrationMode,
   PageModule,
   LayoutModule,
   RenderPageOptions,

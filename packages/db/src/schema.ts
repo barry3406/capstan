@@ -66,10 +66,13 @@ function sqliteColumnMapping(fieldType: ScalarType): ColumnMapping {
       return { builder: "integer", import: "integer", config: '{ mode: "boolean" }' };
     case "json":
       return { builder: "text", import: "text", config: '{ mode: "json" }' };
+    case "vector":
+      // SQLite has no native vector type; store as JSON-serialised TEXT
+      return { builder: "text", import: "text", config: '{ mode: "json" }' };
   }
 }
 
-function pgColumnMapping(fieldType: ScalarType): ColumnMapping {
+function pgColumnMapping(fieldType: ScalarType, dimensions?: number): ColumnMapping {
   switch (fieldType) {
     case "string":
       return { builder: "varchar", import: "varchar", config: "{ length: 255 }" };
@@ -87,6 +90,9 @@ function pgColumnMapping(fieldType: ScalarType): ColumnMapping {
       return { builder: "boolean", import: "boolean" };
     case "json":
       return { builder: "jsonb", import: "jsonb" };
+    case "vector":
+      // PostgreSQL uses pgvector's vector(dimensions) column type
+      return { builder: "vector", import: "vector", config: `{ dimensions: ${dimensions ?? 1536} }` };
   }
 }
 
@@ -108,15 +114,19 @@ function mysqlColumnMapping(fieldType: ScalarType): ColumnMapping {
       return { builder: "boolean", import: "boolean" };
     case "json":
       return { builder: "json", import: "json" };
+    case "vector":
+      // MySQL has no native vector type; store as JSON
+      return { builder: "json", import: "json" };
   }
 }
 
-function columnMapping(fieldType: ScalarType, provider: Provider): ColumnMapping {
+function columnMapping(fieldType: ScalarType, provider: Provider, dimensions?: number): ColumnMapping {
   switch (provider) {
     case "sqlite":
+    case "libsql":
       return sqliteColumnMapping(fieldType);
     case "postgres":
-      return pgColumnMapping(fieldType);
+      return pgColumnMapping(fieldType, dimensions);
     case "mysql":
       return mysqlColumnMapping(fieldType);
   }
@@ -138,6 +148,7 @@ interface ProviderMeta {
 function providerMeta(provider: Provider): ProviderMeta {
   switch (provider) {
     case "sqlite":
+    case "libsql":
       return {
         tableBuilder: "sqliteTable",
         importModule: "drizzle-orm/sqlite-core",
@@ -172,6 +183,7 @@ function providerMeta(provider: Provider): ProviderMeta {
 function autoIdExpr(colName: string, provider: Provider): { expr: string; imports: string[] } {
   switch (provider) {
     case "sqlite":
+    case "libsql":
       return { expr: `text("${colName}").primaryKey()`, imports: ["text"] };
     case "postgres":
       return { expr: `text("${colName}").primaryKey()`, imports: ["text"] };
@@ -197,7 +209,7 @@ function buildColumnExpr(
     return { expr: result.expr, imports: result.imports, needsSql: false };
   }
 
-  const mapping = columnMapping(def.type, provider);
+  const mapping = columnMapping(def.type, provider, def.dimensions);
 
   let expr: string;
   if (mapping.config) {

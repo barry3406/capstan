@@ -15,6 +15,16 @@ export function hydrateCapstanPage(
   layouts: React.ComponentType[],
   data: CapstanPageContext,
 ): void {
+  // If hydration mode was "none", there is no serialised data on the page and
+  // no client JS should have been loaded in the first place.  Guard against
+  // accidental invocation so the page remains a static server render.
+  if (
+    typeof (globalThis as Record<string, unknown>)["window"] !== "undefined" &&
+    (window as unknown as Record<string, unknown>)["__CAPSTAN_DATA__"] === undefined
+  ) {
+    return;
+  }
+
   // Build the component tree identically to SSR so React can hydrate cleanly
   let content: ReactElement = createElement(PageComponent, {});
 

@@ -29,6 +29,7 @@ function sqliteType(type: ScalarType): string {
     case "date":
     case "datetime":
     case "json":
+    case "vector":
       return "TEXT";
     case "integer":
     case "boolean":
@@ -241,6 +242,7 @@ function createTrackingTableSQL(provider: DbProvider): string {
   applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 )`;
     case "sqlite":
+    case "libsql":
     default:
       return `CREATE TABLE IF NOT EXISTS _capstan_migrations (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

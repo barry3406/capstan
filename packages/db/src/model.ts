@@ -17,6 +17,7 @@ function makeField(type: ScalarType, opts?: FieldOptions): FieldDefinition {
     if (opts.enum !== undefined) def.enum = opts.enum;
     if (opts.updatedAt !== undefined) def.updatedAt = opts.updatedAt;
     if (opts.autoId !== undefined) def.autoId = opts.autoId;
+    if (opts.dimensions !== undefined) def.dimensions = opts.dimensions;
     if (opts.references !== undefined) def.references = opts.references;
   }
   return def;
@@ -84,6 +85,18 @@ export const field = {
    */
   json<_T = unknown>(opts?: FieldOptions): FieldDefinition {
     return makeField("json", opts);
+  },
+
+  /**
+   * Vector embedding field — stores a fixed-length float array.
+   * Uses pgvector on PostgreSQL, JSON array on SQLite/MySQL.
+   *
+   * @example
+   *   field.vector(1536) // OpenAI ada-002 embeddings
+   *   field.vector(384, { required: true })
+   */
+  vector(dimensions: number, opts?: FieldOptions): FieldDefinition {
+    return makeField("vector", { ...opts, dimensions });
   },
 
   /**

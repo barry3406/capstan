@@ -2,8 +2,9 @@ import type { AgentConfig, AgentManifest, RouteRegistryEntry } from "./types.js"
 import type { A2AAgentCard, A2AStreamEvent } from "./a2a.js";
 import { generateAgentManifest } from "./manifest.js";
 import { generateOpenApiSpec } from "./openapi.js";
-import { createMcpServer } from "./mcp.js";
+import { createMcpServer, createMcpHttpHandler } from "./mcp.js";
 import { createA2AHandler } from "./a2a.js";
+import { withSpan } from "./telemetry.js";
 
 /**
  * Unified capability registry — the central abstraction for Capstan's
@@ -33,6 +34,10 @@ export class CapabilityRegistry {
   /** Register a single route entry. */
   register(route: RouteRegistryEntry): void {
     this.routes.push(route);
+    void withSpan("capstan.capability.register", {
+      "capstan.route.path": route.path,
+      "capstan.route.method": route.method,
+    }, async () => {});
   }
 
   /** Register multiple route entries at once. */
@@ -63,6 +68,10 @@ export class CapabilityRegistry {
 
   /** Project to OpenAPI 3.1 specification. */
   toOpenApi(): Record<string, unknown> {
+    // Fire-and-forget span — synchronous return is not blocked.
+    void withSpan("capstan.openapi.generate", {
+      "capstan.route.count": this.routes.length,
+    }, async () => {});
     return generateOpenApiSpec(this.config, this.routes);
   }
 
@@ -88,6 +97,27 @@ export class CapabilityRegistry {
     }>;
   } {
     return createMcpServer(this.config, this.routes, executeRoute);
+  }
+
+  /**
+   * Project to MCP Streamable HTTP handler.
+   *
+   * Returns a web-standard `(req: Request) => Promise<Response>` handler
+   * implementing the MCP Streamable HTTP transport (2025-03-26 spec).
+   * Mount it on any route (e.g. `/mcp`) to serve MCP over HTTP.
+   *
+   * @param executeRoute - Callback that invokes the actual route handler
+   *   given an HTTP method, path, and input payload.
+   * @returns A web-standard request handler.
+   */
+  toMcpHttp(
+    executeRoute: (
+      method: string,
+      path: string,
+      input: unknown,
+    ) => Promise<unknown>,
+  ): (req: Request) => Promise<Response> {
+    return createMcpHttpHandler(this.config, this.routes, executeRoute);
   }
 
   /**

@@ -8,6 +8,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "clean": "rm -rf dist",
     "dev": "tsx src/index.ts"
   },
   "dependencies": {

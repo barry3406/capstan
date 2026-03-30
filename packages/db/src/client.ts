@@ -54,6 +54,8 @@ export function createDatabase(config: DatabaseConfig): DatabaseInstance {
       return createPostgresDatabase(config.url);
     case "mysql":
       return createMysqlDatabase(config.url);
+    case "libsql":
+      return createLibsqlDatabase(config.url);
     default: {
       const _exhaustive: never = config.provider;
       throw new Error(
@@ -186,6 +188,46 @@ function createMysqlDatabase(url: string): DatabaseInstance {
     close() {
       // The interface is synchronous; fire-and-forget the async pool shutdown.
       void pool.end();
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// libSQL / Turso (@libsql/client)
+// ---------------------------------------------------------------------------
+
+function createLibsqlDatabase(url: string): DatabaseInstance {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let createClient: any;
+  try {
+    const libsqlModule = require("@libsql/client");
+    createClient = libsqlModule.createClient;
+  } catch {
+    throw new Error(
+      `@zauso-ai/capstan-db: "@libsql/client" is required for libSQL/Turso support but is not installed.\n` +
+      `Install it with: npm install @libsql/client`,
+    );
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let drizzle: any;
+  try {
+    const drizzleModule = require("drizzle-orm/libsql");
+    drizzle = drizzleModule.drizzle;
+  } catch {
+    throw new Error(
+      `@zauso-ai/capstan-db: "drizzle-orm/libsql" adapter is required for libSQL/Turso support but is not installed.\n` +
+      `Install it with: npm install drizzle-orm`,
+    );
+  }
+
+  const client = createClient({ url });
+  const db = drizzle({ client });
+
+  return {
+    db,
+    close() {
+      client.close();
     },
   };
 }

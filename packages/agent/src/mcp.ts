@@ -1,9 +1,11 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { z } from "zod";
 import type { ZodTypeAny } from "zod";
 
 import type { AgentConfig, RouteRegistryEntry } from "./types.js";
+import { withSpan } from "./telemetry.js";
 
 /**
  * Convert an HTTP method + URL path into a snake_case MCP tool name.
@@ -201,7 +203,11 @@ export function createMcpServer(
       zodShape,
       async (args: Record<string, unknown>) => {
         const input = Object.keys(args).length > 0 ? args : undefined;
-        const result = await executeRoute(route.method, route.path, input);
+        const result = await withSpan(
+          `capstan.mcp.tool.${toolName}`,
+          { "capstan.mcp.toolName": toolName, "capstan.mcp.inputSize": JSON.stringify(args).length },
+          async () => executeRoute(route.method, route.path, input),
+        );
         return {
           content: [{ type: "text" as const, text: JSON.stringify(result) }],
         };
@@ -224,4 +230,116 @@ export function createMcpServer(
 export async function serveMcpStdio(server: McpServer): Promise<void> {
   const transport = new StdioServerTransport();
   await server.connect(transport);
+}
+
+// ---------------------------------------------------------------------------
+// Streamable HTTP transport
+// ---------------------------------------------------------------------------
+
+/**
+ * Create a Streamable HTTP handler for an MCP server.
+ *
+ * The MCP specification (2025-03-26) introduced Streamable HTTP as the
+ * recommended remote transport, deprecating the older SSE transport.
+ * This function returns a `(req: Request) => Promise<Response>` handler
+ * that can be mounted in any web-standard framework (Hono, Cloudflare
+ * Workers, Deno, Bun, etc.).
+ *
+ * The handler supports:
+ * - **POST** — JSON-RPC messages (tool calls, initialization)
+ * - **GET** — SSE stream for server-initiated notifications
+ * - **DELETE** — session termination
+ *
+ * Session management is enabled by default using `crypto.randomUUID()`.
+ * Each session maintains its own transport instance, which is connected
+ * to a freshly built `McpServer` that shares the same tool registrations.
+ *
+ * @param registry - The CapabilityRegistry (or equivalent) providing
+ *   agent configuration and registered routes.
+ * @returns A web-standard request handler.
+ */
+export function createMcpHttpHandler(
+  config: AgentConfig,
+  routes: RouteRegistryEntry[],
+  executeRoute: (
+    method: string,
+    path: string,
+    input: unknown,
+  ) => Promise<unknown>,
+): (req: Request) => Promise<Response> {
+  // Map of session ID -> { transport, server } so we can reuse sessions.
+  const sessions = new Map<
+    string,
+    {
+      transport: WebStandardStreamableHTTPServerTransport;
+      server: McpServer;
+    }
+  >();
+
+  /**
+   * Build a new McpServer with all the current routes registered.
+   * This mirrors `createMcpServer` but returns only the server — we
+   * don't need the `getToolDefinitions` helper here.
+   */
+  function buildServer(): McpServer {
+    return createMcpServer(config, routes, executeRoute).server;
+  }
+
+  /**
+   * Create a fresh transport + server pair, wire them together, and
+   * store in the session map.
+   */
+  async function createSession(): Promise<{
+    transport: WebStandardStreamableHTTPServerTransport;
+    server: McpServer;
+  }> {
+    const transport = new WebStandardStreamableHTTPServerTransport({
+      sessionIdGenerator: () => crypto.randomUUID(),
+      onsessioninitialized(sessionId: string) {
+        // Store the session once the MCP handshake completes.
+        sessions.set(sessionId, entry);
+      },
+      onsessionclosed(sessionId: string) {
+        sessions.delete(sessionId);
+      },
+      enableJsonResponse: true,
+    });
+
+    const server = buildServer();
+    const entry = { transport, server };
+
+    // Connect the server to the transport (registers handlers).
+    await server.connect(transport);
+
+    return entry;
+  }
+
+  return async function handleMcpHttp(req: Request): Promise<Response> {
+    // Look up an existing session from the request header.
+    const sessionId = req.headers.get("mcp-session-id");
+
+    if (sessionId) {
+      const existing = sessions.get(sessionId);
+      if (existing) {
+        return existing.transport.handleRequest(req);
+      }
+
+      // Unknown session ID — return 404 per the MCP spec.
+      return new Response(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          error: { code: -32000, message: "Session not found" },
+          id: null,
+        }),
+        {
+          status: 404,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
+    }
+
+    // No session header — create a new session for initialization.
+    const { transport } = await createSession();
+    return transport.handleRequest(req);
+  };
 }

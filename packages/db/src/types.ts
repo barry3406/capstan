@@ -1,4 +1,4 @@
-export type ScalarType = "string" | "integer" | "number" | "boolean" | "date" | "datetime" | "text" | "json";
+export type ScalarType = "string" | "integer" | "number" | "boolean" | "date" | "datetime" | "text" | "json" | "vector";
 
 export interface FieldDefinition {
   type: ScalarType;
@@ -8,6 +8,8 @@ export interface FieldDefinition {
   min?: number;
   max?: number;
   enum?: readonly string[];
+  /** Number of dimensions for vector fields */
+  dimensions?: number;
   /** Auto-set to current time on update */
   updatedAt?: boolean;
   /** Auto-generate UUID */
@@ -38,7 +40,7 @@ export interface ModelDefinition {
   indexes: IndexDefinition[];
 }
 
-export type DbProvider = "sqlite" | "postgres" | "mysql";
+export type DbProvider = "sqlite" | "postgres" | "mysql" | "libsql";
 
 export interface DatabaseConfig {
   provider: DbProvider;

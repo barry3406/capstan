@@ -35,6 +35,8 @@ export interface AuthContext {
   agentId?: string;
   agentName?: string;
   permissions?: string[];
+  /** DPoP key thumbprint — present when the request included a valid DPoP proof. */
+  dpopThumbprint?: string;
 }
 
 export interface AuthResolverDeps {

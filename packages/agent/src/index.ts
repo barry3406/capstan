@@ -1,6 +1,7 @@
 export { generateAgentManifest } from "./manifest.js";
 export {
   createMcpServer,
+  createMcpHttpHandler,
   serveMcpStdio,
   routeToToolName,
   inputSchemaToZodShape,
@@ -13,4 +14,5 @@ export {
 } from "./a2a.js";
 export type { A2AAgentCard, A2ATask, A2AStreamEvent } from "./a2a.js";
 export { CapabilityRegistry } from "./registry.js";
+export { withSpan } from "./telemetry.js";
 export type { AgentManifest, RouteRegistryEntry, AgentConfig } from "./types.js";

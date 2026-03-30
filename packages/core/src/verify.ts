@@ -24,7 +24,8 @@ export interface VerifyDiagnostic {
     | "missing_file"
     | "policy_violation"
     | "contract_drift"
-    | "missing_export";
+    | "missing_export"
+    | "protocol_drift";
   autoFixable?: boolean;
 }
 
@@ -861,6 +862,400 @@ async function checkManifest(appRoot: string): Promise<VerifyDiagnostic[]> {
   return diagnostics;
 }
 
+async function checkCrossProtocol(appRoot: string): Promise<VerifyDiagnostic[]> {
+  const diagnostics: VerifyDiagnostic[] = [];
+
+  const routesDir = join(appRoot, "app", "routes");
+  if (!(await isDirectory(routesDir))) {
+    return diagnostics;
+  }
+
+  // ---- 1. Build a CapabilityRegistry from the route manifest ----
+
+  const { scanRoutes } = await import("@zauso-ai/capstan-router");
+  const routeManifest = await scanRoutes(routesDir);
+  const apiRoutes = routeManifest.routes.filter((r) => r.type === "api");
+
+  if (apiRoutes.length === 0) {
+    return diagnostics;
+  }
+
+  // Build RouteRegistryEntry list by reading source files for defineAPI metadata
+  const { CapabilityRegistry } = await import("@zauso-ai/capstan-agent");
+  const { routeToToolName } = await import("@zauso-ai/capstan-agent");
+
+  // Minimal config for projection
+  const agentConfig = { name: "verify-check", description: "Cross-protocol verification" };
+  const registry = new CapabilityRegistry(agentConfig);
+
+  // Parse defineAPI metadata from each route file
+  interface ParsedRoute {
+    method: string;
+    path: string;
+    filePath: string;
+    description?: string;
+    capability?: "read" | "write" | "external";
+    resource?: string;
+    inputSchemaText?: string;
+    outputSchemaText?: string;
+    hasDefineAPI: boolean;
+  }
+
+  const parsedRoutes: ParsedRoute[] = [];
+
+  for (const route of apiRoutes) {
+    let source: string;
+    try {
+      source = await readFile(route.filePath, "utf-8");
+    } catch {
+      continue;
+    }
+
+    const methods = (route.methods ?? ["GET"]) as string[];
+
+    for (const method of methods) {
+      // Check if this method handler uses defineAPI
+      const defineAPIPattern = new RegExp(
+        `(?:export\\s+const\\s+${method}|(?:const|let|var)\\s+${method})\\s*=\\s*defineAPI\\s*\\(`,
+      );
+      const hasDefineAPI = defineAPIPattern.test(source);
+
+      // Extract description
+      const descPattern = new RegExp(
+        `(?:export\\s+const\\s+${method}|(?:const|let|var)\\s+${method})\\s*=\\s*defineAPI\\s*\\(\\s*\\{[^]*?description\\s*:\\s*["']([^"']+)["']`,
+        "s",
+      );
+      const descMatch = source.match(descPattern);
+      const description = descMatch?.[1];
+
+      // Extract capability
+      const capPattern = new RegExp(
+        `(?:export\\s+const\\s+${method}|(?:const|let|var)\\s+${method})\\s*=\\s*defineAPI\\s*\\(\\s*\\{[^]*?capability\\s*:\\s*["'](read|write|external)["']`,
+        "s",
+      );
+      const capMatch = source.match(capPattern);
+      const capability = capMatch?.[1] as "read" | "write" | "external" | undefined;
+
+      // Extract resource
+      const resPattern = new RegExp(
+        `(?:export\\s+const\\s+${method}|(?:const|let|var)\\s+${method})\\s*=\\s*defineAPI\\s*\\(\\s*\\{[^]*?resource\\s*:\\s*["']([^"']+)["']`,
+        "s",
+      );
+      const resMatch = source.match(resPattern);
+      const resource = resMatch?.[1];
+
+      // Check for input/output schema presence
+      const blockPattern = new RegExp(
+        `(?:export\\s+const\\s+${method}|(?:const|let|var)\\s+${method})\\s*=\\s*defineAPI\\s*\\(\\s*\\{([^]*?)handler\\s*:`,
+        "s",
+      );
+      const blockMatch = source.match(blockPattern);
+      const blockContent = blockMatch?.[1] ?? "";
+
+      const hasInput = /\binput\s*:/.test(blockContent);
+      const hasOutput = /\boutput\s*:/.test(blockContent);
+
+      const parsed: ParsedRoute = {
+        method,
+        path: route.urlPattern,
+        filePath: route.filePath,
+        ...(description !== undefined ? { description } : {}),
+        ...(capability !== undefined ? { capability } : {}),
+        ...(resource !== undefined ? { resource } : {}),
+        hasDefineAPI,
+      };
+
+      if (hasInput) parsed.inputSchemaText = "present";
+      if (hasOutput) parsed.outputSchemaText = "present";
+
+      parsedRoutes.push(parsed);
+
+      // Register with the capability registry if it has defineAPI metadata
+      if (hasDefineAPI) {
+        registry.register({
+          method,
+          path: route.urlPattern,
+          ...(description !== undefined ? { description } : {}),
+          ...(capability !== undefined ? { capability } : {}),
+          ...(resource !== undefined ? { resource } : {}),
+        });
+      }
+    }
+  }
+
+  const registeredRoutes = registry.getRoutes();
+
+  if (registeredRoutes.length === 0) {
+    diagnostics.push({
+      code: "cross_protocol_no_capabilities",
+      severity: "info",
+      message:
+        "No defineAPI() routes with capability metadata found. Cross-protocol checks skipped.",
+    });
+    return diagnostics;
+  }
+
+  // ---- 2. Generate OpenAPI spec ----
+  const openApiSpec = registry.toOpenApi() as {
+    paths?: Record<string, Record<string, Record<string, unknown>>>;
+  };
+  const openApiPaths = openApiSpec.paths ?? {};
+
+  // ---- 3. Generate MCP tool definitions ----
+  // We use a no-op executor since we only need the definitions
+  const noopExecutor = async () => ({});
+  const { getToolDefinitions } = registry.toMcp(noopExecutor);
+  const mcpTools = getToolDefinitions();
+
+  // ---- 4. Generate A2A skill definitions ----
+  const { getAgentCard } = registry.toA2A(noopExecutor);
+  const a2aCard = getAgentCard();
+  const a2aSkills = a2aCard.skills;
+
+  // Build lookup maps
+  const mcpToolsByName = new Map(mcpTools.map((t) => [t.name, t]));
+  const a2aSkillsById = new Map(a2aSkills.map((s) => [s.id, s]));
+
+  // Build a set of OpenAPI operation keys: "METHOD /path"
+  const openApiOperations = new Set<string>();
+  for (const [oaPath, methods] of Object.entries(openApiPaths)) {
+    for (const method of Object.keys(methods)) {
+      // Convert OpenAPI path back to Capstan-style for comparison
+      const capstanPath = oaPath.replace(/\{([a-zA-Z_][a-zA-Z0-9_]*)\}/g, ":$1");
+      openApiOperations.add(`${method.toUpperCase()} ${capstanPath}`);
+    }
+  }
+
+  // ---- 5. Validate consistency ----
+
+  for (const route of registeredRoutes) {
+    const relPath = parsedRoutes.find(
+      (p) => p.method === route.method && p.path === route.path,
+    )?.filePath;
+    const relFile = relPath ? relative(appRoot, relPath) : `${route.method} ${route.path}`;
+
+    const toolName = routeToToolName(route.method, route.path);
+    const routeKey = `${route.method.toUpperCase()} ${route.path}`;
+
+    // 5a. Every registered route should have a corresponding MCP tool
+    const mcpTool = mcpToolsByName.get(toolName);
+    if (!mcpTool) {
+      diagnostics.push({
+        code: "cross_protocol_missing_mcp_tool",
+        severity: "error",
+        message: `${relFile}: ${routeKey} has no corresponding MCP tool (expected "${toolName}")`,
+        hint: `Ensure the route is registered with CapabilityRegistry so it is projected as an MCP tool.`,
+        ...(relPath !== undefined ? { file: relPath } : {}),
+        fixCategory: "protocol_drift",
+        autoFixable: false,
+      });
+    }
+
+    // 5b. Every registered route should have a corresponding OpenAPI path
+    if (!openApiOperations.has(routeKey)) {
+      diagnostics.push({
+        code: "cross_protocol_missing_openapi_path",
+        severity: "error",
+        message: `${relFile}: ${routeKey} has no corresponding OpenAPI path`,
+        hint: `Ensure the route is registered with CapabilityRegistry so it appears in the OpenAPI spec.`,
+        ...(relPath !== undefined ? { file: relPath } : {}),
+        fixCategory: "protocol_drift",
+        autoFixable: false,
+      });
+    }
+
+    // 5c. Every registered route should have a corresponding A2A skill
+    const a2aSkill = a2aSkillsById.get(toolName);
+    if (!a2aSkill) {
+      diagnostics.push({
+        code: "cross_protocol_missing_a2a_skill",
+        severity: "error",
+        message: `${relFile}: ${routeKey} has no corresponding A2A skill (expected id "${toolName}")`,
+        hint: `Ensure the route is registered with CapabilityRegistry so it is projected as an A2A skill.`,
+        ...(relPath !== undefined ? { file: relPath } : {}),
+        fixCategory: "protocol_drift",
+        autoFixable: false,
+      });
+    }
+
+    // 5d. Description consistency across protocols
+    if (route.description && mcpTool && a2aSkill) {
+      if (mcpTool.description !== route.description) {
+        diagnostics.push({
+          code: "cross_protocol_description_mismatch_mcp",
+          severity: "warning",
+          message: `${relFile}: ${routeKey} description differs between HTTP ("${route.description}") and MCP tool ("${mcpTool.description}")`,
+          hint: `Descriptions should be identical across protocols. Update the MCP projection logic or the defineAPI() description.`,
+          ...(relPath !== undefined ? { file: relPath } : {}),
+          fixCategory: "protocol_drift",
+          autoFixable: true,
+        });
+      }
+
+      // A2A skill uses "name" for the description when description is not set,
+      // and "description" when it is set. Check both.
+      const a2aDescription = a2aSkill.description ?? a2aSkill.name;
+      if (a2aDescription !== route.description) {
+        diagnostics.push({
+          code: "cross_protocol_description_mismatch_a2a",
+          severity: "warning",
+          message: `${relFile}: ${routeKey} description differs between HTTP ("${route.description}") and A2A skill ("${a2aDescription}")`,
+          hint: `Descriptions should be identical across protocols. Update the A2A projection logic or the defineAPI() description.`,
+          ...(relPath !== undefined ? { file: relPath } : {}),
+          fixCategory: "protocol_drift",
+          autoFixable: true,
+        });
+      }
+    }
+
+    // 5e. Input/output schema consistency across protocols
+    if (route.inputSchema) {
+      // Check MCP tool input schema matches
+      if (mcpTool) {
+        const mcpInputSchema = mcpTool.inputSchema as Record<string, unknown> | undefined;
+        if (!mcpInputSchema) {
+          diagnostics.push({
+            code: "cross_protocol_input_schema_missing_mcp",
+            severity: "warning",
+            message: `${relFile}: ${routeKey} has an input schema but the MCP tool "${toolName}" has none`,
+            hint: `The input schema should be projected identically to the MCP tool definition.`,
+            ...(relPath !== undefined ? { file: relPath } : {}),
+            fixCategory: "protocol_drift",
+            autoFixable: true,
+          });
+        } else {
+          // Deep compare the schemas
+          const httpInput = JSON.stringify(route.inputSchema);
+          const mcpInput = JSON.stringify(mcpInputSchema);
+          if (httpInput !== mcpInput) {
+            diagnostics.push({
+              code: "cross_protocol_input_schema_drift_mcp",
+              severity: "error",
+              message: `${relFile}: ${routeKey} input schema differs between HTTP and MCP tool "${toolName}"`,
+              hint: `Input schemas must be derived from the same Zod schema. Check that the registry projects the inputSchema unchanged.`,
+              ...(relPath !== undefined ? { file: relPath } : {}),
+              fixCategory: "protocol_drift",
+              autoFixable: false,
+            });
+          }
+        }
+      }
+
+      // Check A2A skill input schema matches
+      if (a2aSkill) {
+        if (!a2aSkill.inputSchema) {
+          diagnostics.push({
+            code: "cross_protocol_input_schema_missing_a2a",
+            severity: "warning",
+            message: `${relFile}: ${routeKey} has an input schema but the A2A skill "${toolName}" has none`,
+            hint: `The input schema should be projected identically to the A2A skill definition.`,
+            ...(relPath !== undefined ? { file: relPath } : {}),
+            fixCategory: "protocol_drift",
+            autoFixable: true,
+          });
+        } else {
+          const httpInput = JSON.stringify(route.inputSchema);
+          const a2aInput = JSON.stringify(a2aSkill.inputSchema);
+          if (httpInput !== a2aInput) {
+            diagnostics.push({
+              code: "cross_protocol_input_schema_drift_a2a",
+              severity: "error",
+              message: `${relFile}: ${routeKey} input schema differs between HTTP and A2A skill "${toolName}"`,
+              hint: `Input schemas must be derived from the same Zod schema. Check that the registry projects the inputSchema unchanged.`,
+              ...(relPath !== undefined ? { file: relPath } : {}),
+              fixCategory: "protocol_drift",
+              autoFixable: false,
+            });
+          }
+        }
+      }
+    }
+
+    if (route.outputSchema) {
+      // A2A skills carry outputSchema; OpenAPI uses response schema
+      if (a2aSkill) {
+        if (!a2aSkill.outputSchema) {
+          diagnostics.push({
+            code: "cross_protocol_output_schema_missing_a2a",
+            severity: "warning",
+            message: `${relFile}: ${routeKey} has an output schema but the A2A skill "${toolName}" has none`,
+            hint: `The output schema should be projected identically to the A2A skill definition.`,
+            ...(relPath !== undefined ? { file: relPath } : {}),
+            fixCategory: "protocol_drift",
+            autoFixable: true,
+          });
+        } else {
+          const httpOutput = JSON.stringify(route.outputSchema);
+          const a2aOutput = JSON.stringify(a2aSkill.outputSchema);
+          if (httpOutput !== a2aOutput) {
+            diagnostics.push({
+              code: "cross_protocol_output_schema_drift_a2a",
+              severity: "error",
+              message: `${relFile}: ${routeKey} output schema differs between HTTP and A2A skill "${toolName}"`,
+              hint: `Output schemas must be derived from the same Zod schema. Check that the registry projects the outputSchema unchanged.`,
+              ...(relPath !== undefined ? { file: relPath } : {}),
+              fixCategory: "protocol_drift",
+              autoFixable: false,
+            });
+          }
+        }
+      }
+    }
+  }
+
+  // 5f. Check for MCP tools that have no corresponding registered route (orphaned tools)
+  for (const tool of mcpTools) {
+    const matchesRoute = registeredRoutes.some(
+      (r) => routeToToolName(r.method, r.path) === tool.name,
+    );
+    if (!matchesRoute) {
+      diagnostics.push({
+        code: "cross_protocol_orphan_mcp_tool",
+        severity: "warning",
+        message: `MCP tool "${tool.name}" has no corresponding registered HTTP route`,
+        hint: `Remove the orphaned MCP tool or register the missing route.`,
+        fixCategory: "protocol_drift",
+        autoFixable: false,
+      });
+    }
+  }
+
+  // 5g. Check for A2A skills that have no corresponding registered route (orphaned skills)
+  for (const skill of a2aSkills) {
+    const matchesRoute = registeredRoutes.some(
+      (r) => routeToToolName(r.method, r.path) === skill.id,
+    );
+    if (!matchesRoute) {
+      diagnostics.push({
+        code: "cross_protocol_orphan_a2a_skill",
+        severity: "warning",
+        message: `A2A skill "${skill.id}" has no corresponding registered HTTP route`,
+        hint: `Remove the orphaned A2A skill or register the missing route.`,
+        fixCategory: "protocol_drift",
+        autoFixable: false,
+      });
+    }
+  }
+
+  // 5h. Check for defineAPI routes missing capability metadata
+  for (const parsed of parsedRoutes) {
+    if (parsed.hasDefineAPI && !parsed.capability) {
+      const relFile = relative(appRoot, parsed.filePath);
+      diagnostics.push({
+        code: "cross_protocol_missing_capability",
+        severity: "warning",
+        message: `${relFile}: ${parsed.method} ${parsed.path} uses defineAPI() but has no "capability" field`,
+        hint: `Add capability: "read" | "write" | "external" to enable multi-protocol projection.`,
+        file: parsed.filePath,
+        fixCategory: "protocol_drift",
+        autoFixable: true,
+      });
+    }
+  }
+
+  return diagnostics;
+}
+
 // ---------------------------------------------------------------------------
 // Main entry point
 // ---------------------------------------------------------------------------
@@ -869,9 +1264,9 @@ async function checkManifest(appRoot: string): Promise<VerifyDiagnostic[]> {
  * Verify a Capstan runtime application.
  *
  * Runs a cascade of checks: structure -> config -> routes -> models ->
- * typecheck -> contracts -> manifest. If an early step fails, dependent
- * steps are skipped. Returns a structured VerifyReport suitable for both
- * human display and AI agent consumption.
+ * typecheck -> contracts -> manifest -> contracts-cross-protocol. If an
+ * early step fails, dependent steps are skipped. Returns a structured
+ * VerifyReport suitable for both human display and AI agent consumption.
  */
 export async function verifyCapstanApp(appRoot: string): Promise<VerifyReport> {
   const root = resolve(appRoot);
@@ -888,6 +1283,7 @@ export async function verifyCapstanApp(appRoot: string): Promise<VerifyReport> {
     steps.push(skippedStep("typecheck", "Skipped: structure check failed."));
     steps.push(skippedStep("contracts", "Skipped: structure check failed."));
     steps.push(skippedStep("manifest", "Skipped: structure check failed."));
+    steps.push(skippedStep("contracts-cross-protocol", "Skipped: structure check failed."));
     return buildReport(root, steps);
   }
 
@@ -901,6 +1297,7 @@ export async function verifyCapstanApp(appRoot: string): Promise<VerifyReport> {
     steps.push(skippedStep("typecheck", "Skipped: config check failed."));
     steps.push(skippedStep("contracts", "Skipped: config check failed."));
     steps.push(skippedStep("manifest", "Skipped: config check failed."));
+    steps.push(skippedStep("contracts-cross-protocol", "Skipped: config check failed."));
     return buildReport(root, steps);
   }
 
@@ -918,6 +1315,7 @@ export async function verifyCapstanApp(appRoot: string): Promise<VerifyReport> {
     steps.push(skippedStep("typecheck", "Skipped: routes check failed."));
     steps.push(skippedStep("contracts", "Skipped: routes check failed."));
     steps.push(skippedStep("manifest", "Skipped: routes check failed."));
+    steps.push(skippedStep("contracts-cross-protocol", "Skipped: routes check failed."));
     return buildReport(root, steps);
   }
 
@@ -927,6 +1325,7 @@ export async function verifyCapstanApp(appRoot: string): Promise<VerifyReport> {
   if (typecheckStep.status === "failed") {
     steps.push(skippedStep("contracts", "Skipped: typecheck failed."));
     steps.push(skippedStep("manifest", "Skipped: typecheck failed."));
+    steps.push(skippedStep("contracts-cross-protocol", "Skipped: typecheck failed."));
     return buildReport(root, steps);
   }
 
@@ -936,12 +1335,24 @@ export async function verifyCapstanApp(appRoot: string): Promise<VerifyReport> {
 
   if (contractsStep.status === "failed") {
     steps.push(skippedStep("manifest", "Skipped: contracts check failed."));
+    steps.push(skippedStep("contracts-cross-protocol", "Skipped: contracts check failed."));
     return buildReport(root, steps);
   }
 
   // Step 7: manifest
   const manifestStep = await measureStep("manifest", () => checkManifest(root));
   steps.push(manifestStep);
+
+  if (manifestStep.status === "failed") {
+    steps.push(skippedStep("contracts-cross-protocol", "Skipped: manifest check failed."));
+    return buildReport(root, steps);
+  }
+
+  // Step 8: cross-protocol contract consistency
+  const crossProtocolStep = await measureStep("contracts-cross-protocol", () =>
+    checkCrossProtocol(root),
+  );
+  steps.push(crossProtocolStep);
 
   return buildReport(root, steps);
 }

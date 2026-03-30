@@ -23,9 +23,13 @@ export interface LoaderArgs {
 
 export type LoaderFunction<T = unknown> = (args: LoaderArgs) => Promise<T>;
 
+export type HydrationMode = "full" | "visible" | "none";
+
 export interface PageModule {
   default: (props: Record<string, unknown>) => ReactElement;
   loader?: LoaderFunction;
+  /** Page-level hydration strategy export */
+  hydration?: HydrationMode;
 }
 
 export interface LayoutModule {
@@ -38,6 +42,8 @@ export interface RenderPageOptions {
   params: Record<string, string>;
   request: Request;
   loaderArgs: LoaderArgs;
+  /** Hydration strategy (default: "full") */
+  hydration?: HydrationMode;
 }
 
 export interface RenderResult {

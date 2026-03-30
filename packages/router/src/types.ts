@@ -17,6 +17,8 @@ export interface RouteEntry {
   params: string[];
   /** Whether this is a catch-all route */
   isCatchAll: boolean;
+  /** Hydration strategy for page routes */
+  hydration?: "full" | "visible" | "none";
 }
 
 export interface RouteManifest {
