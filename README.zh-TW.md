@@ -464,24 +464,6 @@ Capstan 包含 9 個執行時期套件：
 | `@zauso-ai/capstan-cli` | CLI：`dev`、`build`、`start`、`verify`、`add`、`mcp`、`db:*` |
 | `create-capstan-app` | 專案鷹架工具（`--template blank`、`--template tickets`） |
 
-<details>
-<summary>舊版編譯器套件（位於 <code>packages-legacy/</code>）</summary>
-
-原始編譯器系統已獨立保留以維持向下相容性。新專案不需要這些套件。
-
-| 套件 | 說明 |
-|------|------|
-| `@zauso-ai/capstan-app-graph` | 應用程式圖結構描述、驗證、差異比對 |
-| `@zauso-ai/capstan-brief` | Brief 至圖結構編譯 |
-| `@zauso-ai/capstan-compiler` | 圖結構至應用程式碼產生 |
-| `@zauso-ai/capstan-packs-core` | 可組合套件（驗證、多租戶、工作流程、帳務、商務） |
-| `@zauso-ai/capstan-surface-web` | 網頁介面投射 |
-| `@zauso-ai/capstan-surface-agent` | Agent 介面投射 |
-| `@zauso-ai/capstan-feedback` | 驗證與診斷 |
-| `@zauso-ai/capstan-release` | 發佈規劃與回滾 |
-| `@zauso-ai/capstan-harness` | 持久化任務執行環境 |
-
-</details>
 
 ---
 

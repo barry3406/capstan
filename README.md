@@ -467,24 +467,6 @@ Capstan ships 9 runtime packages:
 | `@zauso-ai/capstan-cli` | CLI: `dev`, `build`, `start`, `verify`, `add`, `mcp`, `db:*` |
 | `create-capstan-app` | Project scaffolder (`--template blank`, `--template tickets`) |
 
-<details>
-<summary>Legacy compiler packages (in <code>packages-legacy/</code>)</summary>
-
-The original compiler system is preserved separately for backward compatibility. These packages are not required for new projects.
-
-| Package | Description |
-|---------|-------------|
-| `@zauso-ai/capstan-app-graph` | Application graph schema, validation, diffing |
-| `@zauso-ai/capstan-brief` | Brief-to-graph compilation |
-| `@zauso-ai/capstan-compiler` | Graph-to-app code generation |
-| `@zauso-ai/capstan-packs-core` | Composable packs (auth, tenant, workflow, billing, commerce) |
-| `@zauso-ai/capstan-surface-web` | Web surface projection |
-| `@zauso-ai/capstan-surface-agent` | Agent surface projection |
-| `@zauso-ai/capstan-feedback` | Verification and diagnostics |
-| `@zauso-ai/capstan-release` | Release planning and rollback |
-| `@zauso-ai/capstan-harness` | Durable task runtime |
-
-</details>
 
 ---
 

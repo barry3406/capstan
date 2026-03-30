@@ -15,8 +15,6 @@ npm run build
 # Run new tests (Bun — 983 tests in ~17s)
 npm run test:new
 
-# Run legacy tests (vitest — for old compiler packages)
-npm test
 
 # Dev server
 npx capstan dev
@@ -39,23 +37,17 @@ npx create-capstan-app
 
 ## Architecture
 
-### Two Systems
+### Packages (9 runtime)
 
-The repo has two coexisting systems:
-
-**Runtime Framework (NEW — the primary system):**
-- `@zauso-ai/capstan-core` — Hono HTTP server, defineAPI, defineMiddleware, definePolicy, approval workflow
+- `@zauso-ai/capstan-core` — Hono HTTP server, defineAPI, defineMiddleware, definePolicy, approval workflow, events, circuit breaker, metrics, compliance
 - `@zauso-ai/capstan-router` — File-based routing (.page.tsx, .api.ts, _layout.tsx, _middleware.ts)
-- `@zauso-ai/capstan-db` — Drizzle ORM, defineModel, field/relation helpers, migration, auto CRUD generation
-- `@zauso-ai/capstan-auth` — JWT sessions, API key auth for agents, permission checking
-- `@zauso-ai/capstan-agent` — CapabilityRegistry, agent manifest, MCP server, A2A adapter, OpenAPI generator
-- `@zauso-ai/capstan-react` — SSR with loaders, layouts, Outlet, hydration
-- `@zauso-ai/capstan-dev` — Dev server with file watching, hot route reload, MCP/A2A endpoints
-- `create-capstan-app` — Project scaffolder
-
-**Compiler System (LEGACY — still functional):**
-- `@zauso-ai/capstan-app-graph`, `@zauso-ai/capstan-brief`, `@zauso-ai/capstan-compiler`, `@zauso-ai/capstan-packs-core`
-- `@zauso-ai/capstan-surface-web`, `@zauso-ai/capstan-surface-agent`, `@zauso-ai/capstan-feedback`, `@zauso-ai/capstan-release`, `@zauso-ai/capstan-harness`
+- `@zauso-ai/capstan-db` — Drizzle ORM, defineModel, field/relation helpers, migration, auto CRUD, vector search, RAG
+- `@zauso-ai/capstan-auth` — JWT sessions, API key auth, OAuth providers, DPoP, SPIFFE/mTLS
+- `@zauso-ai/capstan-agent` — CapabilityRegistry, MCP server/client, A2A adapter, OpenAPI, LangChain, commerce, testing
+- `@zauso-ai/capstan-react` — Streaming SSR, selective hydration, layouts, Outlet, ServerOnly
+- `@zauso-ai/capstan-dev` — Dev server, CSS pipeline, multi-runtime adapters, file watching
+- `@zauso-ai/capstan-cli` — CLI with colored output, fuzzy matching, grouped help
+- `create-capstan-app` — Interactive scaffolder with @clack/prompts
 
 ### Multi-Protocol Architecture
 
@@ -127,4 +119,3 @@ Only update the files relevant to the change — not every file every time. The 
 ## Testing
 
 - New packages: `bun test` (tests/unit/core,router,db,auth,agent + tests/integration/dev-server,full-pipeline)
-- Legacy packages: `vitest run` (tests/unit/app-graph,brief,compiler,packs-core,surface-web + tests/integration/* + tests/e2e/*)

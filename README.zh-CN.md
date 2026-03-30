@@ -468,24 +468,6 @@ npx capstan start
 | `@zauso-ai/capstan-cli` | CLI 命令：`dev`、`build`、`start`、`verify`、`add`、`mcp`、`db:*` |
 | `create-capstan-app` | 项目脚手架（`--template blank`、`--template tickets`） |
 
-<details>
-<summary>遗留编译系统包（位于 <code>packages-legacy/</code>）</summary>
-
-原编译系统独立保留，用于向后兼容。新项目无需使用这些包。
-
-| 包名 | 说明 |
-|------|------|
-| `@zauso-ai/capstan-app-graph` | 应用图谱 schema、校验、diff |
-| `@zauso-ai/capstan-brief` | Brief 到图谱的编译 |
-| `@zauso-ai/capstan-compiler` | 图谱到应用代码生成 |
-| `@zauso-ai/capstan-packs-core` | 可组合 Pack（auth、tenant、workflow、billing、commerce） |
-| `@zauso-ai/capstan-surface-web` | Web 表面投影 |
-| `@zauso-ai/capstan-surface-agent` | Agent 表面投影 |
-| `@zauso-ai/capstan-feedback` | 验证与诊断 |
-| `@zauso-ai/capstan-release` | 发布计划与回滚 |
-| `@zauso-ai/capstan-harness` | 持久化任务运行时 |
-
-</details>
 
 ---
 
