@@ -1,5 +1,6 @@
 import { watch, existsSync } from "node:fs";
 import type { FSWatcher } from "node:fs";
+import path from "node:path";
 
 /**
  * Watch a routes directory for file changes and invoke a callback when
@@ -13,7 +14,7 @@ import type { FSWatcher } from "node:fs";
  */
 export function watchRoutes(
   routesDir: string,
-  onChange: () => void,
+  onChange: (changedFile?: string) => void,
 ): { close: () => void } {
   // If the directory doesn't exist, return a no-op watcher.
   // The dev server will retry on next explicit scan.
@@ -23,6 +24,7 @@ export function watchRoutes(
 
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
   let closed = false;
+  let lastChangedFile: string | undefined;
 
   const DEBOUNCE_MS = 300;
 
@@ -34,8 +36,10 @@ export function watchRoutes(
     return ROUTE_EXTENSIONS.some((ext) => filename.endsWith(ext));
   }
 
-  function scheduleCallback(): void {
+  function scheduleCallback(changedFile?: string): void {
     if (closed) return;
+
+    lastChangedFile = changedFile;
 
     if (debounceTimer !== null) {
       clearTimeout(debounceTimer);
@@ -44,7 +48,8 @@ export function watchRoutes(
     debounceTimer = setTimeout(() => {
       debounceTimer = null;
       if (!closed) {
-        onChange();
+        onChange(lastChangedFile);
+        lastChangedFile = undefined;
       }
     }, DEBOUNCE_MS);
   }
@@ -54,7 +59,8 @@ export function watchRoutes(
   try {
     watcher = watch(routesDir, { recursive: true }, (_eventType, filename) => {
       if (isRouteFile(filename ?? null)) {
-        scheduleCallback();
+        const fullPath = filename ? path.join(routesDir, filename) : undefined;
+        scheduleCallback(fullPath);
       }
     });
   } catch {

@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
+import { Readable } from "node:stream";
 import { readFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
 import path from "node:path";
 
 import { Hono } from "hono";
@@ -18,7 +18,7 @@ import {
 } from "@zauso-ai/capstan-core";
 import type { APIDefinition, HttpMethod, CapstanContext, CapstanAuthContext } from "@zauso-ai/capstan-core";
 
-import { loadApiHandlers, loadPageModule } from "./loader.js";
+import { loadApiHandlers, loadLayoutModule, loadPageModule, invalidateModuleCache } from "./loader.js";
 import { watchRoutes } from "./watcher.js";
 import { printStartupBanner } from "./printer.js";
 import type { DevServerConfig, DevServerInstance } from "./types.js";
@@ -197,6 +197,56 @@ const MIME_TYPES: Record<string, string> = {
 
 /** Hono env type that declares the capstanAuth variable. */
 type HonoEnv = { Variables: { capstanAuth: CapstanAuthContext } };
+
+// ---------------------------------------------------------------------------
+// Cached framework package imports
+// ---------------------------------------------------------------------------
+// These dynamic imports are cached at module level so they are resolved at
+// most once across rebuilds, avoiding repeated filesystem and module-graph
+// resolution overhead.
+
+let _reactPkg: {
+  renderPage: (opts: {
+    pageModule: { default: unknown; loader?: unknown };
+    layouts: Array<{ default: unknown }>;
+    params: Record<string, string>;
+    request: Request;
+    loaderArgs: {
+      params: Record<string, string>;
+      request: Request;
+      ctx: { auth: CapstanContext["auth"] };
+      fetch: Record<string, unknown>;
+    };
+  }) => Promise<{ html: string; loaderData: unknown; statusCode: number }>;
+} | null = null;
+
+let _agentPkg: {
+  generateA2AAgentCard: (
+    cfg: { name: string; description?: string; baseUrl?: string },
+    routes: Array<{ method: string; path: string; description?: string; inputSchema?: Record<string, unknown>; outputSchema?: Record<string, unknown> }>,
+  ) => unknown;
+  createA2AHandler: (
+    cfg: { name: string; description?: string; baseUrl?: string },
+    routes: Array<{ method: string; path: string; description?: string; inputSchema?: Record<string, unknown>; outputSchema?: Record<string, unknown> }>,
+    executeRoute: (method: string, path: string, input: unknown) => Promise<unknown>,
+  ) => {
+    handleRequest: (body: unknown) => Promise<unknown>;
+  };
+  routeToToolName: (method: string, path: string) => string;
+  createMcpServer: (
+    cfg: { name: string; description?: string },
+    routes: Array<{ method: string; path: string; description?: string; inputSchema?: Record<string, unknown> }>,
+    executeRoute: (method: string, path: string, input: unknown) => Promise<unknown>,
+  ) => { server: unknown; getToolDefinitions: () => Array<{ name: string; description: string; inputSchema: unknown }> };
+} | null = null;
+
+async function getAgentPkg(): Promise<NonNullable<typeof _agentPkg>> {
+  if (!_agentPkg) {
+    const agentModuleName = "@zauso-ai/capstan-agent";
+    _agentPkg = (await import(agentModuleName)) as NonNullable<typeof _agentPkg>;
+  }
+  return _agentPkg;
+}
 
 /**
  * Given a scanned route manifest, build a fresh Hono application with all
@@ -544,15 +594,8 @@ async function buildApp(
         }
       }
 
-      // Resolve auth for page loaders when auth middleware is configured.
-      let pageAuth: CapstanAuthContext | undefined;
-      if (resolveAuth) {
-        try {
-          pageAuth = await resolveAuth(request);
-        } catch {
-          // Auth resolution failed — fall through to anonymous.
-        }
-      }
+      // Read auth from Hono context — already resolved by the auth middleware.
+      const pageAuth: CapstanAuthContext | undefined = c.get("capstanAuth");
 
       const ctx = buildStandaloneContext(request, pageAuth);
 
@@ -592,28 +635,34 @@ async function buildApp(
       // We use a dynamic import so the dev server works even when
       // @zauso-ai/capstan-react is not installed.
       try {
-        const reactModuleName = "@zauso-ai/capstan-react";
-        const reactPkg = (await import(reactModuleName)) as {
-          renderPage: (opts: {
-            pageModule: { default: unknown; loader?: unknown };
-            layouts: Array<{ default: unknown }>;
-            params: Record<string, string>;
-            request: Request;
-            loaderArgs: {
-              params: Record<string, string>;
-              request: Request;
-              ctx: { auth: CapstanContext["auth"] };
-              fetch: Record<string, unknown>;
-            };
-          }) => Promise<{ html: string; loaderData: unknown; statusCode: number }>;
-        };
+        if (!_reactPkg) {
+          const reactModuleName = "@zauso-ai/capstan-react";
+          _reactPkg = (await import(reactModuleName)) as NonNullable<typeof _reactPkg>;
+        }
+        const reactPkg = _reactPkg;
 
-        const result = await reactPkg.renderPage({
+        // Load layout modules in parallel for this route
+        const layoutResults = await Promise.all(
+          route.layouts.map(async (layoutPath) => {
+            try {
+              const layoutMod = await loadLayoutModule(layoutPath);
+              return layoutMod.default ? { default: layoutMod.default } : null;
+            } catch {
+              return null;
+            }
+          })
+        );
+        const loadedLayouts: Array<{ default: unknown }> = [];
+        for (const l of layoutResults) {
+          if (l !== null) loadedLayouts.push(l);
+        }
+
+        const renderOpts = {
           pageModule: {
             default: pageModule.default,
             loader: pageModule.loader,
           },
-          layouts: [],
+          layouts: loadedLayouts,
           params,
           request,
           loaderArgs: {
@@ -627,7 +676,33 @@ async function buildApp(
               delete: async () => null,
             },
           },
-        });
+        };
+
+        // Prefer streaming SSR when available.  We collect the stream to a
+        // string so that `injectLiveReload` can insert the SSE script before
+        // `</body>`.  This keeps live-reload working while still benefiting
+        // from streaming internally (Suspense, reduced memory pressure).
+        if (typeof (reactPkg as Record<string, unknown>)["renderPageStream"] === "function") {
+          const renderStream = (reactPkg as Record<string, unknown>)["renderPageStream"] as (
+            opts: typeof renderOpts,
+          ) => Promise<{ stream: ReadableStream<Uint8Array>; loaderData: unknown; statusCode: number }>;
+          const { stream, statusCode } = await renderStream(renderOpts);
+
+          // Collect stream to string for live-reload injection
+          const reader = stream.getReader();
+          const decoder = new TextDecoder();
+          let html = "";
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            html += decoder.decode(value, { stream: true });
+          }
+          html += decoder.decode();
+
+          return c.html(injectLiveReload(html), statusCode as 200);
+        }
+
+        const result = await reactPkg.renderPage(renderOpts);
 
         return c.html(injectLiveReload(result.html), result.statusCode as 200);
       } catch {
@@ -740,13 +815,7 @@ ${LIVE_RELOAD_SCRIPT}
 
   app.get("/.well-known/agent.json", async (c) => {
     try {
-      const agentModuleName = "@zauso-ai/capstan-agent";
-      const agentPkg = (await import(agentModuleName)) as {
-        generateA2AAgentCard: (
-          cfg: { name: string; description?: string; baseUrl?: string },
-          routes: Array<{ method: string; path: string; description?: string; inputSchema?: Record<string, unknown>; outputSchema?: Record<string, unknown> }>,
-        ) => unknown;
-      };
+      const agentPkg = await getAgentPkg();
 
       const card = agentPkg.generateA2AAgentCard(
         {
@@ -767,16 +836,7 @@ ${LIVE_RELOAD_SCRIPT}
 
   app.post("/.well-known/a2a", async (c) => {
     try {
-      const agentModuleName = "@zauso-ai/capstan-agent";
-      const agentPkg = (await import(agentModuleName)) as {
-        createA2AHandler: (
-          cfg: { name: string; description?: string; baseUrl?: string },
-          routes: Array<{ method: string; path: string; description?: string; inputSchema?: Record<string, unknown>; outputSchema?: Record<string, unknown> }>,
-          executeRoute: (method: string, path: string, input: unknown) => Promise<unknown>,
-        ) => {
-          handleRequest: (body: unknown) => Promise<unknown>;
-        };
-      };
+      const agentPkg = await getAgentPkg();
 
       const executeRoute = async (
         method: string,
@@ -835,10 +895,7 @@ ${LIVE_RELOAD_SCRIPT}
 
   app.post("/.well-known/mcp", async (c) => {
     try {
-      const agentModuleName = "@zauso-ai/capstan-agent";
-      const agentPkg = (await import(agentModuleName)) as {
-        routeToToolName: (method: string, path: string) => string;
-      };
+      const agentPkg = await getAgentPkg();
 
       const tools = routeRegistry.map((r) => ({
         name: agentPkg.routeToToolName(r.method, r.path),
@@ -873,33 +930,30 @@ ${LIVE_RELOAD_SCRIPT}
 
   const publicDir = config.publicDir ?? path.join(config.rootDir, "app", "public");
 
-  if (existsSync(publicDir)) {
-    app.get("*", async (c) => {
-      const urlPath = new URL(c.req.url).pathname;
+  app.get("*", async (c) => {
+    const urlPath = new URL(c.req.url).pathname;
 
-      // Prevent directory traversal
-      const resolved = path.resolve(publicDir, `.${urlPath}`);
-      if (!resolved.startsWith(publicDir)) {
-        return c.json({ error: "Forbidden" }, 403);
-      }
+    // Prevent directory traversal
+    const resolved = path.resolve(publicDir, `.${urlPath}`);
+    if (!resolved.startsWith(publicDir)) {
+      return c.json({ error: "Forbidden" }, 403);
+    }
 
-      if (!existsSync(resolved)) {
-        return c.notFound();
-      }
-
-      try {
-        const content = await readFile(resolved);
-        const ext = path.extname(resolved).toLowerCase();
-        const contentType = MIME_TYPES[ext] ?? "application/octet-stream";
-        return new Response(content, {
-          status: 200,
-          headers: { "Content-Type": contentType },
-        });
-      } catch {
-        return c.notFound();
-      }
-    });
-  }
+    try {
+      const content = await readFile(resolved);
+      const ext = path.extname(resolved).toLowerCase();
+      const contentType = MIME_TYPES[ext] ?? "application/octet-stream";
+      return new Response(content, {
+        status: 200,
+        headers: {
+          "Content-Type": contentType,
+          "Cache-Control": "no-cache",
+        },
+      });
+    } catch {
+      return c.notFound();
+    }
+  });
 
   return { app, apiRouteCount, pageRouteCount, routeRegistry };
 }
@@ -949,14 +1003,7 @@ export async function createDevServer(
 
   async function buildMcpServer(): Promise<void> {
     try {
-      const agentModuleName = "@zauso-ai/capstan-agent";
-      const agentPkg = (await import(agentModuleName)) as {
-        createMcpServer: (
-          cfg: { name: string; description?: string },
-          routes: Array<{ method: string; path: string; description?: string; inputSchema?: Record<string, unknown> }>,
-          executeRoute: (method: string, path: string, input: unknown) => Promise<unknown>,
-        ) => McpServerType;
-      };
+      const agentPkg = await getAgentPkg();
 
       const executeRoute = async (
         method: string,
@@ -1075,13 +1122,24 @@ export async function createDevServer(
       const request = new Request(url.toString(), init);
       const response = await currentApp.fetch(request);
 
-      // Write the Hono response back through the Node.js response.
+      // Stream the Hono response back through the Node.js response.
       res.writeHead(
         response.status,
         Object.fromEntries(response.headers.entries()),
       );
-      const responseBody = await response.text();
-      res.end(responseBody);
+      if (response.body) {
+        const readable = Readable.fromWeb(response.body as import("node:stream/web").ReadableStream);
+        readable.on("error", (err) => {
+          // eslint-disable-next-line no-console
+          console.error("[capstan] Response stream error:", err);
+          if (!res.writableEnded) {
+            res.end();
+          }
+        });
+        readable.pipe(res);
+      } else {
+        res.end();
+      }
     } catch (err: unknown) {
       const statusCode = (err as { statusCode?: number }).statusCode;
       if (statusCode === 413) {
@@ -1102,10 +1160,12 @@ export async function createDevServer(
 
   // --- File watcher ---------------------------------------------------------
 
-  async function rebuildRoutes(): Promise<void> {
+  async function rebuildRoutes(changedFile?: string): Promise<void> {
     try {
       // eslint-disable-next-line no-console
       console.log("[capstan] Routes changed, rebuilding...");
+      // Invalidate only the changed file so unchanged modules stay cached.
+      invalidateModuleCache(changedFile);
       manifest = await scanRoutes(routesDir);
       const rebuilt = await buildApp(manifest, config);
       currentApp = rebuilt.app;
@@ -1133,8 +1193,8 @@ export async function createDevServer(
     }
   }
 
-  const watcher = watchRoutes(routesDir, () => {
-    void rebuildRoutes();
+  const watcher = watchRoutes(routesDir, (changedFile) => {
+    void rebuildRoutes(changedFile);
   });
 
   // --- DevServerInstance ----------------------------------------------------

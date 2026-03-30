@@ -144,50 +144,9 @@ export function createCapstanApp(config: CapstanConfig): CapstanApp {
 
     // --- mount on Hono --------------------------------------------------
     const honoHandler = async (c: HonoContext<CapstanEnv>) => {
-      const ctx = createContext(c as unknown as HonoContext);
+      const ctx = c.get("capstanCtx");
 
-      // Policy enforcement
-      if (policies && policies.length > 0) {
-        let rawInput: unknown;
-        try {
-          rawInput =
-            method === "GET"
-              ? Object.fromEntries(new URL(c.req.url).searchParams)
-              : await c.req.json();
-        } catch {
-          rawInput = undefined;
-        }
-
-        const policyResult = await enforcePolicies(policies, ctx, rawInput);
-        if (policyResult.effect === "deny") {
-          return c.json(
-            { error: "Forbidden", reason: policyResult.reason ?? "Policy denied" },
-            403,
-          );
-        }
-        if (policyResult.effect === "approve") {
-          const reason =
-            policyResult.reason ?? "This action requires approval";
-          const approval = createApproval({
-            method,
-            path,
-            input: rawInput,
-            policy: policies.map((p) => p.key).join(", "),
-            reason,
-          });
-          return c.json(
-            {
-              status: "approval_required",
-              approvalId: approval.id,
-              reason,
-              pollUrl: `/capstan/approvals/${approval.id}`,
-            },
-            202,
-          );
-        }
-      }
-
-      // Parse input
+      // Parse input once — reused by both policy enforcement and the handler.
       let input: unknown;
       try {
         if (method === "GET") {
@@ -202,6 +161,37 @@ export function createCapstanApp(config: CapstanConfig): CapstanApp {
         }
       } catch {
         input = {};
+      }
+
+      // Policy enforcement
+      if (policies && policies.length > 0) {
+        const policyResult = await enforcePolicies(policies, ctx, input);
+        if (policyResult.effect === "deny") {
+          return c.json(
+            { error: "Forbidden", reason: policyResult.reason ?? "Policy denied" },
+            403,
+          );
+        }
+        if (policyResult.effect === "approve") {
+          const reason =
+            policyResult.reason ?? "This action requires approval";
+          const approval = createApproval({
+            method,
+            path,
+            input,
+            policy: policies.map((p) => p.key).join(", "),
+            reason,
+          });
+          return c.json(
+            {
+              status: "approval_required",
+              approvalId: approval.id,
+              reason,
+              pollUrl: `/capstan/approvals/${approval.id}`,
+            },
+            202,
+          );
+        }
       }
 
       // Run handler (which already includes input/output validation)
@@ -257,6 +247,7 @@ export function createCapstanApp(config: CapstanConfig): CapstanApp {
   // ------------------------------------------------------------------
 
   app.get("/.well-known/capstan.json", (c) => {
+    c.header("Cache-Control", "public, max-age=5");
     const manifest = {
       name: config.app?.name ?? "capstan-app",
       title: config.app?.title ?? config.app?.name ?? "Capstan App",

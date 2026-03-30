@@ -46,6 +46,14 @@ export interface RenderResult {
   statusCode: number;
 }
 
+export interface RenderStreamResult {
+  stream: ReadableStream<Uint8Array>;
+  /** Resolves when the entire document has been emitted (useful for bots/crawlers). */
+  allReady: Promise<void>;
+  loaderData: unknown;
+  statusCode: number;
+}
+
 export interface CapstanPageContext {
   loaderData: unknown;
   params: Record<string, string>;

@@ -1,9 +1,13 @@
-import { renderToString } from "react-dom/server";
+import { renderToReadableStream } from "react-dom/server";
 import { createElement } from "react";
 import type { ReactElement } from "react";
 import { PageContext } from "./loader.js";
 import { OutletProvider } from "./layout.js";
-import type { RenderPageOptions, RenderResult } from "./types.js";
+import type {
+  RenderPageOptions,
+  RenderResult,
+  RenderStreamResult,
+} from "./types.js";
 
 /**
  * Escapes a string for safe embedding inside a <script> tag.
@@ -18,9 +22,42 @@ function escapeJsonForScript(json: string): string {
     .replace(/\u2029/g, "\\u2029");
 }
 
-export async function renderPage(
+/**
+ * Minimal document shell used when no layout provides the full <html> wrapper.
+ * Rendered via createElement so JSX transform is not required.
+ */
+function DocumentShell(props: { children?: ReactElement }) {
+  return createElement(
+    "html",
+    { lang: "en" },
+    createElement(
+      "head",
+      null,
+      createElement("meta", { charSet: "utf-8" }),
+      createElement("meta", {
+        name: "viewport",
+        content: "width=device-width, initial-scale=1",
+      }),
+    ),
+    createElement(
+      "body",
+      null,
+      createElement("div", { id: "capstan-root" }, props.children),
+    ),
+  );
+}
+
+/**
+ * Streaming SSR entry point.
+ *
+ * Returns a ReadableStream produced by React 18's `renderToReadableStream`,
+ * which flushes the shell immediately and streams Suspense fallbacks as they
+ * resolve. Use this in the dev server / production handler to pipe directly
+ * into the HTTP response for optimal TTFB.
+ */
+export async function renderPageStream(
   options: RenderPageOptions,
-): Promise<RenderResult> {
+): Promise<RenderStreamResult> {
   const { pageModule, layouts, loaderArgs, params } = options;
 
   // 1. Run loader if present
@@ -55,31 +92,52 @@ export async function renderPage(
     content,
   );
 
-  // 6. Render to HTML string
-  const html = renderToString(tree);
+  // 6. When no layout provides a full document, wrap in a minimal shell so
+  //    React can generate the proper DOCTYPE and <html> structure.
+  const finalTree =
+    layouts.length > 0 ? tree : createElement(DocumentShell, null, tree);
 
   // 7. Build serialised data payload, escaped for safe script embedding
   const serializedData = escapeJsonForScript(
     JSON.stringify({ loaderData, params, auth: contextValue.auth }),
   );
 
-  // 8. Create full HTML document with embedded loader data for hydration
-  const fullHtml = `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-</head>
-<body>
-  <div id="capstan-root">${html}</div>
-  <script>window.__CAPSTAN_DATA__ = ${serializedData}</script>
-  <script type="module" src="/_capstan/client.js"></script>
-</body>
-</html>`;
+  // 8. Render to a ReadableStream with hydration bootstrap
+  const stream = await renderToReadableStream(finalTree, {
+    bootstrapScriptContent: `window.__CAPSTAN_DATA__ = ${serializedData}`,
+    bootstrapModules: ["/_capstan/client.js"],
+  });
 
-  return {
-    html: fullHtml,
-    loaderData,
-    statusCode: 200,
-  };
+  // `allReady` resolves once the entire document (including all Suspense
+  // boundaries) has been emitted.  Callers serving bots/crawlers can await
+  // it before piping the stream to guarantee a complete response.
+  const allReady = (stream as unknown as { allReady: Promise<void> }).allReady;
+
+  return { stream, allReady, loaderData, statusCode: 200 };
+}
+
+/**
+ * String-based SSR entry point (backward compatible).
+ *
+ * Internally delegates to `renderPageStream()` and collects the full stream
+ * into a string. Prefer `renderPageStream()` in new code for better TTFB.
+ */
+export async function renderPage(
+  options: RenderPageOptions,
+): Promise<RenderResult> {
+  const { stream, loaderData, statusCode } = await renderPageStream(options);
+
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let html = "";
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    html += decoder.decode(value, { stream: true });
+  }
+  // Flush any remaining bytes
+  html += decoder.decode();
+
+  return { html, loaderData, statusCode };
 }

@@ -1,27 +1,68 @@
 import { pathToFileURL } from "node:url";
+import { stat } from "node:fs/promises";
 
 /**
- * Monotonically increasing counter used to bust Node's ESM module cache.
- * Each call to `loadRouteModule` gets a unique query string so that the
- * runtime always re-evaluates the file -- critical for HMR-like behavior
- * during development.
+ * Cached module entry that tracks the file's mtime so we only re-evaluate
+ * modules when the underlying file has actually changed on disk.
  */
-let cacheBustCounter = 0;
+interface CachedModule {
+  mod: Record<string, unknown>;
+  mtimeMs: number;
+}
 
 /**
- * Dynamically import a module from disk, bypassing Node's module cache
- * by appending a unique query parameter to the file URL.
+ * Module cache keyed by absolute file path. Each entry stores the imported
+ * module namespace and the mtime at the time of import. On subsequent calls
+ * the file's current mtime is compared and the cache is reused when unchanged.
+ */
+const moduleCache = new Map<string, CachedModule>();
+
+/**
+ * Monotonically increasing generation counter bumped on explicit cache
+ * invalidation.  Appended to the import URL alongside the file mtime to
+ * guarantee uniqueness even when rapid edits occur within the same
+ * millisecond (e.g. editor auto-format on save).
+ */
+let cacheGeneration = 0;
+
+/**
+ * Dynamically import a module from disk, using a mtime-based cache to avoid
+ * redundant re-evaluation. The module is only re-imported when the file's
+ * modification time has changed, which is critical for dev-server performance
+ * while still supporting HMR-like behavior during development.
  *
  * Returns the full module namespace object.
  */
 export async function loadRouteModule(
   filePath: string,
 ): Promise<Record<string, unknown>> {
-  const fileUrl = pathToFileURL(filePath).href;
-  const bustUrl = `${fileUrl}?t=${Date.now()}_${cacheBustCounter++}`;
+  const fileStat = await stat(filePath);
+  const cached = moduleCache.get(filePath);
+  if (cached && cached.mtimeMs === fileStat.mtimeMs) {
+    return cached.mod;
+  }
 
+  const fileUrl = pathToFileURL(filePath).href;
+  const bustUrl = `${fileUrl}?t=${fileStat.mtimeMs}_${cacheGeneration}`;
   const mod = (await import(bustUrl)) as Record<string, unknown>;
+  moduleCache.set(filePath, { mod, mtimeMs: fileStat.mtimeMs });
   return mod;
+}
+
+/**
+ * Invalidate the module cache for a specific file path, or clear the entire
+ * cache if no path is provided. Called by the file watcher when files change
+ * so that the next `loadRouteModule()` call re-evaluates the module.
+ */
+export function invalidateModuleCache(filePath?: string): void {
+  if (filePath) {
+    moduleCache.delete(filePath);
+  } else {
+    moduleCache.clear();
+  }
+  // Bump generation so that a subsequent import of the same file with the
+  // same mtime still gets a unique URL, avoiding stale Node ESM cache hits.
+  cacheGeneration++;
 }
 
 /**
@@ -90,6 +131,26 @@ export async function loadPageModule(filePath: string): Promise<{
 
   if (mod["default"] !== undefined) result.default = mod["default"];
   if (mod["loader"] !== undefined) result.loader = mod["loader"];
+
+  return result;
+}
+
+/**
+ * Import a layout file and extract the default component.
+ *
+ * Layout files are expected to export:
+ *   - `default` -- a React component that renders `<Outlet />` for child content
+ */
+export async function loadLayoutModule(filePath: string): Promise<{
+  default?: unknown;
+}> {
+  const mod = await loadRouteModule(filePath);
+
+  const result: {
+    default?: unknown;
+  } = {};
+
+  if (mod["default"] !== undefined) result.default = mod["default"];
 
   return result;
 }

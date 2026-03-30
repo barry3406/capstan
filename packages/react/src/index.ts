@@ -1,4 +1,4 @@
-export { renderPage } from "./ssr.js";
+export { renderPage, renderPageStream } from "./ssr.js";
 export { defineLoader, useLoaderData, PageContext } from "./loader.js";
 export { Outlet, OutletProvider } from "./layout.js";
 export { useAuth, useParams } from "./hooks.js";
@@ -10,5 +10,6 @@ export type {
   LayoutModule,
   RenderPageOptions,
   RenderResult,
+  RenderStreamResult,
   CapstanPageContext,
 } from "./types.js";
