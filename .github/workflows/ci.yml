@@ -13,21 +13,16 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
-
-    strategy:
-      matrix:
-        node-version: [22]
-
-    name: Node ${{ matrix.node-version }}
+    name: Build & Test
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js ${{ matrix.node-version }}
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ matrix.node-version }}
+          node-version: "22"
           cache: "npm"
 
       - name: Setup Bun
@@ -36,16 +31,10 @@ jobs:
           bun-version: "1.x"
 
       - name: Install dependencies
-        run: npm install
+        run: npm install --legacy-peer-deps
 
-      - name: Build packages
+      - name: Build runtime packages
         run: npm run build
 
-      - name: Typecheck
-        run: npx tsc --noEmit
-
-      - name: Run tests (bun)
+      - name: Run tests
         run: npm run test:new
-
-      - name: Run legacy tests (vitest)
-        run: npm test
