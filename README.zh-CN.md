@@ -13,7 +13,7 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Tests](https://img.shields.io/badge/tests-177%20passing-brightgreen?logo=bun&logoColor=white)](https://bun.sh)
-[![Version](https://img.shields.io/badge/version-1.0.0--beta.3-orange)](https://github.com/barry3406/capstan)
+[![Version](https://img.shields.io/badge/version-1.0.0--beta.5-orange)](https://github.com/barry3406/capstan)
 [![ESM](https://img.shields.io/badge/ESM-only-blue)](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Modules)
 
 [快速上手](#-快速上手) · [为什么选择 Capstan？](#-为什么选择-capstan) · [架构](#-架构) · [参与贡献](#-参与贡献)
@@ -387,7 +387,7 @@ app/
 
 ## 🧑‍💻 参与贡献
 
-Capstan 目前处于 Beta 阶段（`v1.0.0-beta.3`），欢迎贡献！
+Capstan 目前处于 Beta 阶段（`v1.0.0-beta.5`），欢迎贡献！
 
 ```bash
 git clone https://github.com/barry3406/capstan.git
