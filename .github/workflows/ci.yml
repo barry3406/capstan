@@ -34,7 +34,12 @@ jobs:
         run: npm install --legacy-peer-deps
 
       - name: Build runtime packages
-        run: npm run build
+        run: |
+          for pkg in core router db auth agent react dev cli create-capstan; do
+            echo "::group::Building @zauso-ai/capstan-$pkg"
+            npm run build --workspace "packages/$pkg" || exit 1
+            echo "::endgroup::"
+          done
 
       - name: Run tests
         run: npm run test:new
