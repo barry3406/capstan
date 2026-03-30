@@ -1,7 +1,27 @@
+import { readFileSync } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
 
 import type { RouteEntry, RouteManifest, RouteType } from "./types.js";
+
+/**
+ * Detect whether a page file is a server or client component by checking
+ * for a "use client" directive at the top of the file.
+ */
+function detectComponentType(filePath: string): "server" | "client" {
+  try {
+    // Read only the first 100 bytes — enough to detect the directive
+    const fd = readFileSync(filePath, { encoding: "utf-8", flag: "r" });
+    const head = fd.slice(0, 100);
+    const firstLine = head.split(/\r?\n/)[0]?.trim() ?? "";
+    if (firstLine === '"use client"' || firstLine === "'use client'" || firstLine === '"use client";' || firstLine === "'use client';") {
+      return "client";
+    }
+  } catch {
+    // If we can't read the file, default to server
+  }
+  return "server";
+}
 
 /**
  * Determine the route type from a filename.
@@ -260,6 +280,10 @@ export async function scanRoutes(routesDir: string): Promise<RouteManifest> {
       // API routes support all standard HTTP methods by default.
       // The actual exported methods are determined at runtime.
       entry.methods = ["GET", "POST", "PUT", "DELETE", "PATCH"];
+    }
+
+    if (routeType === "page") {
+      entry.componentType = detectComponentType(absoluteFilePath);
     }
 
     routes.push(entry);

@@ -98,43 +98,52 @@ export async function renderPageStream(
   const finalTree =
     layouts.length > 0 ? tree : createElement(DocumentShell, null, tree);
 
-  // 7. Resolve effective hydration mode.  The explicit option takes
+  // 7. Resolve effective component type.  Server components skip ALL
+  //    hydration — no __CAPSTAN_DATA__, no client JS.  This is even more
+  //    aggressive than hydration "none" which still embeds the data payload.
+  const componentType = options.componentType ?? pageModule.componentType;
+
+  // 8. Resolve effective hydration mode.  The explicit option takes
   //    precedence; otherwise fall back to the page module's export, then
   //    the default "full" mode.
   const hydrationMode: HydrationMode =
     options.hydration ?? pageModule.hydration ?? "full";
 
-  // 8. Build serialised data payload, escaped for safe script embedding
+  // 9. Build serialised data payload, escaped for safe script embedding
   const serializedData = escapeJsonForScript(
     JSON.stringify({ loaderData, params, auth: contextValue.auth }),
   );
 
-  // 9. Build renderToReadableStream options based on hydration mode.
+  // 10. Build renderToReadableStream options based on component type and hydration mode.
+  //    Server components: pure HTML, zero client JS, no data embedding
+  //    Client components / default:
   //    - "full"   : inject data + load client module immediately (default)
   //    - "visible": inject data + lazy-load client when root scrolls into view
   //    - "none"   : pure server render, zero client JS
   const streamOptions: Parameters<typeof renderToReadableStream>[1] =
-    hydrationMode === "none"
+    componentType === "server"
       ? {}
-      : hydrationMode === "visible"
-        ? {
-            bootstrapScriptContent: [
-              `window.__CAPSTAN_DATA__ = ${serializedData}`,
-              `(function(){`,
-              `var o=new IntersectionObserver(function(e){`,
-              `if(e[0].isIntersecting){o.disconnect();import('/_capstan/client.js');}`,
-              `});`,
-              `o.observe(document.getElementById('capstan-root'));`,
-              `})();`,
-            ].join(""),
-          }
-        : {
-            // "full" — original behaviour
-            bootstrapScriptContent: `window.__CAPSTAN_DATA__ = ${serializedData}`,
-            bootstrapModules: ["/_capstan/client.js"],
-          };
+      : hydrationMode === "none"
+        ? {}
+        : hydrationMode === "visible"
+          ? {
+              bootstrapScriptContent: [
+                `window.__CAPSTAN_DATA__ = ${serializedData}`,
+                `(function(){`,
+                `var o=new IntersectionObserver(function(e){`,
+                `if(e[0].isIntersecting){o.disconnect();import('/_capstan/client.js');}`,
+                `});`,
+                `o.observe(document.getElementById('capstan-root'));`,
+                `})();`,
+              ].join(""),
+            }
+          : {
+              // "full" — original behaviour
+              bootstrapScriptContent: `window.__CAPSTAN_DATA__ = ${serializedData}`,
+              bootstrapModules: ["/_capstan/client.js"],
+            };
 
-  // 10. Render to a ReadableStream with hydration bootstrap
+  // 11. Render to a ReadableStream with hydration bootstrap
   const stream = await renderToReadableStream(finalTree, streamOptions);
 
   // `allReady` resolves once the entire document (including all Suspense

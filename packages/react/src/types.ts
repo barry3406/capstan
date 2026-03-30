@@ -6,7 +6,7 @@ export interface LoaderArgs {
   ctx: {
     auth: {
       isAuthenticated: boolean;
-      type: "human" | "agent" | "anonymous";
+      type: "human" | "agent" | "anonymous" | "workload";
       userId?: string;
       role?: string;
       email?: string;
@@ -30,6 +30,8 @@ export interface PageModule {
   loader?: LoaderFunction;
   /** Page-level hydration strategy export */
   hydration?: HydrationMode;
+  /** Whether the component is a server or client component */
+  componentType?: "server" | "client";
 }
 
 export interface LayoutModule {
@@ -44,6 +46,8 @@ export interface RenderPageOptions {
   loaderArgs: LoaderArgs;
   /** Hydration strategy (default: "full") */
   hydration?: HydrationMode;
+  /** Whether the component is a server or client component */
+  componentType?: "server" | "client";
 }
 
 export interface RenderResult {

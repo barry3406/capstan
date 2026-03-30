@@ -19,6 +19,8 @@ export interface RouteEntry {
   isCatchAll: boolean;
   /** Hydration strategy for page routes */
   hydration?: "full" | "visible" | "none";
+  /** Whether the page component uses client-side interactivity */
+  componentType?: "server" | "client";
 }
 
 export interface RouteManifest {

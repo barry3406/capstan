@@ -4,7 +4,7 @@ import type { z } from "zod";
 /** Authentication context attached to every request. */
 export interface CapstanAuthContext {
   isAuthenticated: boolean;
-  type: "human" | "agent" | "anonymous";
+  type: "human" | "agent" | "anonymous" | "workload";
   userId?: string;
   role?: string;
   email?: string;

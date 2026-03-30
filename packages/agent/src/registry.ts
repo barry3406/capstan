@@ -5,6 +5,10 @@ import { generateOpenApiSpec } from "./openapi.js";
 import { createMcpServer, createMcpHttpHandler } from "./mcp.js";
 import { createA2AHandler } from "./a2a.js";
 import { withSpan } from "./telemetry.js";
+import { createMcpClient } from "./mcp-client.js";
+import type { McpClient, McpClientOptions } from "./mcp-client.js";
+import { toLangChainTools } from "./langchain.js";
+import type { LangChainToolDefinition, ToLangChainOptions } from "./langchain.js";
 
 /**
  * Unified capability registry — the central abstraction for Capstan's
@@ -141,5 +145,33 @@ export class CapabilityRegistry {
     getAgentCard: () => A2AAgentCard;
   } {
     return createA2AHandler(this.config, this.routes, executeRoute);
+  }
+
+  // -------------------------------------------------------------------------
+  // MCP Client — consume external MCP servers
+  // -------------------------------------------------------------------------
+
+  private mcpClients: McpClient[] = [];
+
+  /** Connect to an external MCP server and import its tools. */
+  async connectMcp(options: McpClientOptions): Promise<McpClient> {
+    const client = await createMcpClient(options);
+    this.mcpClients.push(client);
+    return client;
+  }
+
+  /** Close all MCP client connections. */
+  async closeMcpClients(): Promise<void> {
+    await Promise.allSettled(this.mcpClients.map((c) => c.close()));
+    this.mcpClients = [];
+  }
+
+  // -------------------------------------------------------------------------
+  // LangChain — project to LangChain-compatible tools
+  // -------------------------------------------------------------------------
+
+  /** Project to LangChain-compatible tool definitions. */
+  toLangChain(options: ToLangChainOptions): LangChainToolDefinition[] {
+    return toLangChainTools(this, options);
   }
 }

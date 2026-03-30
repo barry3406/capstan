@@ -14,6 +14,7 @@ export interface RateLimitConfig {
     human?: number;
     agent?: number;
     anonymous?: number;
+    workload?: number;
   };
   /** Key extractor strategy (default: "ip"). */
   keyBy?: "ip" | "userId" | "apiKey";

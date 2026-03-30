@@ -7,6 +7,10 @@ export interface AuthConfig {
     prefix?: string; // e.g. "cap_ak_"
     headerName?: string; // default "Authorization"
   };
+  /** Trusted SPIFFE trust domains for mTLS workload authentication. */
+  trustedDomains?: string[];
+  /** Whether to require client certificates (mTLS). */
+  mtls?: boolean;
 }
 
 export interface SessionPayload {
@@ -28,7 +32,7 @@ export interface AgentCredential {
 
 export interface AuthContext {
   isAuthenticated: boolean;
-  type: "human" | "agent" | "anonymous";
+  type: "human" | "agent" | "anonymous" | "workload";
   userId?: string;
   role?: string;
   email?: string;
@@ -37,6 +41,10 @@ export interface AuthContext {
   permissions?: string[];
   /** DPoP key thumbprint — present when the request included a valid DPoP proof. */
   dpopThumbprint?: string;
+  /** SPIFFE ID from client certificate (e.g. "spiffe://example.org/agent/crawler"). */
+  spiffeId?: string;
+  /** Client certificate fingerprint (SHA-256 hex digest). */
+  certFingerprint?: string;
 }
 
 export interface AuthResolverDeps {
