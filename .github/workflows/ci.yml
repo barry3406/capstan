@@ -54,6 +54,9 @@ jobs:
       - name: Build dev
         run: npm run build --workspace packages/dev
 
+      - name: Build legacy packages (needed by CLI types)
+        run: npm run build:legacy
+
       - name: Build cli
         run: npm run build --workspace packages/cli
 
