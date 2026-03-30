@@ -13,7 +13,7 @@ One `defineAPI()` call. Four protocol surfaces. Humans and AI agents, served sim
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Tests](https://img.shields.io/badge/tests-569%20passing-brightgreen?logo=bun&logoColor=white)](https://bun.sh)
-[![Version](https://img.shields.io/badge/version-1.0.0--beta.5-orange)](https://github.com/barry3406/capstan)
+[![Version](https://img.shields.io/badge/version-1.0.0--beta.6-orange)](https://github.com/barry3406/capstan)
 [![ESM](https://img.shields.io/badge/ESM-only-blue)](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Modules)
 
 [Quick Start](#-quick-start) · [Why Capstan?](#-why-capstan) · [Architecture](#-architecture) · [Docs](#-documentation) · [Contributing](#-contributing)
@@ -503,7 +503,7 @@ Detailed guides live in the [`docs/`](docs/) directory:
 
 ## 🧑‍💻 Contributing
 
-Capstan is in active beta (`v1.0.0-beta.5`). Contributions are welcome!
+Capstan is in active beta (`v1.0.0-beta.6`). Contributions are welcome!
 
 ```bash
 git clone https://github.com/barry3406/capstan.git
