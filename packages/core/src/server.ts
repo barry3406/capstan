@@ -229,7 +229,7 @@ export function createCapstanApp(config: CapstanConfig): CapstanApp {
           if (compliance?.transparency !== undefined) {
             entry.transparency = compliance.transparency;
           }
-          recordAuditEntry(entry);
+          await recordAuditEntry(entry);
         }
 
         return c.json(result as object);
@@ -280,7 +280,7 @@ export function createCapstanApp(config: CapstanConfig): CapstanApp {
   // Audit log endpoint
   // ------------------------------------------------------------------
 
-  app.get("/capstan/audit", (c: HonoContext) => {
+  app.get("/capstan/audit", async (c: HonoContext) => {
     const auth = c.get("capstanAuth") as CapstanAuthContext | undefined;
 
     if (!auth || !auth.isAuthenticated) {
@@ -310,7 +310,7 @@ export function createCapstanApp(config: CapstanConfig): CapstanApp {
     if (since !== undefined) opts.since = since;
     if (limit !== undefined && !Number.isNaN(limit)) opts.limit = limit;
 
-    const entries = getAuditLog(Object.keys(opts).length > 0 ? opts : undefined);
+    const entries = await getAuditLog(Object.keys(opts).length > 0 ? opts : undefined);
     return c.json({ entries });
   });
 

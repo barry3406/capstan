@@ -42,12 +42,17 @@ export {
   recordAuditEntry,
   getAuditLog,
   clearAuditLog,
+  setAuditStore,
 } from "./compliance.js";
 export type {
   ComplianceConfig,
   RiskLevel,
   AuditEntry,
 } from "./compliance.js";
+
+export { MemoryStore } from "./store.js";
+export type { KeyValueStore } from "./store.js";
+export { RedisStore } from "./redis-store.js";
 
 export { defineRateLimit, clearRateLimitStore } from "./ratelimit.js";
 export type { RateLimitConfig } from "./ratelimit.js";

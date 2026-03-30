@@ -80,7 +80,7 @@ export interface CapstanConfig {
     description?: string;
   };
   database?: {
-    provider?: "sqlite" | "postgres" | "mysql";
+    provider?: "sqlite" | "postgres" | "mysql" | "libsql";
     url?: string;
   };
   auth?: {

@@ -9,6 +9,7 @@ export interface KeyValueStore<T> {
   set(key: string, value: T, ttlMs?: number): Promise<void>;
   delete(key: string): Promise<boolean>;
   has(key: string): Promise<boolean>;
+  keys(): Promise<string[]>;
   clear(): Promise<void>;
 }
 
@@ -42,6 +43,19 @@ export class MemoryStore<T> implements KeyValueStore<T> {
   async has(key: string): Promise<boolean> {
     const val = await this.get(key); // triggers TTL check
     return val !== undefined;
+  }
+
+  async keys(): Promise<string[]> {
+    const now = Date.now();
+    const result: string[] = [];
+    for (const [key, entry] of this.data) {
+      if (entry.expiresAt !== undefined && now > entry.expiresAt) {
+        this.data.delete(key);
+      } else {
+        result.push(key);
+      }
+    }
+    return result;
   }
 
   async clear(): Promise<void> {

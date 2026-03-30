@@ -8,3 +8,5 @@ export type { DevServerConfig, DevServerInstance } from "./types.js";
 export type { ServerAdapter } from "./adapter.js";
 export { createNodeAdapter } from "./adapter-node.js";
 export { createBunAdapter } from "./adapter-bun.js";
+export { createVercelAdapter } from "./adapter-vercel.js";
+export { createFlyAdapter } from "./adapter-fly.js";

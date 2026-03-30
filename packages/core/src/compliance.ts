@@ -1,3 +1,6 @@
+import type { KeyValueStore } from "./store.js";
+import { MemoryStore } from "./store.js";
+
 export type RiskLevel = "high" | "limited" | "minimal" | "unacceptable";
 
 export interface ComplianceConfig {
@@ -31,15 +34,45 @@ export interface AuditEntry {
   transparency?: ComplianceConfig["transparency"];
 }
 
-/** In-memory audit log (dev). Production should use persistent store. */
-const auditLog: AuditEntry[] = [];
+/**
+ * Pluggable audit log store.  Defaults to in-memory (`MemoryStore`).
+ *
+ * Each entry is stored with a composite key of `<timestamp>:<requestId>` so
+ * that entries are naturally ordered and globally unique.
+ *
+ * Production deployments should call `setAuditStore()` at startup to swap in
+ * a persistent backend (e.g. `RedisStore`).
+ */
+let auditStore: KeyValueStore<AuditEntry> = new MemoryStore();
 
-export function recordAuditEntry(entry: AuditEntry): void {
-  auditLog.push(entry);
+/**
+ * Replace the default in-memory audit store with a custom implementation.
+ *
+ * Call this at application startup before any requests are processed.
+ */
+export function setAuditStore(store: KeyValueStore<AuditEntry>): void {
+  auditStore = store;
 }
 
-export function getAuditLog(opts?: { since?: string; limit?: number }): AuditEntry[] {
-  let entries = auditLog;
+export async function recordAuditEntry(entry: AuditEntry): Promise<void> {
+  const key = `${entry.timestamp}:${entry.requestId}`;
+  await auditStore.set(key, entry);
+}
+
+export async function getAuditLog(opts?: { since?: string; limit?: number }): Promise<AuditEntry[]> {
+  const allKeys = await auditStore.keys();
+  // Keys are `<timestamp>:<requestId>` — sorting lexicographically gives
+  // chronological order since timestamps are ISO-8601.
+  allKeys.sort();
+
+  let entries: AuditEntry[] = [];
+  for (const key of allKeys) {
+    const entry = await auditStore.get(key);
+    if (entry) {
+      entries.push(entry);
+    }
+  }
+
   if (opts?.since) {
     entries = entries.filter(e => e.timestamp >= opts.since!);
   }
@@ -49,8 +82,8 @@ export function getAuditLog(opts?: { since?: string; limit?: number }): AuditEnt
   return entries;
 }
 
-export function clearAuditLog(): void {
-  auditLog.length = 0;
+export async function clearAuditLog(): Promise<void> {
+  await auditStore.clear();
 }
 
 /**

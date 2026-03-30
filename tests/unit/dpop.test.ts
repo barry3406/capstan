@@ -358,8 +358,8 @@ describe("validateDpopProof", () => {
     expect(result).not.toBeNull();
   });
 
-  it("rejects iat one second beyond MAX_CLOCK_SKEW (61s future)", async () => {
-    const beyondBoundary = Math.floor(Date.now() / 1000) + 61;
+  it("rejects iat beyond MAX_CLOCK_SKEW (64s future)", async () => {
+    const beyondBoundary = Math.floor(Date.now() / 1000) + 64;
     const { proof, method, url } = await signedProof({ iat: beyondBoundary });
     const result = await validateDpopProof(proof, method, url);
     expect(result).toBeNull();

@@ -11,6 +11,8 @@ export interface AuthConfig {
   trustedDomains?: string[];
   /** Whether to require client certificates (mTLS). */
   mtls?: boolean;
+  /** OAuth 2.0 provider configuration for Google, GitHub, etc. */
+  oauth?: import("./oauth.js").OAuthConfig;
 }
 
 export interface SessionPayload {

@@ -184,16 +184,16 @@ describe("enforcePolicies", () => {
 // ---------------------------------------------------------------------------
 
 describe("createCapstanApp", () => {
-  it("returns an app with a routeRegistry array", () => {
-    const { app, routeRegistry } = createCapstanApp({
+  it("returns an app with a routeRegistry array", async () => {
+    const { app, routeRegistry } = await createCapstanApp({
       app: { name: "test" },
     });
     expect(app).toBeDefined();
     expect(Array.isArray(routeRegistry)).toBe(true);
   });
 
-  it("registerAPI adds route metadata to routeRegistry", () => {
-    const capstan = createCapstanApp({ app: { name: "test" } });
+  it("registerAPI adds route metadata to routeRegistry", async () => {
+    const capstan = await createCapstanApp({ app: { name: "test" } });
     const api = defineAPI({
       description: "List items",
       capability: "read",
@@ -209,7 +209,7 @@ describe("createCapstanApp", () => {
   });
 
   it("registered endpoint responds to HTTP requests", async () => {
-    const capstan = createCapstanApp({ app: { name: "test" } });
+    const capstan = await createCapstanApp({ app: { name: "test" } });
     const api = defineAPI({
       async handler() {
         return { status: "ok" };
@@ -226,7 +226,7 @@ describe("createCapstanApp", () => {
   });
 
   it("agent manifest endpoint returns JSON at /.well-known/capstan.json", async () => {
-    const capstan = createCapstanApp({
+    const capstan = await createCapstanApp({
       app: { name: "my-app", title: "My App", description: "test desc" },
     });
     const api = defineAPI({
