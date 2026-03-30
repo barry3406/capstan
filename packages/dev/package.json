@@ -1,6 +1,6 @@
 {
   "name": "@zauso-ai/capstan-dev",
-  "version": "1.0.0-beta.3",
+  "version": "1.0.0-beta.4",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -18,10 +18,10 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@zauso-ai/capstan-agent": "1.0.0-beta.3",
-    "@zauso-ai/capstan-auth": "1.0.0-beta.3",
-    "@zauso-ai/capstan-core": "1.0.0-beta.3",
-    "@zauso-ai/capstan-router": "1.0.0-beta.3",
+    "@zauso-ai/capstan-agent": "1.0.0-beta.4",
+    "@zauso-ai/capstan-auth": "1.0.0-beta.4",
+    "@zauso-ai/capstan-core": "1.0.0-beta.4",
+    "@zauso-ai/capstan-router": "1.0.0-beta.4",
     "hono": "^4.0.0",
     "tsx": "^4.0.0"
   },
