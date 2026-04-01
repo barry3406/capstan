@@ -571,12 +571,12 @@ describe("createDatabase", () => {
     db.close();
   });
 
-  it("throws helpful error when pg is not installed for postgres provider", () => {
+  it("throws helpful error when pg is not installed for postgres provider", async () => {
     // pg is not installed in the test environment, so this should throw
     // a helpful error message about installing pg.
-    expect(() =>
+    await expect(
       createDatabase({ provider: "postgres" as const, url: "postgres://localhost" }),
-    ).toThrow("pg");
+    ).rejects.toThrow("pg");
   });
 });
 

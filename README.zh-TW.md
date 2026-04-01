@@ -6,7 +6,7 @@
 ⚓ Capstan
 </h1>
 
-**AI Agent 原生全端框架**
+**Bun 原生 AI Agent 全端框架**
 
 一次 `defineAPI()` 呼叫，四種協定介面。同時服務人類與 AI Agent。
 
@@ -24,7 +24,7 @@
 
 ## Capstan 是什麼？
 
-**Capstan** 是一個全端 TypeScript 框架。你撰寫的每個 API 都能同時被人類（透過 REST）和 AI Agent（透過 MCP、A2A 及 OpenAPI）存取——完全不需要額外的程式碼。它結合了檔案式路由、Zod 驗證端點、Drizzle ORM 模型，以及內建的驗證系統，讓 AI 編碼 Agent 能以自我修正的 TDD 迴圈運作。
+**Capstan** 是一個 Bun 原生的全端 TypeScript 框架。你撰寫的每個 API 都能同時被人類（透過 REST）和 AI Agent（透過 MCP、A2A 及 OpenAPI）存取——完全不需要額外的程式碼。它結合了檔案式路由、Zod 驗證端點、Drizzle ORM 模型，以及內建的驗證系統，讓 AI 編碼 Agent 能以自我修正的 TDD 迴圈運作。Bun 是首選執行環境，同時也完整支援 Node.js。
 
 你可以把它想成：**如果 Next.js 從第一天就為一半消費者是 LLM 的世界而設計，它會是什麼樣子。**
 
@@ -129,7 +129,7 @@
 ### 開發與建置
 - **WebSocket 支援** — `defineWebSocket()` 即時端點，`WebSocketRoom` 發布/訂閱廣播
 - **互動式 CLI** — 彩色輸出、分組說明、模糊比對、`@clack/prompts` 互動式鷹架及自動安裝
-- **多執行環境適配器** — 同時支援 Node.js 與 Bun 執行環境
+- **Bun 原生** — 首選執行環境為 Bun，使用 `Bun.serve()` 和 `Bun.spawn()`；同時完整支援 Node.js
 - **Turborepo 並行建構** — 利用 Turborepo 實現多套件並行建置
 - **OpenTelemetry 跨協議追蹤** — HTTP、MCP、A2A 跨協議的可觀測性追蹤
 - **即時重新載入** — SSE 驅動的開發伺服器即時重新載入
@@ -145,14 +145,14 @@
 
 ```bash
 # 1. 建立新專案
-npx create-capstan-app my-app
+bunx create-capstan-app my-app
 cd my-app
 
 # 或從範本開始
-npx create-capstan-app my-app --template tickets
+bunx create-capstan-app my-app --template tickets
 
 # 2. 啟動開發伺服器（SSE 即時重新載入）
-npx capstan dev
+bun run dev
 
 # 3. 你的應用程式已上線，所有協定介面皆可用：
 #    http://localhost:3000              — 網頁應用程式
@@ -161,16 +161,18 @@ npx capstan dev
 #    http://localhost:3000/.well-known/agent.json   — A2A Agent 名片
 
 # 4. 驗證所有配置是否正確連接
-npx capstan verify --json
+bunx capstan verify --json
 ```
+
+> **Node.js 同樣可用：** 將上面的 `bunx` 替換為 `npx`，`bun run` 替換為 `npx` 即可。
 
 ### 快速建立功能鷹架
 
 ```bash
-npx capstan add model ticket       # → app/models/ticket.model.ts
-npx capstan add api tickets        # → app/routes/tickets/index.api.ts (GET + POST)
-npx capstan add page tickets       # → app/routes/tickets/index.page.tsx
-npx capstan add policy requireAuth # → app/policies/index.ts
+bunx capstan add model ticket       # → app/models/ticket.model.ts
+bunx capstan add api tickets        # → app/routes/tickets/index.api.ts (GET + POST)
+bunx capstan add page tickets       # → app/routes/tickets/index.page.tsx
+bunx capstan add policy requireAuth # → app/policies/index.ts
 ```
 
 ---
@@ -315,7 +317,7 @@ Capstan 內建為 AI 編碼 Agent 設計的**驗證器**。當 Claude Code、Cur
 ### 八步驟驗證瀑布流程
 
 ```bash
-$ npx capstan verify --json
+$ bunx capstan verify --json
 ```
 
 ```json
@@ -370,7 +372,7 @@ $ npx capstan verify --json
 | `POST /.well-known/a2a` | A2A | Agent 任務的 JSON-RPC 處理器（支援串流傳輸） |
 | `GET /openapi.json` | OpenAPI 3.1 | 完整 API 規格文件 |
 | `GET /capstan/approvals` | Capstan | 人機協作核准佇列 |
-| `npx capstan mcp` | MCP (stdio) | 供 Claude Desktop / Cursor 使用（具有真實的型別參數） |
+| `bunx capstan mcp` | MCP (stdio) | 供 Claude Desktop / Cursor 使用（具有真實的型別參數） |
 
 ### 連接至 Claude Desktop
 
@@ -424,13 +426,13 @@ app/
 
 ```bash
 # 建置正式版本
-npx capstan build
+bunx capstan build
 
 # 啟動正式伺服器
-npx capstan start
+bunx capstan start
 ```
 
-`capstan build` 會將你的路由、模型與設定編譯為最佳化的正式版本套件。`capstan start` 啟動伺服器時會預設開啟安全性設定。可在 `capstan.config.ts` 中設定監聽連接埠、CORS 來源與資料庫提供者。
+`capstan build` 會將你的路由、模型與設定編譯為最佳化的正式版本套件。`capstan start` 啟動伺服器時會預設開啟安全性設定——Bun 上使用 `Bun.serve()`，Node.js 上使用 `node:http`。可在 `capstan.config.ts` 中設定監聽連接埠、CORS 來源與資料庫提供者。
 
 ---
 
@@ -477,9 +479,9 @@ Capstan 目前為 `v1.0.0-beta.6`。歡迎參與貢獻！
 ```bash
 git clone https://github.com/barry3406/capstan.git
 cd capstan
-npm install
-npm run build        # 建置 9 個執行時期套件
-npm run test:new     # Bun 測試（1125 項測試，約 18s）
+bun install
+bun run build        # 建置 9 個執行時期套件
+bun run test:new     # Bun 測試（1125 項測試，約 18s）
 ```
 
 ### 開發慣例

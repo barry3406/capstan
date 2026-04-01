@@ -660,7 +660,7 @@ npm install @libsql/client              # libSQL / Turso
 // app/db.ts — shared database instance
 import { createDatabase } from "@zauso-ai/capstan-db";
 
-const { db, close } = createDatabase({ provider: "sqlite", url: "./data.db" });
+const { db, close } = await createDatabase({ provider: "sqlite", url: "./data.db" });
 export { db, close };
 \`\`\`
 
@@ -682,7 +682,7 @@ export const GET = defineAPI({
 });
 \`\`\`
 
-\`createDatabase()\` accepts \`{ provider, url }\` and returns \`{ db, close }\`.
+\`createDatabase()\` is async — it accepts \`{ provider, url }\` and returns \`Promise<{ db, close }>\`.
 - \`db\` — a Drizzle ORM instance (SQLite, PostgreSQL, or MySQL depending on provider)
 - \`close()\` — closes the underlying connection pool (call on shutdown)
 

@@ -61,6 +61,9 @@ export async function buildCSS(
   await writeFile(outFile, code);
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const isBun = typeof (globalThis as any).Bun !== "undefined";
+
 /**
  * Start the Tailwind CLI in watch mode as a child process.
  *
@@ -72,9 +75,24 @@ export function startTailwindWatch(
   entryFile: string,
   outFile: string,
 ): { stop: () => void } {
+  const tailwindArgs = ["@tailwindcss/cli", "-i", entryFile, "-o", outFile, "--watch"];
+
+  if (isBun) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const child = (globalThis as any).Bun.spawn(["bunx", ...tailwindArgs], {
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    return {
+      stop: () => {
+        child.kill();
+      },
+    };
+  }
+
+  // Node.js fallback
   const child = spawn(
     "npx",
-    ["@tailwindcss/cli", "-i", entryFile, "-o", outFile, "--watch"],
+    tailwindArgs,
     { stdio: "pipe", shell: true },
   );
   return {
@@ -84,8 +102,6 @@ export function startTailwindWatch(
   };
 }
 
-const execFileAsync = promisify(execFile);
-
 /**
  * Build Tailwind CSS for production (one-shot, with minify).
  */
@@ -94,12 +110,22 @@ export async function buildTailwind(
   outFile: string,
 ): Promise<void> {
   await mkdir(dirname(outFile), { recursive: true });
-  await execFileAsync("npx", [
-    "@tailwindcss/cli",
-    "-i",
-    entryFile,
-    "-o",
-    outFile,
-    "--minify",
-  ]);
+
+  const tailwindArgs = ["@tailwindcss/cli", "-i", entryFile, "-o", outFile, "--minify"];
+
+  if (isBun) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const child = (globalThis as any).Bun.spawn(["bunx", ...tailwindArgs], {
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    const exitCode = await child.exited;
+    if (exitCode !== 0) {
+      throw new Error(`Tailwind CSS build failed with exit code ${exitCode}`);
+    }
+    return;
+  }
+
+  // Node.js fallback
+  const execFileAsync = promisify(execFile);
+  await execFileAsync("npx", tailwindArgs);
 }

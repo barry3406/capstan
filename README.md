@@ -6,7 +6,7 @@
 ⚓ Capstan
 </h1>
 
-**The AI Agent Native Full-Stack Framework**
+**The Bun-Native AI Agent Full-Stack Framework**
 
 One `defineAPI()` call. Four protocol surfaces. Humans and AI agents, served simultaneously.
 
@@ -24,9 +24,9 @@ One `defineAPI()` call. Four protocol surfaces. Humans and AI agents, served sim
 
 ## What is Capstan?
 
-**Capstan** is a full-stack TypeScript framework where every API you write is automatically accessible to both humans (via REST) and AI agents (via MCP, A2A, and OpenAPI) — with zero extra code. It combines file-based routing, Zod-validated endpoints, Drizzle ORM models (SQLite, PostgreSQL, or MySQL), and a built-in verification system that AI coding agents use as a self-correcting TDD loop.
+**Capstan** is a Bun-native full-stack TypeScript framework where every API you write is automatically accessible to both humans (via REST) and AI agents (via MCP, A2A, and OpenAPI) — with zero extra code. It combines file-based routing, Zod-validated endpoints, Drizzle ORM models (SQLite, PostgreSQL, or MySQL), and a built-in verification system that AI coding agents use as a self-correcting TDD loop.
 
-Production-ready: `capstan build` compiles your app, `capstan start` serves it — with CSRF protection, configurable CORS, request body limits, and structured JSON logging out of the box.
+Production-ready: `capstan build` compiles your app, `capstan start` serves it — with CSRF protection, configurable CORS, request body limits, and structured JSON logging out of the box. Bun is the primary runtime; Node.js is also supported.
 
 Think of it as **Next.js if it were designed from day one for a world where half your consumers are LLMs**.
 
@@ -94,7 +94,7 @@ Think of it as **Next.js if it were designed from day one for a world where half
 - **React Server Components foundations** — streaming SSR with async component support, `ClientOnly`, `serverOnly()` guard
 - **DPoP (RFC 9449) & SPIFFE/mTLS** — proof-of-possession tokens and workload identity for service-to-service auth
 - **Token-aware rate limiting** — separate rate-limit buckets for human sessions vs agent API keys
-- **Multi-runtime adapters** — runs on both Node.js and Bun
+- **Bun-native** — primary runtime is Bun with `Bun.serve()` and `Bun.spawn()`; Node.js also fully supported
 - **Turborepo parallel builds** — monorepo packages build in dependency order with caching
 - **OpenTelemetry cross-protocol tracing** — traces span HTTP, MCP, and A2A calls automatically
 - **MCP test harness** — test your MCP tools in isolation with `capstan test:mcp`
@@ -117,14 +117,14 @@ Think of it as **Next.js if it were designed from day one for a world where half
 
 ```bash
 # 1. Create a new project
-npx create-capstan-app my-app
+bunx create-capstan-app my-app
 cd my-app
 
 # Or start from a template
-npx create-capstan-app my-app --template tickets
+bunx create-capstan-app my-app --template tickets
 
 # 2. Start the dev server (live reload via SSE)
-npx capstan dev
+bun run dev
 
 # 3. Your app is live with all protocol surfaces:
 #    http://localhost:3000              — Web app
@@ -133,16 +133,18 @@ npx capstan dev
 #    http://localhost:3000/.well-known/agent.json   — A2A agent card
 
 # 4. Verify everything is wired correctly
-npx capstan verify --json
+bunx capstan verify --json
 ```
+
+> **Node.js also works:** replace `bunx` with `npx` and `bun run` with `npx` above.
 
 ### Scaffold features instantly
 
 ```bash
-npx capstan add model ticket       # → app/models/ticket.model.ts
-npx capstan add api tickets        # → app/routes/tickets/index.api.ts (GET + POST)
-npx capstan add page tickets       # → app/routes/tickets/index.page.tsx
-npx capstan add policy requireAuth # → app/policies/index.ts
+bunx capstan add model ticket       # → app/models/ticket.model.ts
+bunx capstan add api tickets        # → app/routes/tickets/index.api.ts (GET + POST)
+bunx capstan add page tickets       # → app/routes/tickets/index.page.tsx
+bunx capstan add policy requireAuth # → app/policies/index.ts
 ```
 
 ---
@@ -332,7 +334,7 @@ Capstan includes an **8-step verifier** designed for AI coding agents. When Clau
 ### The 8-step verification cascade
 
 ```bash
-$ npx capstan verify --json
+$ bunx capstan verify --json
 ```
 
 ```json
@@ -391,7 +393,7 @@ When you run `capstan dev`, these endpoints are auto-generated:
 | `GET /openapi.json` | OpenAPI 3.1 | Full API specification |
 | `GET /capstan/approvals` | Capstan | Authenticated approval queue |
 | `POST /mcp` | MCP (Streamable HTTP) | Remote MCP tool access for any client |
-| `npx capstan mcp` | MCP (stdio) | For Claude Desktop / Cursor |
+| `bunx capstan mcp` | MCP (stdio) | For Claude Desktop / Cursor |
 
 ### Connect to Claude Desktop
 
@@ -445,13 +447,13 @@ app/
 
 ```bash
 # Build for production
-npx capstan build
+bunx capstan build
 
 # Start the production server
-npx capstan start
+bunx capstan start
 ```
 
-`capstan build` compiles your routes, models, and configuration into an optimized production bundle. `capstan start` launches the server with security defaults enabled. Configure the listen port, CORS origins, and database provider in `capstan.config.ts`.
+`capstan build` compiles your routes, models, and configuration into an optimized production bundle. `capstan start` launches the server with security defaults enabled — using `Bun.serve()` on Bun or `node:http` on Node.js. Configure the listen port, CORS origins, and database provider in `capstan.config.ts`.
 
 ---
 

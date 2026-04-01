@@ -763,7 +763,7 @@ const relation: {
 Create a Drizzle database instance for the specified provider.
 
 ```typescript
-function createDatabase(config: DatabaseConfig): DatabaseInstance
+function createDatabase(config: DatabaseConfig): Promise<DatabaseInstance>
 
 interface DatabaseConfig {
   provider: "sqlite" | "postgres" | "mysql";

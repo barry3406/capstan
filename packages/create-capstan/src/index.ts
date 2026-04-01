@@ -142,15 +142,20 @@ async function main() {
     shouldInstall = await confirmPrompt("Install dependencies?");
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const isBun = typeof (globalThis as any).Bun !== "undefined";
+  const installCmd = isBun ? "bun install" : "npm install";
+  const runCmd = isBun ? "bun run" : "npx";
+
   if (shouldInstall) {
     const s = p.spinner();
     s.start("Installing dependencies...");
     try {
-      execSync("npm install", { cwd: outputDir, stdio: "ignore" });
+      execSync(installCmd, { cwd: outputDir, stdio: "ignore" });
       s.stop(pc.green("Dependencies installed."));
     } catch {
       s.stop(pc.red("Failed to install dependencies."));
-      p.log.warn(`Run ${pc.cyan("npm install")} manually in the project directory.`);
+      p.log.warn(`Run ${pc.cyan(installCmd)} manually in the project directory.`);
     }
   }
 
@@ -158,8 +163,8 @@ async function main() {
   p.note(
     [
       `cd ${projectName}`,
-      ...(shouldInstall ? [] : ["npm install"]),
-      "npx capstan dev",
+      ...(shouldInstall ? [] : [installCmd]),
+      `${runCmd} capstan dev`,
     ].join("\n"),
     "Next steps",
   );

@@ -1,7 +1,11 @@
-import { createRequire } from "node:module";
 import type { DatabaseConfig } from "./types.js";
 
-const require = createRequire(import.meta.url);
+// Helper to dynamically import optional peer dependencies without TypeScript
+// trying to resolve them at compile time (they may not be installed).
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function importPeer(specifier: string): Promise<any> {
+  return import(specifier);
+}
 
 export interface DatabaseInstance {
   /** The Drizzle ORM database instance. */
@@ -46,7 +50,7 @@ export interface DatabaseInstance {
  *     url: "mysql://user:pass@localhost:3306/mydb",
  *   });
  */
-export function createDatabase(config: DatabaseConfig): DatabaseInstance {
+export async function createDatabase(config: DatabaseConfig): Promise<DatabaseInstance> {
   switch (config.provider) {
     case "sqlite":
       return createSqliteDatabase(config.url);
@@ -69,11 +73,12 @@ export function createDatabase(config: DatabaseConfig): DatabaseInstance {
 // SQLite (better-sqlite3)
 // ---------------------------------------------------------------------------
 
-function createSqliteDatabase(url: string): DatabaseInstance {
+async function createSqliteDatabase(url: string): Promise<DatabaseInstance> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let BetterSqlite3: any;
   try {
-    BetterSqlite3 = require("better-sqlite3");
+    const mod = await importPeer("better-sqlite3");
+    BetterSqlite3 = mod.default ?? mod;
   } catch {
     throw new Error(
       `@zauso-ai/capstan-db: "better-sqlite3" is required for SQLite support but is not installed.\n` +
@@ -86,7 +91,7 @@ function createSqliteDatabase(url: string): DatabaseInstance {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let drizzle: any;
   try {
-    const drizzleModule = require("drizzle-orm/better-sqlite3");
+    const drizzleModule = await importPeer("drizzle-orm/better-sqlite3");
     drizzle = drizzleModule.drizzle;
   } catch {
     throw new Error(
@@ -114,12 +119,12 @@ function createSqliteDatabase(url: string): DatabaseInstance {
 // PostgreSQL (node-postgres / pg)
 // ---------------------------------------------------------------------------
 
-function createPostgresDatabase(url: string): DatabaseInstance {
+async function createPostgresDatabase(url: string): Promise<DatabaseInstance> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let Pool: any;
   try {
-    const pgModule = require("pg");
-    Pool = pgModule.Pool;
+    const pgModule = await importPeer("pg");
+    Pool = pgModule.Pool ?? (pgModule.default as { Pool: unknown })?.Pool;
   } catch {
     throw new Error(
       `@zauso-ai/capstan-db: "pg" (node-postgres) is required for PostgreSQL support but is not installed.\n` +
@@ -130,7 +135,7 @@ function createPostgresDatabase(url: string): DatabaseInstance {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let drizzle: any;
   try {
-    const drizzleModule = require("drizzle-orm/node-postgres");
+    const drizzleModule = await importPeer("drizzle-orm/node-postgres");
     drizzle = drizzleModule.drizzle;
   } catch {
     throw new Error(
@@ -155,12 +160,12 @@ function createPostgresDatabase(url: string): DatabaseInstance {
 // MySQL (mysql2)
 // ---------------------------------------------------------------------------
 
-function createMysqlDatabase(url: string): DatabaseInstance {
+async function createMysqlDatabase(url: string): Promise<DatabaseInstance> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let createPool: any;
   try {
-    const mysql2 = require("mysql2/promise");
-    createPool = mysql2.createPool;
+    const mysql2 = await importPeer("mysql2/promise");
+    createPool = mysql2.createPool ?? (mysql2.default as { createPool: unknown })?.createPool;
   } catch {
     throw new Error(
       `@zauso-ai/capstan-db: "mysql2" is required for MySQL support but is not installed.\n` +
@@ -171,7 +176,7 @@ function createMysqlDatabase(url: string): DatabaseInstance {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let drizzle: any;
   try {
-    const drizzleModule = require("drizzle-orm/mysql2");
+    const drizzleModule = await importPeer("drizzle-orm/mysql2");
     drizzle = drizzleModule.drizzle;
   } catch {
     throw new Error(
@@ -196,12 +201,12 @@ function createMysqlDatabase(url: string): DatabaseInstance {
 // libSQL / Turso (@libsql/client)
 // ---------------------------------------------------------------------------
 
-function createLibsqlDatabase(url: string): DatabaseInstance {
+async function createLibsqlDatabase(url: string): Promise<DatabaseInstance> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let createClient: any;
   try {
-    const libsqlModule = require("@libsql/client");
-    createClient = libsqlModule.createClient;
+    const libsqlModule = await importPeer("@libsql/client");
+    createClient = libsqlModule.createClient ?? (libsqlModule.default as { createClient: unknown })?.createClient;
   } catch {
     throw new Error(
       `@zauso-ai/capstan-db: "@libsql/client" is required for libSQL/Turso support but is not installed.\n` +
@@ -212,7 +217,7 @@ function createLibsqlDatabase(url: string): DatabaseInstance {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let drizzle: any;
   try {
-    const drizzleModule = require("drizzle-orm/libsql");
+    const drizzleModule = await importPeer("drizzle-orm/libsql");
     drizzle = drizzleModule.drizzle;
   } catch {
     throw new Error(

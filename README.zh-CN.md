@@ -6,7 +6,7 @@
 ⚓ Capstan
 </h1>
 
-**AI Agent 原生全栈框架**
+**Bun 原生 AI Agent 全栈框架**
 
 一次 `defineAPI()` 调用，四种协议接口。同时服务人类用户与 AI Agent。
 
@@ -24,7 +24,7 @@
 
 ## Capstan 是什么？
 
-**Capstan** 是一个全栈 TypeScript 框架。你编写的每一个 API，都能同时被人类（通过 REST）和 AI Agent（通过 MCP、A2A、OpenAPI）直接访问——无需任何额外代码。框架集成了基于文件的路由、Zod 数据校验、Drizzle ORM 模型定义，以及内置的验证系统——AI 编程助手可以将其作为自纠错的 TDD 循环使用。
+**Capstan** 是一个 Bun 原生的全栈 TypeScript 框架。你编写的每一个 API，都能同时被人类（通过 REST）和 AI Agent（通过 MCP、A2A、OpenAPI）直接访问——无需任何额外代码。框架集成了基于文件的路由、Zod 数据校验、Drizzle ORM 模型定义，以及内置的验证系统——AI 编程助手可以将其作为自纠错的 TDD 循环使用。Bun 是首选运行时，同时也完整支持 Node.js。
 
 可以这样理解：**如果 Next.js 从第一天就为「一半用户是大语言模型」的世界而设计，它就会是 Capstan 的样子**。
 
@@ -80,11 +80,11 @@
 
 ```bash
 # 1. 创建新项目（支持模板选择）
-npx create-capstan-app my-app --template tickets
+bunx create-capstan-app my-app --template tickets
 cd my-app
 
 # 2. 启动开发服务器
-npx capstan dev
+bun run dev
 
 # 3. 你的应用已在所有协议上运行：
 #    http://localhost:3000              — Web 应用
@@ -93,23 +93,25 @@ npx capstan dev
 #    http://localhost:3000/.well-known/agent.json   — A2A Agent 名片
 
 # 4. 验证一切是否正确连接
-npx capstan verify --json
+bunx capstan verify --json
 ```
+
+> **Node.js 同样可用：** 将上面的 `bunx` 替换为 `npx`，`bun run` 替换为 `npx` 即可。
 
 ### 快速生成功能模块
 
 ```bash
-npx capstan add model ticket       # → app/models/ticket.model.ts
-npx capstan add api tickets        # → app/routes/tickets/index.api.ts (GET + POST)
-npx capstan add page tickets       # → app/routes/tickets/index.page.tsx
-npx capstan add policy requireAuth # → app/policies/index.ts
+bunx capstan add model ticket       # → app/models/ticket.model.ts
+bunx capstan add api tickets        # → app/routes/tickets/index.api.ts (GET + POST)
+bunx capstan add page tickets       # → app/routes/tickets/index.page.tsx
+bunx capstan add policy requireAuth # → app/policies/index.ts
 ```
 
 ### 生产部署
 
 ```bash
-npx capstan build    # 编译并优化应用
-npx capstan start    # 以生产模式启动
+bunx capstan build    # 编译并优化应用
+bunx capstan start    # 以生产模式启动（Bun 上使用 Bun.serve()）
 ```
 
 ---
@@ -254,7 +256,7 @@ Capstan 内置的**验证器**专为 AI 编程助手设计。当 Claude Code、C
 ### 八步级联验证
 
 ```bash
-$ npx capstan verify --json
+$ bunx capstan verify --json
 ```
 
 ```json
@@ -310,7 +312,7 @@ $ npx capstan verify --json
 | `POST /.well-known/mcp` | MCP (Streamable HTTP) | 基于 HTTP 的 MCP 流式传输 |
 | `GET /openapi.json` | OpenAPI 3.1 | 完整的 API 规范 |
 | `GET /capstan/approvals` | Capstan | 人机协同审批队列（需鉴权） |
-| `npx capstan mcp` | MCP (stdio) | 接入 Claude Desktop / Cursor |
+| `bunx capstan mcp` | MCP (stdio) | 接入 Claude Desktop / Cursor |
 
 ### 接入 Claude Desktop
 
@@ -406,7 +408,7 @@ Capstan 内置多层安全防护：
 
 - **WebSocket 支持** — `defineWebSocket()` 实时端点，`WebSocketRoom` 发布/订阅广播
 - **交互式 CLI** — 彩色输出、分组帮助信息、模糊匹配、`@clack/prompts` 交互式脚手架及自动安装
-- **多运行时适配器** — 同时支持 Node.js 和 Bun 运行时，自动选择最优适配器
+- **Bun 原生** — 首选运行时为 Bun，使用 `Bun.serve()` 和 `Bun.spawn()`；同时完整支持 Node.js
 - **Turborepo 并行构建** — 利用 Turborepo 实现包级别的并行编译，大幅缩短构建时间
 - **OpenTelemetry 跨协议追踪** — 统一的可观测性，HTTP、MCP、A2A 请求链路全程追踪
 - **结构化日志** — JSON 格式日志输出，便于日志聚合与分析
@@ -445,13 +447,13 @@ app/
 
 ```bash
 # 构建生产版本
-npx capstan build
+bunx capstan build
 
 # 启动生产服务器
-npx capstan start
+bunx capstan start
 ```
 
-`capstan build` 将路由、模型和配置编译为优化的生产包。`capstan start` 启动服务器并默认开启安全防护。在 `capstan.config.ts` 中配置监听端口、CORS 来源和数据库提供者。
+`capstan build` 将路由、模型和配置编译为优化的生产包。`capstan start` 启动服务器并默认开启安全防护——Bun 上使用 `Bun.serve()`，Node.js 上使用 `node:http`。在 `capstan.config.ts` 中配置监听端口、CORS 来源和数据库提供者。
 
 ---
 
@@ -498,9 +500,9 @@ Capstan 目前处于 Beta 阶段（`v1.0.0-beta.6`），欢迎贡献！
 ```bash
 git clone https://github.com/barry3406/capstan.git
 cd capstan
-npm install
-npm run build        # 构建 9 个运行时包
-npm run test:new     # Bun 测试（1125 项测试，约 18s）
+bun install
+bun run build        # 构建 9 个运行时包
+bun run test:new     # Bun 测试（1125 项测试，约 18s）
 ```
 
 ### 开发规范

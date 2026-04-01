@@ -207,7 +207,7 @@ In application code, use `createDatabase()` to get a Drizzle instance:
 ```typescript
 import { createDatabase } from "@zauso-ai/capstan-db";
 
-const { db, close } = createDatabase({
+const { db, close } = await createDatabase({
   provider: "sqlite",
   url: "./data.db",
 });

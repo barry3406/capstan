@@ -171,24 +171,7 @@ async function runVerify(args: string[], asJson: boolean): Promise<void> {
 // ---------------------------------------------------------------------------
 
 async function runDev(args: string[]): Promise<void> {
-  // Spawn a child process with --import tsx so that dynamic import() of .ts
-  // and .tsx route files works. Node.js cannot natively handle .tsx, and
-  // register("tsx/esm") was deprecated in Node v20.6+.
-  const { spawn } = await import("node:child_process");
-  const { fileURLToPath } = await import("node:url");
-  const { resolve: resolvePath } = await import("node:path");
-
-  // Locate the tsx package entry for --import
-  let tsxImportSpecifier: string;
-  try {
-    const tsxPkgPath = await import("node:module").then(m =>
-      m.createRequire(import.meta.url).resolve("tsx/esm"),
-    );
-    // --import requires a file:// URL or bare specifier
-    tsxImportSpecifier = "tsx";
-  } catch {
-    tsxImportSpecifier = "tsx";
-  }
+  const isBun = typeof (globalThis as any).Bun !== "undefined";
 
   // Build an inline script that starts the dev server
   const port = readFlagValue(args, "--port") ?? "3000";
@@ -222,23 +205,53 @@ async function runDev(args: string[]): Promise<void> {
     await server.start();
   `;
 
-  const child = spawn(
-    process.execPath,
-    ["--import", tsxImportSpecifier, "--input-type=module", "-e", devScript],
-    {
+  if (isBun) {
+    // Bun natively supports TypeScript — no tsx shim needed.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const child = (globalThis as any).Bun.spawn(["bun", "--eval", devScript], {
       cwd: process.cwd(),
-      stdio: "inherit",
+      stdio: ["inherit", "inherit", "inherit"],
       env: { ...process.env },
-    },
-  );
+    });
 
-  child.on("exit", (code) => {
-    process.exit(code ?? 0);
-  });
+    // Wait for the child to exit and forward exit code.
+    const exitCode = await child.exited;
+    process.exit(exitCode ?? 0);
+  } else {
+    // Spawn a child process with --import tsx so that dynamic import() of .ts
+    // and .tsx route files works. Node.js cannot natively handle .tsx, and
+    // register("tsx/esm") was deprecated in Node v20.6+.
+    const { spawn } = await import("node:child_process");
 
-  // Forward SIGINT / SIGTERM to child
-  for (const sig of ["SIGINT", "SIGTERM"] as const) {
-    process.on(sig, () => child.kill(sig));
+    // Locate the tsx package entry for --import
+    let tsxImportSpecifier: string;
+    try {
+      await import("node:module").then(m =>
+        m.createRequire(import.meta.url).resolve("tsx/esm"),
+      );
+      tsxImportSpecifier = "tsx";
+    } catch {
+      tsxImportSpecifier = "tsx";
+    }
+
+    const child = spawn(
+      process.execPath,
+      ["--import", tsxImportSpecifier, "--input-type=module", "-e", devScript],
+      {
+        cwd: process.cwd(),
+        stdio: "inherit",
+        env: { ...process.env },
+      },
+    );
+
+    child.on("exit", (code) => {
+      process.exit(code ?? 0);
+    });
+
+    // Forward SIGINT / SIGTERM to child
+    for (const sig of ["SIGINT", "SIGTERM"] as const) {
+      process.on(sig, () => child.kill(sig));
+    }
   }
 }
 
@@ -824,109 +837,131 @@ async function main() {
   }
 
   // Start HTTP server
-  const server = createServer(async (req, res) => {
-    try {
-      const url = new URL(req.url ?? "/", "http://" + (req.headers.host ?? host + ":" + port));
-      const headers = new Headers();
-      for (const [key, value] of Object.entries(req.headers)) {
-        if (value === undefined) continue;
-        if (Array.isArray(value)) { for (const v of value) headers.append(key, v); }
-        else headers.set(key, value);
-      }
+  const isBunRuntime = typeof (globalThis as any).Bun !== "undefined";
 
-      const hasBody = req.method !== "GET" && req.method !== "HEAD";
-      let body;
-      if (hasBody) {
-        body = await new Promise((resolve, reject) => {
-          const chunks = [];
-          let received = 0;
-          req.on("data", (c) => {
-            received += c.length;
-            if (received > MAX_BODY_SIZE) {
-              req.destroy();
-              const err = new Error("Request body exceeds maximum allowed size of " + MAX_BODY_SIZE + " bytes");
-              err.statusCode = 413;
-              reject(err);
-              return;
-            }
-            chunks.push(c);
-          });
-          req.on("error", reject);
-          req.on("end", () => {
-            const raw = Buffer.concat(chunks).toString("utf-8");
-            resolve(raw.length > 0 ? raw : undefined);
-          });
-        });
-      }
-
-      const init = { method: req.method ?? "GET", headers };
-      if (body !== undefined) init.body = body;
-
-      const request = new Request(url.toString(), init);
-      const response = await app.fetch(request);
-
-      res.writeHead(response.status, Object.fromEntries(response.headers.entries()));
-      const responseBody = await response.text();
-      res.end(responseBody);
-    } catch (err) {
-      if (err && err.statusCode === 413) {
-        if (!res.headersSent) res.writeHead(413, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "Payload Too Large" }));
-        return;
-      }
-      console.error(pc.red("[capstan] Unhandled request error:"), err);
-      if (!res.headersSent) res.writeHead(500, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "Internal Server Error" }));
-    }
-  });
-
-  // Track active connections for graceful shutdown.
-  const activeConnections = new Set();
-
-  server.on("connection", (socket) => {
-    activeConnections.add(socket);
-    socket.once("close", () => activeConnections.delete(socket));
-  });
-
-  server.listen(port, host, () => {
+  function printStartupBanner() {
     console.log("");
-    console.log(pc.bold("  Capstan production server running"));
+    console.log(pc.bold("  Capstan production server running" + (isBunRuntime ? " (Bun)" : "")));
     console.log("  Local:  " + pc.cyan("http://" + (host === "0.0.0.0" ? "localhost" : host) + ":" + port));
     console.log(pc.dim("  Routes: " + (apiRouteCount + pageRouteCount) + " total (" + apiRouteCount + " API, " + pageRouteCount + " pages)"));
     if (resolveAuth) console.log(pc.green("  Auth:   enabled"));
     else console.log(pc.dim("  Auth:   disabled (no auth config)"));
     if (policyRegistry.size > 0) console.log(pc.dim("  Policies: " + policyRegistry.size + " custom policies loaded"));
     console.log("");
-  });
-
-  // --- Graceful shutdown ---------------------------------------------------
-  let shuttingDown = false;
-
-  function gracefulShutdown() {
-    if (shuttingDown) return;
-    shuttingDown = true;
-    console.log("Shutting down gracefully...");
-
-    // Stop accepting new connections.
-    server.close(() => {
-      process.exit(0);
-    });
-
-    // Force-close remaining connections after 5 seconds.
-    const timer = setTimeout(() => {
-      for (const socket of activeConnections) {
-        try { socket.destroy(); } catch {}
-      }
-      process.exit(0);
-    }, 5000);
-
-    if (typeof timer === "object" && "unref" in timer) {
-      timer.unref();
-    }
   }
 
-  process.on("SIGINT", gracefulShutdown);
-  process.on("SIGTERM", gracefulShutdown);
+  if (isBunRuntime) {
+    // Bun: use Bun.serve() with Hono's native fetch handler
+    const bunServer = Bun.serve({
+      port,
+      hostname: host,
+      maxRequestBodySize: MAX_BODY_SIZE,
+      fetch: app.fetch,
+    });
+
+    printStartupBanner();
+
+    process.on("SIGINT", () => { bunServer.stop(); process.exit(0); });
+    process.on("SIGTERM", () => { bunServer.stop(); process.exit(0); });
+  } else {
+    // Node.js: bridge node:http to Hono's fetch interface
+    const server = createServer(async (req, res) => {
+      try {
+        const url = new URL(req.url ?? "/", "http://" + (req.headers.host ?? host + ":" + port));
+        const headers = new Headers();
+        for (const [key, value] of Object.entries(req.headers)) {
+          if (value === undefined) continue;
+          if (Array.isArray(value)) { for (const v of value) headers.append(key, v); }
+          else headers.set(key, value);
+        }
+
+        const hasBody = req.method !== "GET" && req.method !== "HEAD";
+        let body;
+        if (hasBody) {
+          body = await new Promise((resolve, reject) => {
+            const chunks = [];
+            let received = 0;
+            req.on("data", (c) => {
+              received += c.length;
+              if (received > MAX_BODY_SIZE) {
+                req.destroy();
+                const err = new Error("Request body exceeds maximum allowed size of " + MAX_BODY_SIZE + " bytes");
+                err.statusCode = 413;
+                reject(err);
+                return;
+              }
+              chunks.push(c);
+            });
+            req.on("error", reject);
+            req.on("end", () => {
+              const raw = Buffer.concat(chunks).toString("utf-8");
+              resolve(raw.length > 0 ? raw : undefined);
+            });
+          });
+        }
+
+        const init = { method: req.method ?? "GET", headers };
+        if (body !== undefined) init.body = body;
+
+        const request = new Request(url.toString(), init);
+        const response = await app.fetch(request);
+
+        res.writeHead(response.status, Object.fromEntries(response.headers.entries()));
+        const responseBody = await response.text();
+        res.end(responseBody);
+      } catch (err) {
+        if (err && err.statusCode === 413) {
+          if (!res.headersSent) res.writeHead(413, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Payload Too Large" }));
+          return;
+        }
+        console.error(pc.red("[capstan] Unhandled request error:"), err);
+        if (!res.headersSent) res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Internal Server Error" }));
+      }
+    });
+
+    // Track active connections for graceful shutdown.
+    const activeConnections = new Set();
+
+    server.on("connection", (socket) => {
+      activeConnections.add(socket);
+      socket.once("close", () => activeConnections.delete(socket));
+    });
+
+    server.listen(port, host, () => {
+      printStartupBanner();
+    });
+
+    // --- Graceful shutdown ---------------------------------------------------
+    let shuttingDown = false;
+
+    function gracefulShutdown() {
+      if (shuttingDown) return;
+      shuttingDown = true;
+      console.log("Shutting down gracefully...");
+
+      // Stop accepting new connections.
+      server.close(() => {
+        process.exit(0);
+      });
+
+      // Force-close remaining connections after 5 seconds.
+      const timer = setTimeout(() => {
+        for (const socket of activeConnections) {
+          try { socket.destroy(); } catch {}
+        }
+        process.exit(0);
+      }, 5000);
+
+      if (typeof timer === "object" && "unref" in timer) {
+        timer.unref();
+      }
+    }
+
+    process.on("SIGINT", gracefulShutdown);
+    process.on("SIGTERM", gracefulShutdown);
+  }
 }
 
 main().catch((err) => {
@@ -941,7 +976,7 @@ main().catch((err) => {
 }
 
 async function runStart(args: string[]): Promise<void> {
-  const { spawn } = await import("node:child_process");
+  const isBun = typeof (globalThis as any).Bun !== "undefined";
   const { access } = await import("node:fs/promises");
   const { join } = await import("node:path");
 
@@ -961,27 +996,43 @@ async function runStart(args: string[]): Promise<void> {
   const port = readFlagValue(args, "--port") ?? "3000";
   const host = readFlagValue(args, "--host") ?? "0.0.0.0";
 
-  const child = spawn(
-    process.execPath,
-    [serverEntry],
-    {
+  const envVars = {
+    ...process.env,
+    CAPSTAN_PORT: port,
+    CAPSTAN_HOST: host,
+  };
+
+  if (isBun) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const child = (globalThis as any).Bun.spawn(["bun", serverEntry], {
       cwd,
-      stdio: "inherit",
-      env: {
-        ...process.env,
-        CAPSTAN_PORT: port,
-        CAPSTAN_HOST: host,
+      stdio: ["inherit", "inherit", "inherit"],
+      env: envVars,
+    });
+
+    const exitCode = await child.exited;
+    process.exit(exitCode ?? 0);
+  } else {
+    const { spawn } = await import("node:child_process");
+
+    const child = spawn(
+      process.execPath,
+      [serverEntry],
+      {
+        cwd,
+        stdio: "inherit",
+        env: envVars,
       },
-    },
-  );
+    );
 
-  child.on("exit", (code) => {
-    process.exit(code ?? 0);
-  });
+    child.on("exit", (code) => {
+      process.exit(code ?? 0);
+    });
 
-  // Forward SIGINT / SIGTERM to child
-  for (const sig of ["SIGINT", "SIGTERM"] as const) {
-    process.on(sig, () => child.kill(sig));
+    // Forward SIGINT / SIGTERM to child
+    for (const sig of ["SIGINT", "SIGTERM"] as const) {
+      process.on(sig, () => child.kill(sig));
+    }
   }
 }
 
@@ -1092,7 +1143,7 @@ async function runDbPush(): Promise<void> {
     await mkdirFs(dirname(url), { recursive: true });
   }
 
-  const dbInstance = createDatabase({ provider, url });
+  const dbInstance = await createDatabase({ provider, url });
   // Access the underlying driver client from the Drizzle instance
   const client = (dbInstance.db as { $client: unknown }).$client as {
     exec: (sql: string) => void;
@@ -1144,7 +1195,7 @@ async function runDbStatus(): Promise<void> {
 
   let status: { applied: Array<{ name: string; appliedAt: string }>; pending: string[] };
   try {
-    const dbInstance = createDatabase({ provider, url });
+    const dbInstance = await createDatabase({ provider, url });
     const client = (dbInstance.db as { $client: unknown }).$client as {
       exec: (sql: string) => void;
       prepare: (sql: string) => {

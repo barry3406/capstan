@@ -4,35 +4,35 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What Is Capstan
 
-An AI Agent Native full-stack framework. Like Next.js but designed for both human and AI agent consumption. One `defineAPI()` call simultaneously exposes HTTP, MCP, A2A, and OpenAPI interfaces.
+A Bun-native AI Agent full-stack framework. Like Next.js but designed for both human and AI agent consumption. One `defineAPI()` call simultaneously exposes HTTP, MCP, A2A, and OpenAPI interfaces. Bun is the primary runtime; Node.js is also supported.
 
 ## Commands
 
 ```bash
 # Build all packages (18 packages, dependency order)
-npm run build
+bun run build
 
 # Run new tests (Bun — 1125 tests in ~18s)
-npm run test:new
+bun run test:new
 
 
 # Dev server
-npx capstan dev
+bun run dev
 
 # Verify app (AI TDD self-loop — structured JSON diagnostics)
-npx capstan verify --json
+bunx capstan verify --json
 
 # Scaffold features
-npx capstan add model <name>
-npx capstan add api <name>
-npx capstan add page <name>
-npx capstan add policy <name>
+bunx capstan add model <name>
+bunx capstan add api <name>
+bunx capstan add page <name>
+bunx capstan add policy <name>
 
 # MCP server (stdio transport for Claude Desktop / Cursor)
-npx capstan mcp
+bunx capstan mcp
 
 # Create new project
-npx create-capstan-app
+bunx create-capstan-app
 ```
 
 ## Architecture
