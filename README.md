@@ -12,7 +12,7 @@ One `defineAPI()` call. Four protocol surfaces. Humans and AI agents, served sim
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Tests](https://img.shields.io/badge/tests-1120%20passing-brightgreen?logo=bun&logoColor=white)](https://bun.sh)
+[![Tests](https://img.shields.io/badge/tests-1125%20passing-brightgreen?logo=bun&logoColor=white)](https://bun.sh)
 [![Version](https://img.shields.io/badge/version-1.0.0--beta.6-orange)](https://github.com/barry3406/capstan)
 [![ESM](https://img.shields.io/badge/ESM-only-blue)](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Modules)
 
@@ -74,6 +74,7 @@ Think of it as **Next.js if it were designed from day one for a world where half
 | **Auto CRUD** | None | None | `defineModel()` generates typed route files |
 | **Database** | BYO | SQLAlchemy | Drizzle ORM (SQLite, PostgreSQL, MySQL) |
 | **Vector search / RAG** | Manual integration | Manual integration | Native `field.vector()`, `defineEmbedding`, hybrid search |
+| **LLM providers** | BYO | BYO | Built-in OpenAI + Anthropic with streaming |
 | **MCP Client** | None | None | Consume external MCP servers from your handlers |
 | **Rate limiting by auth type** | DIY | DIY | Token-aware limits (human vs agent) built-in |
 | **Selective hydration** | Partial (RSC) | N/A | `full` / `visible` / `none` per page |
@@ -90,7 +91,7 @@ Think of it as **Next.js if it were designed from day one for a world where half
 - **Vector fields & RAG primitives** — `field.vector()`, `defineEmbedding`, and hybrid search built into the ORM
 - **LangChain integration** — use Capstan APIs as LangChain tools, or call LangChain chains from handlers
 - **Selective hydration** — per-page control (`full` / `visible` / `none`) to ship minimal JS to the client
-- **React Server Components foundations** — streaming SSR with async component support
+- **React Server Components foundations** — streaming SSR with async component support, `ClientOnly`, `serverOnly()` guard
 - **DPoP (RFC 9449) & SPIFFE/mTLS** — proof-of-possession tokens and workload identity for service-to-service auth
 - **Token-aware rate limiting** — separate rate-limit buckets for human sessions vs agent API keys
 - **Multi-runtime adapters** — runs on both Node.js and Bun
@@ -103,7 +104,9 @@ Think of it as **Next.js if it were designed from day one for a world where half
 - **EU AI Act compliance** — `defineCompliance()` with risk level, audit logging, and transparency; automatic `GET /capstan/audit` endpoint
 - **OAuth providers** — built-in `googleProvider()`, `githubProvider()`, and `createOAuthHandlers()` for social login with automatic session creation
 - **Redis state backend** — `RedisStore` adapter for `KeyValueStore<T>`, plus `setAuditStore()` for Redis-backed audit logging
-- **Deployment adapters** — Vercel and Fly.io deployment skeletons included
+- **LLM providers** — built-in `openaiProvider()` and `anthropicProvider()` with unified chat and streaming interface
+- **Vite build pipeline** — optional Vite integration for client-side code splitting, HMR, and production builds
+- **Deployment adapters** — Cloudflare Workers (`createCloudflareHandler`), Vercel (Edge + Node.js), Fly.io (write replay)
 - **CSS pipeline** — Lightning CSS processing built-in, Tailwind v4 auto-detection, zero-config
 - **WebSocket support** — `defineWebSocket()` for real-time endpoints, `WebSocketRoom` for pub/sub broadcast
 - **Interactive CLI** — colored output, grouped help, fuzzy command matching, `@clack/prompts` interactive scaffolder with auto-install
@@ -497,7 +500,7 @@ git clone https://github.com/barry3406/capstan.git
 cd capstan
 npm install
 npm run build        # Build 9 runtime packages
-npm run test:new     # Bun tests (1120 tests, ~18s)
+npm run test:new     # Bun tests (1125 tests, ~18s)
 ```
 
 ### Conventions
@@ -513,7 +516,7 @@ npm run test:new     # Bun tests (1120 tests, ~18s)
 - More integration, end-to-end, and MCP contract tests
 - Additional OAuth providers (beyond Google and GitHub)
 - Additional embedding adapters (Cohere, local models)
-- More deployment adapters (AWS Lambda, Cloudflare Workers)
+- More deployment adapters (AWS Lambda, Deno Deploy)
 
 ---
 

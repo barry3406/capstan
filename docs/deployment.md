@@ -213,7 +213,7 @@ Before deploying to production:
 
 ## Platform-Specific Notes
 
-### Node.js Hosting (Railway, Render, Fly.io)
+### Node.js Hosting (Railway, Render)
 
 These platforms typically auto-detect Node.js projects. Set your start command to:
 
@@ -221,11 +221,55 @@ These platforms typically auto-detect Node.js projects. Set your start command t
 npx capstan start --port $PORT
 ```
 
+### Fly.io
+
+Capstan includes a Fly.io adapter with write replay support for multi-region deployments:
+
+```typescript
+import { createFlyAdapter } from "@zauso-ai/capstan-dev";
+
+const adapter = createFlyAdapter({
+  primaryRegion: "iad",
+  replayWrites: true,
+});
+```
+
+When `replayWrites` is enabled, mutating requests (POST, PUT, DELETE, PATCH) arriving at non-primary regions are automatically replayed to the primary via a `fly-replay` header. Use `fly launch` with a Dockerfile that runs `capstan build && capstan start`.
+
+### Cloudflare Workers
+
+Capstan includes a built-in Cloudflare Workers adapter:
+
+```typescript
+import { createCloudflareHandler, generateWranglerConfig } from "@zauso-ai/capstan-dev";
+
+// Worker entry — dist/_worker.js
+export default createCloudflareHandler(app);
+```
+
+Generate a `wrangler.toml` with `generateWranglerConfig("my-app")`. The generated config enables `nodejs_compat` for full Node.js API support.
+
+### Vercel
+
+Capstan provides both Edge and Node.js adapters for Vercel:
+
+```typescript
+import { createVercelHandler, createVercelNodeHandler } from "@zauso-ai/capstan-dev";
+
+// Edge Function (recommended for low latency)
+export default createVercelHandler(app);
+
+// Node.js Serverless Function (for native Node.js dependencies)
+export default createVercelNodeHandler(app);
+```
+
+Use `generateVercelConfig()` to produce a `vercel.json`-compatible configuration object.
+
 ### Serverless
 
-Capstan's Hono-based server can be adapted to serverless environments since Hono supports multiple runtime adapters. However, the file-based routing and in-memory approval store are designed for long-running server processes. For serverless deployments, consider:
+For other serverless platforms, Capstan's Hono-based server can be adapted since Hono supports multiple runtime adapters. For serverless deployments, consider:
 
-- Using an external database for approval state
+- Using an external database for approval state (e.g., `RedisStore`)
 - Pre-scanning routes at build time
 - Using the `Hono` app instance directly with your serverless adapter
 

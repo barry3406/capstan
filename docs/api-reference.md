@@ -584,6 +584,85 @@ export const ws = defineWebSocket("/ws/lobby", {
 
 ---
 
+---
+
+## @zauso-ai/capstan-agent — LLM Providers
+
+Built-in LLM provider adapters for chat completion and streaming.
+
+### openaiProvider(config)
+
+Create an OpenAI-compatible LLM provider.
+
+```typescript
+function openaiProvider(config: {
+  apiKey: string;
+  baseUrl?: string;  // default: "https://api.openai.com/v1"
+  model?: string;    // default: "gpt-4o"
+}): LLMProvider
+```
+
+Works with any OpenAI-compatible API (OpenAI, Azure OpenAI, Ollama, etc.) by setting `baseUrl`. Supports both `chat()` and `stream()`.
+
+---
+
+### anthropicProvider(config)
+
+Create an Anthropic LLM provider.
+
+```typescript
+function anthropicProvider(config: {
+  apiKey: string;
+  model?: string;    // default: "claude-sonnet-4-20250514"
+  baseUrl?: string;  // default: "https://api.anthropic.com/v1"
+}): LLMProvider
+```
+
+Supports `chat()`. System prompts are extracted from messages and sent via the Anthropic `system` parameter.
+
+---
+
+### LLM Types
+
+```typescript
+interface LLMMessage {
+  role: "system" | "user" | "assistant";
+  content: string;
+}
+
+interface LLMResponse {
+  content: string;
+  model: string;
+  usage?: {
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+  };
+  finishReason?: string;
+}
+
+interface LLMStreamChunk {
+  content: string;
+  done: boolean;
+}
+
+interface LLMOptions {
+  model?: string;
+  temperature?: number;
+  maxTokens?: number;
+  systemPrompt?: string;
+  responseFormat?: Record<string, unknown>;
+}
+
+interface LLMProvider {
+  name: string;
+  chat(messages: LLMMessage[], options?: LLMOptions): Promise<LLMResponse>;
+  stream?(messages: LLMMessage[], options?: LLMOptions): AsyncIterable<LLMStreamChunk>;
+}
+```
+
+---
+
 ### Types
 
 ```typescript
@@ -1446,6 +1525,54 @@ function ServerOnly(props: { children: React.ReactNode }): JSX.Element | null
 
 ---
 
+### ClientOnly
+
+React component that renders its children only in the browser. During SSR, an optional fallback is rendered instead.
+
+```typescript
+function ClientOnly(props: {
+  children: React.ReactNode;
+  fallback?: React.ReactNode;
+}): JSX.Element
+```
+
+**Usage:**
+
+```typescript
+import { ClientOnly } from "@zauso-ai/capstan-react";
+
+export default function Page() {
+  return (
+    <div>
+      <ClientOnly fallback={<p>Loading editor...</p>}>
+        <RichTextEditor />
+      </ClientOnly>
+    </div>
+  );
+}
+```
+
+---
+
+### serverOnly()
+
+Guard function that throws if called in a browser environment. Use at the top of server-only modules to prevent accidental client-side imports.
+
+```typescript
+function serverOnly(): void
+```
+
+**Usage:**
+
+```typescript
+import { serverOnly } from "@zauso-ai/capstan-react";
+serverOnly(); // throws if imported in client code
+
+export function getSecretConfig() { /* ... */ }
+```
+
+---
+
 ### useAuth()
 
 React hook to access auth context in components.
@@ -1488,7 +1615,118 @@ const PageContext: React.Context<CapstanPageContext>
 
 ## @zauso-ai/capstan-dev
 
-Development server with file watching and hot reload.
+Development server, Vite build pipeline, and deployment adapters.
+
+### createViteConfig(config)
+
+Generate a Vite configuration object for client-side builds. Vite is an optional peer dependency.
+
+```typescript
+function createViteConfig(config: CapstanViteConfig): Record<string, unknown>
+
+interface CapstanViteConfig {
+  rootDir: string;
+  isDev: boolean;
+  clientEntry?: string; // default: "app/client.tsx"
+}
+```
+
+---
+
+### createViteDevMiddleware(config)
+
+Create a Vite dev server in middleware mode for HMR during development. Returns `null` if Vite is not installed.
+
+```typescript
+function createViteDevMiddleware(config: CapstanViteConfig): Promise<{
+  middleware: unknown;
+  close: () => Promise<void>;
+} | null>
+```
+
+---
+
+### buildClient(config)
+
+Run a production Vite build for client-side code. Silently skips if Vite is not installed.
+
+```typescript
+function buildClient(config: CapstanViteConfig): Promise<void>
+```
+
+---
+
+### createCloudflareHandler(app)
+
+Create a Cloudflare Workers module-format handler from a Capstan/Hono app.
+
+```typescript
+function createCloudflareHandler(app: {
+  fetch: (req: Request) => Promise<Response>;
+}): {
+  fetch(request: Request, env: Record<string, unknown>, ctx: { waitUntil: (p: Promise<unknown>) => void }): Promise<Response>;
+}
+```
+
+**Usage:**
+
+```typescript
+import { createCloudflareHandler } from "@zauso-ai/capstan-dev";
+
+const handler = createCloudflareHandler(app);
+export default handler;
+```
+
+---
+
+### generateWranglerConfig(name)
+
+Generate a `wrangler.toml` configuration string for Cloudflare Workers deployment.
+
+```typescript
+function generateWranglerConfig(name: string): string
+```
+
+---
+
+### createVercelHandler(app)
+
+Create a Vercel Edge Function handler.
+
+```typescript
+function createVercelHandler(app: {
+  fetch: (req: Request) => Promise<Response>;
+}): (req: Request) => Promise<Response>
+```
+
+---
+
+### createVercelNodeHandler(app)
+
+Create a Vercel Node.js serverless function handler. Converts Node.js `IncomingMessage`/`ServerResponse` to Web API `Request`/`Response`.
+
+```typescript
+function createVercelNodeHandler(app: {
+  fetch: (req: Request) => Promise<Response>;
+}): (req: IncomingMessage, res: ServerResponse) => Promise<void>
+```
+
+---
+
+### createFlyAdapter(config?)
+
+Create a server adapter for Fly.io with optional write replay support. When enabled, mutating requests from non-primary regions return `409` with a `fly-replay` header.
+
+```typescript
+function createFlyAdapter(config?: FlyConfig): ServerAdapter
+
+interface FlyConfig {
+  primaryRegion?: string;
+  replayWrites?: boolean;
+}
+```
+
+---
 
 ### createDevServer(config)
 

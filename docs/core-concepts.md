@@ -661,6 +661,41 @@ setAuditStore(new RedisStore(redis, "audit:"));
 
 `RedisStore` implements the `KeyValueStore<T>` interface and supports TTL-based expiration, key enumeration via `keys()`, and configurable key prefixes to avoid collisions when multiple apps share a Redis instance.
 
+## LLM Integration
+
+Capstan includes built-in LLM provider adapters for OpenAI and Anthropic, with a unified interface for chat completion and streaming.
+
+```typescript
+import { openaiProvider, anthropicProvider } from "@zauso-ai/capstan-agent";
+
+// OpenAI (or any compatible API)
+const openai = openaiProvider({
+  apiKey: process.env.OPENAI_API_KEY!,
+  model: "gpt-4o",
+});
+
+// Anthropic
+const claude = anthropicProvider({
+  apiKey: process.env.ANTHROPIC_API_KEY!,
+  model: "claude-sonnet-4-20250514",
+});
+
+// Unified chat interface
+const response = await openai.chat([
+  { role: "user", content: "Summarize this ticket" },
+], { temperature: 0.3 });
+
+// Streaming (OpenAI provider)
+for await (const chunk of openai.stream!([
+  { role: "user", content: "Write a summary" },
+])) {
+  process.stdout.write(chunk.content);
+  if (chunk.done) break;
+}
+```
+
+The `LLMProvider` interface can be implemented for other providers. Both providers support `systemPrompt`, `temperature`, `maxTokens`, and structured `responseFormat` options.
+
 ## Deployment
 
 ### Production Build & Start
@@ -670,10 +705,78 @@ npx capstan build    # Compile TS, generate route manifest, production server en
 npx capstan start    # Start the production server
 ```
 
+### ClientOnly Component
+
+The inverse of `ServerOnly` -- renders its children only in the browser. During SSR, an optional fallback is shown instead:
+
+```typescript
+import { ClientOnly } from "@zauso-ai/capstan-react";
+
+export default function Page() {
+  return (
+    <div>
+      <ClientOnly fallback={<p>Loading map...</p>}>
+        <InteractiveMap />
+      </ClientOnly>
+    </div>
+  );
+}
+```
+
+### serverOnly() Guard
+
+A guard function that throws if called in a browser context. Place it at the top of server-only modules to prevent accidental client-side imports:
+
+```typescript
+import { serverOnly } from "@zauso-ai/capstan-react";
+serverOnly(); // throws "This module is server-only" in browser
+
+export function getDbConnection() { /* ... */ }
+```
+
+### Vite Build Pipeline (Optional)
+
+Capstan includes an optional Vite integration for client-side code splitting and HMR. Install `vite` as a peer dependency to enable it:
+
+```bash
+npm install vite
+```
+
+Use `createViteConfig()` and `buildClient()` from `@zauso-ai/capstan-dev` to configure the pipeline. If Vite is not installed, the functions gracefully degrade.
+
+### Cloudflare Workers
+
+Deploy to Cloudflare Workers using the built-in adapter:
+
+```typescript
+import { createCloudflareHandler } from "@zauso-ai/capstan-dev";
+import app from "./app.js";
+
+export default createCloudflareHandler(app);
+```
+
+Generate a `wrangler.toml` with `generateWranglerConfig("my-app")`.
+
 ### Vercel
 
-Capstan includes a Vercel deployment adapter skeleton. Configure your `vercel.json` to use the Capstan build output.
+Deploy to Vercel using either the Edge or Node.js adapter:
+
+```typescript
+import { createVercelHandler } from "@zauso-ai/capstan-dev";
+export default createVercelHandler(app); // Edge Function
+```
+
+Or for Node.js serverless functions, use `createVercelNodeHandler(app)`.
 
 ### Fly.io
 
-Capstan includes a Fly.io deployment adapter skeleton. Use `fly launch` with a Dockerfile that runs `capstan build && capstan start`.
+Deploy to Fly.io with optional write replay support. When running read replicas, mutating requests are automatically replayed to the primary region:
+
+```typescript
+import { createFlyAdapter } from "@zauso-ai/capstan-dev";
+
+const adapter = createFlyAdapter({
+  primaryRegion: "iad",
+  replayWrites: true,
+});
+```

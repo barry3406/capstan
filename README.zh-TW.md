@@ -12,7 +12,7 @@
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Tests](https://img.shields.io/badge/tests-1120%20passing-brightgreen?logo=bun&logoColor=white)](https://bun.sh)
+[![Tests](https://img.shields.io/badge/tests-1125%20passing-brightgreen?logo=bun&logoColor=white)](https://bun.sh)
 [![Version](https://img.shields.io/badge/version-1.0.0--beta.6-orange)](https://github.com/barry3406/capstan)
 [![ESM](https://img.shields.io/badge/ESM-only-blue)](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Modules)
 
@@ -94,7 +94,7 @@
 ### 前端
 - **React SSR** — 搭配 loader 的伺服器端渲染、版面配置、`Outlet`、hydration
 - **選擇性 hydration** — `full` / `visible` / `none` 三種 hydration 模式
-- **React Server Components 基礎** — RSC 基礎架構支援
+- **React Server Components 基礎** — RSC 基礎架構支援，`ClientOnly`、`serverOnly()` 守衛
 - **CSS 管線** — 內建 Lightning CSS 處理，Tailwind v4 自動偵測，零設定
 
 ### Agent 協定
@@ -119,7 +119,9 @@
 - **可插拔狀態存儲** — `KeyValueStore<T>` 介面，預設使用 `MemoryStore`；透過 `setApprovalStore()`、`setRateLimitStore()`、`setDpopReplayStore()`、`setAuditStore()` 切換至 Redis 或其他外部後端
 - **Redis 狀態後端** — 內建 `RedisStore` 適配器，用於正式環境的持久化狀態儲存
 - **OAuth 提供者** — 內建 `googleProvider()`、`githubProvider()` 與 `createOAuthHandlers()`，支援社交登入並自動建立工作階段
-- **部署適配器** — 內含 Vercel 與 Fly.io 部署骨架
+- **LLM 提供者** — 內建 `openaiProvider()` 與 `anthropicProvider()`，統一的聊天與串流介面
+- **Vite 建置管線** — 可選的 Vite 整合，支援客戶端程式碼分割、HMR 與正式建置
+- **部署適配器** — Cloudflare Workers（`createCloudflareHandler`）、Vercel（Edge + Node.js）、Fly.io（寫入重播）
 
 ### 合規
 - **EU AI Act 合規原語** — `defineCompliance()` 設定風險等級、稽核日誌與透明度聲明；自動產生 `GET /capstan/audit` 端點
@@ -477,7 +479,7 @@ git clone https://github.com/barry3406/capstan.git
 cd capstan
 npm install
 npm run build        # 建置 9 個執行時期套件
-npm run test:new     # Bun 測試（1120 項測試，約 17s）
+npm run test:new     # Bun 測試（1125 項測試，約 18s）
 ```
 
 ### 開發慣例
@@ -492,7 +494,7 @@ npm run test:new     # Bun 測試（1120 項測試，約 17s）
 - 更多鷹架範本（除 `blank` 與 `tickets` 之外）
 - 更多整合測試與端對端測試
 - 更多 OAuth 提供者（Google 與 GitHub 之外的）
-- 更多部署適配器（AWS Lambda、Cloudflare Workers）
+- 更多部署適配器（AWS Lambda、Deno Deploy）
 
 ---
 

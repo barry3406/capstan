@@ -12,7 +12,7 @@ An AI Agent Native full-stack framework. Like Next.js but designed for both huma
 # Build all packages (18 packages, dependency order)
 npm run build
 
-# Run new tests (Bun — 997 tests in ~17s)
+# Run new tests (Bun — 1125 tests in ~18s)
 npm run test:new
 
 

@@ -12,7 +12,7 @@
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Tests](https://img.shields.io/badge/tests-1120%20passing-brightgreen?logo=bun&logoColor=white)](https://bun.sh)
+[![Tests](https://img.shields.io/badge/tests-1125%20passing-brightgreen?logo=bun&logoColor=white)](https://bun.sh)
 [![Version](https://img.shields.io/badge/version-1.0.0--beta.6-orange)](https://github.com/barry3406/capstan)
 [![ESM](https://img.shields.io/badge/ESM-only-blue)](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Modules)
 
@@ -365,7 +365,7 @@ Capstan 内置多层安全防护：
 
 - **React SSR + Loader** — 服务端渲染，数据加载器、布局组件、`Outlet`
 - **选择性 hydration** — 支持 `full`（完整水合）、`visible`（可见时水合）、`none`（纯静态）三种模式，精细控制客户端 JavaScript 加载
-- **React Server Components 基础** — 服务端组件支持，减少客户端 bundle 体积
+- **React Server Components 基础** — 服务端组件支持，`ClientOnly`、`serverOnly()` 守卫，减少客户端 bundle 体积
 - **CSS 管线** — 内建 Lightning CSS 处理，Tailwind v4 自动检测，零配置
 
 ### Agent 协议
@@ -394,7 +394,9 @@ Capstan 内置多层安全防护：
 - **可插拔状态存储** — `KeyValueStore<T>` 接口，默认使用 `MemoryStore`；通过 `setApprovalStore()`、`setRateLimitStore()`、`setDpopReplayStore()`、`setAuditStore()` 切换到 Redis 或其他外部后端
 - **Redis 状态后端** — 内置 `RedisStore` 适配器，用于生产环境的持久化状态存储
 - **OAuth 提供者** — 内置 `googleProvider()`、`githubProvider()` 和 `createOAuthHandlers()`，支持社交登录并自动创建会话
-- **部署适配器** — 内含 Vercel 和 Fly.io 部署骨架
+- **LLM 提供者** — 内置 `openaiProvider()` 和 `anthropicProvider()`，统一的聊天与流式接口
+- **Vite 构建管线** — 可选的 Vite 集成，支持客户端代码分割、HMR 和生产构建
+- **部署适配器** — Cloudflare Workers（`createCloudflareHandler`）、Vercel（Edge + Node.js）、Fly.io（写入重放）
 
 ### 合规
 
@@ -498,7 +500,7 @@ git clone https://github.com/barry3406/capstan.git
 cd capstan
 npm install
 npm run build        # 构建 9 个运行时包
-npm run test:new     # Bun 测试（1120 项测试，约 17s）
+npm run test:new     # Bun 测试（1125 项测试，约 18s）
 ```
 
 ### 开发规范
@@ -513,7 +515,7 @@ npm run test:new     # Bun 测试（1120 项测试，约 17s）
 - 更多脚手架模板（目前支持 `blank` 和 `tickets`）
 - 更多集成和端到端测试
 - 更多 OAuth 提供者（Google 和 GitHub 之外的）
-- 更多部署适配器（AWS Lambda、Cloudflare Workers）
+- 更多部署适配器（AWS Lambda、Deno Deploy）
 
 ---
 

@@ -1033,6 +1033,114 @@ defineCompliance({
 \`\`\`
 
 When \`auditLog: true\`, every \`defineAPI()\` handler call is recorded with timestamp, auth context, and I/O summary. Query the log at \`GET /capstan/audit\` or use \`getAuditLog()\` / \`clearAuditLog()\` programmatically.
+
+## LLM Providers
+
+Capstan includes built-in LLM provider adapters with a unified \`LLMProvider\` interface:
+
+\`\`\`typescript
+import { openaiProvider, anthropicProvider } from "@zauso-ai/capstan-agent";
+
+// OpenAI (or any OpenAI-compatible API via baseUrl)
+const openai = openaiProvider({
+  apiKey: process.env.OPENAI_API_KEY!,
+  model: "gpt-4o",           // optional, default "gpt-4o"
+});
+
+// Anthropic
+const claude = anthropicProvider({
+  apiKey: process.env.ANTHROPIC_API_KEY!,
+  model: "claude-sonnet-4-20250514", // optional
+});
+
+// Chat
+const response = await openai.chat([
+  { role: "user", content: "Summarize this ticket" },
+], { temperature: 0.3, maxTokens: 500 });
+// response.content, response.model, response.usage
+
+// Streaming (OpenAI provider supports stream())
+for await (const chunk of openai.stream!([
+  { role: "user", content: "Write a summary" },
+])) {
+  process.stdout.write(chunk.content);
+  if (chunk.done) break;
+}
+\`\`\`
+
+Options: \`model\`, \`temperature\`, \`maxTokens\`, \`systemPrompt\`, \`responseFormat\` (structured output).
+
+## Build Pipeline (Optional Vite Integration)
+
+Capstan optionally integrates with Vite for client-side code splitting and HMR. Install \`vite\` as a peer dependency to enable:
+
+\`\`\`bash
+npm install vite
+\`\`\`
+
+\`\`\`typescript
+import { createViteConfig, buildClient } from "@zauso-ai/capstan-dev";
+
+// Generate Vite config
+const config = createViteConfig({ rootDir: ".", isDev: false });
+
+// Production build
+await buildClient({ rootDir: ".", isDev: false });
+\`\`\`
+
+If Vite is not installed, these functions gracefully skip without errors.
+
+## Deployment Adapters
+
+Capstan provides production-ready deployment adapters for major platforms:
+
+### Cloudflare Workers
+\`\`\`typescript
+import { createCloudflareHandler, generateWranglerConfig } from "@zauso-ai/capstan-dev";
+
+// Worker entry
+export default createCloudflareHandler(app);
+
+// Generate wrangler.toml
+const toml = generateWranglerConfig("my-app");
+\`\`\`
+
+### Vercel
+\`\`\`typescript
+import { createVercelHandler, createVercelNodeHandler } from "@zauso-ai/capstan-dev";
+
+// Edge Function
+export default createVercelHandler(app);
+
+// Node.js Serverless Function
+export default createVercelNodeHandler(app);
+\`\`\`
+
+### Fly.io (with Write Replay)
+\`\`\`typescript
+import { createFlyAdapter } from "@zauso-ai/capstan-dev";
+
+const adapter = createFlyAdapter({
+  primaryRegion: "iad",
+  replayWrites: true,  // Mutating requests replay to primary region
+});
+\`\`\`
+
+### ClientOnly and serverOnly()
+
+In addition to \`ServerOnly\`, Capstan provides:
+
+\`\`\`typescript
+import { ClientOnly, serverOnly } from "@zauso-ai/capstan-react";
+
+// ClientOnly — renders children only in browser, shows fallback during SSR
+<ClientOnly fallback={<p>Loading...</p>}>
+  <InteractiveWidget />
+</ClientOnly>
+
+// serverOnly() — guard that throws if imported in client code
+serverOnly(); // place at top of server-only modules
+\`\`\`
 `;
 }
 
