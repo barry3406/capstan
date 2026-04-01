@@ -3,7 +3,7 @@ export { defineLoader, useLoaderData, PageContext } from "./loader.js";
 export { Outlet, OutletProvider } from "./layout.js";
 export { useAuth, useParams } from "./hooks.js";
 export { hydrateCapstanPage } from "./hydrate.js";
-export { ServerOnly } from "./server-only.js";
+export { ServerOnly, ClientOnly, serverOnly } from "./server-only.js";
 export type {
   LoaderArgs,
   LoaderFunction,

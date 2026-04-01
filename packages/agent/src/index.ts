@@ -32,3 +32,11 @@ export type {
   TransactionConfig,
   TransactionResult,
 } from "./commerce.js";
+export { openaiProvider, anthropicProvider } from "./llm.js";
+export type {
+  LLMProvider,
+  LLMMessage,
+  LLMResponse,
+  LLMStreamChunk,
+  LLMOptions,
+} from "./llm.js";
