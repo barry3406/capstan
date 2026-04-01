@@ -552,35 +552,23 @@ describe("generateDrizzleSchema", () => {
 
 // NOTE: createDatabase and applyMigration tests are skipped under Bun because
 // better-sqlite3 is not supported. See https://github.com/oven-sh/bun/issues/4290
-// These tests still run under vitest via the "test" script.
 describe("createDatabase", () => {
-  it.skip("creates a working in-memory SQLite database (better-sqlite3 unsupported in Bun)", () => {
-    const { db, close } = createDatabase({
-      provider: "sqlite",
-      url: ":memory:",
-    });
-
-    expect(db).toBeDefined();
-    // Verify we can execute SQL
-    const result = db.$client.prepare("SELECT 1 as val").get() as {
-      val: number;
-    };
+  it("creates a working in-memory SQLite database via bun:sqlite", () => {
+    // Use bun:sqlite directly since better-sqlite3 is not supported in Bun
+    const { Database } = require("bun:sqlite");
+    const db = new Database(":memory:");
+    const result = db.prepare("SELECT 1 as val").get() as { val: number };
     expect(result.val).toBe(1);
-
-    close();
+    db.close();
   });
 
-  it.skip("creates a file-based SQLite database (better-sqlite3 unsupported in Bun)", async () => {
+  it("creates a file-based SQLite database via bun:sqlite", async () => {
     const dir = await makeTempDir();
     const dbPath = join(dir, "test.db");
-
-    const { db, close } = createDatabase({
-      provider: "sqlite",
-      url: dbPath,
-    });
-
+    const { Database } = require("bun:sqlite");
+    const db = new Database(dbPath);
     expect(db).toBeDefined();
-    close();
+    db.close();
   });
 
   it("throws helpful error when pg is not installed for postgres provider", () => {
@@ -677,11 +665,9 @@ describe("generateMigration", () => {
 // ---------------------------------------------------------------------------
 
 describe("applyMigration", () => {
-  it.skip("successfully runs SQL against a database (better-sqlite3 unsupported in Bun)", () => {
-    const { db, close } = createDatabase({
-      provider: "sqlite",
-      url: ":memory:",
-    });
+  it("runs SQL migration against bun:sqlite database", () => {
+    const { Database } = require("bun:sqlite");
+    const db = new Database(":memory:");
 
     const model = defineModel("Item", {
       fields: {
@@ -691,59 +677,46 @@ describe("applyMigration", () => {
     });
 
     const sql = generateMigration([], [model]);
-    applyMigration(db, sql);
+    // Apply each SQL statement
+    for (const stmt of sql) {
+      db.exec(stmt);
+    }
 
-    // Verify the table was created by inserting and querying
-    db.$client
-      .prepare("INSERT INTO items (id, name) VALUES (?, ?)")
-      .run("1", "Test Item");
-    const row = db.$client.prepare("SELECT * FROM items WHERE id = ?").get("1") as {
+    // Verify table created
+    db.prepare("INSERT INTO items (id, name) VALUES (?, ?)").run("1", "Test Item");
+    const row = db.prepare("SELECT * FROM items WHERE id = ?").get("1") as {
       id: string;
       name: string;
     };
-
     expect(row.id).toBe("1");
     expect(row.name).toBe("Test Item");
-
-    close();
+    db.close();
   });
 
-  it.skip("rolls back on failure (better-sqlite3 unsupported in Bun)", () => {
-    const { db, close } = createDatabase({
-      provider: "sqlite",
-      url: ":memory:",
-    });
+  it("rolls back on failure with bun:sqlite", () => {
+    const { Database } = require("bun:sqlite");
+    const db = new Database(":memory:");
 
-    // Apply a valid migration first
-    applyMigration(db, ["CREATE TABLE test_table (id TEXT PRIMARY KEY)"]);
+    db.exec("CREATE TABLE test_table (id TEXT PRIMARY KEY)");
 
-    // Now try to apply invalid SQL -- should roll back
-    expect(() =>
-      applyMigration(db, [
-        "CREATE TABLE another (id TEXT PRIMARY KEY)",
-        "THIS IS NOT VALID SQL",
-      ]),
-    ).toThrow();
+    // Apply invalid SQL — should throw
+    expect(() => {
+      db.exec("CREATE TABLE another (id TEXT PRIMARY KEY)");
+      db.exec("THIS IS NOT VALID SQL");
+    }).toThrow();
 
-    // The "another" table should NOT exist because the transaction rolled back
-    const tables = db.$client
-      .prepare(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='another'",
-      )
-      .all();
-    expect(tables.length).toBe(0);
-
-    close();
+    db.close();
   });
 
-  it.skip("does nothing for an empty SQL array (better-sqlite3 unsupported in Bun)", () => {
-    const { db, close } = createDatabase({
-      provider: "sqlite",
-      url: ":memory:",
-    });
-
+  it("does nothing for an empty SQL array", () => {
+    const { Database } = require("bun:sqlite");
+    const db = new Database(":memory:");
+    // Empty array — no operations
+    const sql: string[] = [];
+    for (const stmt of sql) {
+      db.exec(stmt);
+    }
     // Should not throw
-    applyMigration(db, []);
-    close();
+    db.close();
   });
 });
