@@ -22,9 +22,13 @@ function stubApp(body: string, status = 200) {
 // ---------------------------------------------------------------------------
 
 describe("Vercel adapter", () => {
-  it("createVercelHandler returns a function", () => {
+  it("createVercelHandler returns a callable function", async () => {
     const handler = createVercelHandler(stubApp("ok"));
     expect(typeof handler).toBe("function");
+    // Actually invoke to prove it works
+    const res = await handler(new Request("http://localhost/"));
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("ok");
   });
 
   it("Vercel handler calls app.fetch and returns response", async () => {
@@ -123,6 +127,19 @@ describe("Vercel adapter", () => {
     expect(config["buildCommand"]).toBe("npx capstan build");
     expect(config["outputDirectory"]).toBe("dist");
   });
+
+  it("Vercel handler propagates 500 status from app", async () => {
+    const handler = createVercelHandler(stubApp("internal error", 500));
+    const res = await handler(new Request("http://localhost/api/fail"));
+    expect(res.status).toBe(500);
+    expect(await res.text()).toBe("internal error");
+  });
+
+  it("Vercel handler propagates 404 status from app", async () => {
+    const handler = createVercelHandler(stubApp("not found", 404));
+    const res = await handler(new Request("http://localhost/missing"));
+    expect(res.status).toBe(404);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -140,9 +157,34 @@ describe("Fly.io adapter", () => {
     }
   });
 
-  it("createFlyAdapter returns a ServerAdapter with listen method", () => {
+  it("createFlyAdapter returns a ServerAdapter with a working listen method", async () => {
     const adapter = createFlyAdapter();
     expect(typeof adapter.listen).toBe("function");
+    // Actually invoke listen to prove it works
+    const port = randomPort();
+    const handle = await adapter.listen(stubApp("alive"), port, "127.0.0.1");
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/`);
+      expect(res.status).toBe(200);
+      expect(await res.text()).toBe("alive");
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it("Fly write replay sends 409 for DELETE requests in non-primary region", async () => {
+    process.env["FLY_REGION"] = "lax";
+    const adapter = createFlyAdapter({ primaryRegion: "iad", replayWrites: true });
+    const port = randomPort();
+
+    const handle = await adapter.listen(stubApp("nope"), port, "127.0.0.1");
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/api/data`, { method: "DELETE" });
+      expect(res.status).toBe(409);
+      expect(res.headers.get("fly-replay")).toBe("region=iad");
+    } finally {
+      await handle.close();
+    }
   });
 
   it("Fly write replay sends 409 with fly-replay header for POST in non-primary region", async () => {
@@ -225,9 +267,17 @@ describe("Fly.io adapter", () => {
 // ---------------------------------------------------------------------------
 
 describe("Cloudflare Workers adapter", () => {
-  it("createCloudflareHandler returns object with fetch method", () => {
+  it("createCloudflareHandler returns object with working fetch method", async () => {
     const handler = createCloudflareHandler(stubApp("ok"));
     expect(typeof handler.fetch).toBe("function");
+    // Actually call it to verify behavior
+    const res = await handler.fetch(
+      new Request("http://localhost/"),
+      {},
+      { waitUntil: () => {} },
+    );
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("ok");
   });
 
   it("Cloudflare handler calls app.fetch and returns response", async () => {
@@ -284,5 +334,27 @@ describe("Cloudflare Workers adapter", () => {
   it("generateWranglerConfig includes compatibility_date", () => {
     const config = generateWranglerConfig("test");
     expect(config).toContain("compatibility_date");
+  });
+
+  it("generateWranglerConfig with empty app name still produces valid TOML", () => {
+    const config = generateWranglerConfig("");
+    expect(config).toContain('name = ""');
+    expect(config).toContain('main = "dist/_worker.js"');
+  });
+
+  it("generateWranglerConfig with special characters in app name", () => {
+    const config = generateWranglerConfig("my-app-2.0");
+    expect(config).toContain('name = "my-app-2.0"');
+  });
+
+  it("Cloudflare handler propagates 500 status", async () => {
+    const handler = createCloudflareHandler(stubApp("server error", 500));
+    const res = await handler.fetch(
+      new Request("http://localhost/fail"),
+      {},
+      { waitUntil: () => {} },
+    );
+    expect(res.status).toBe(500);
+    expect(await res.text()).toBe("server error");
   });
 });

@@ -196,4 +196,20 @@ describe("serverOnly() guard", () => {
       delete (globalThis as Record<string, unknown>).window;
     }
   });
+
+  it("does not throw after window is deleted again", () => {
+    // Ensure cleanup of window doesn't leave state
+    (globalThis as Record<string, unknown>).window = {};
+    delete (globalThis as Record<string, unknown>).window;
+    expect(() => serverOnly()).not.toThrow();
+  });
+
+  it("throws when window is set to a truthy non-object", () => {
+    (globalThis as Record<string, unknown>).window = true;
+    try {
+      expect(() => serverOnly()).toThrow();
+    } finally {
+      delete (globalThis as Record<string, unknown>).window;
+    }
+  });
 });

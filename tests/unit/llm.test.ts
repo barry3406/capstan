@@ -263,6 +263,82 @@ describe("openaiProvider", () => {
     expect(chunks[0]).toEqual({ content: "", done: true });
   });
 
+  it("chat without usage in response returns undefined usage", async () => {
+    globalThis.fetch = async () =>
+      new Response(
+        JSON.stringify({
+          choices: [{ message: { content: "hi" }, finish_reason: "stop" }],
+          model: "gpt-4o",
+        }),
+        { status: 200 },
+      );
+
+    const provider = openaiProvider({ apiKey: "sk-test" });
+    const result = await provider.chat([{ role: "user", content: "hi" }]);
+    expect(result.usage).toBeUndefined();
+  });
+
+  it("chat with empty choices returns empty content", async () => {
+    globalThis.fetch = async () =>
+      new Response(
+        JSON.stringify({
+          choices: [],
+          model: "gpt-4o",
+        }),
+        { status: 200 },
+      );
+
+    const provider = openaiProvider({ apiKey: "sk-test" });
+    const result = await provider.chat([{ role: "user", content: "hi" }]);
+    expect(result.content).toBe("");
+  });
+
+  it("chat uses default model gpt-4o when none specified", async () => {
+    let capturedBody = "";
+
+    globalThis.fetch = async (_url: string | URL | Request, init?: RequestInit) => {
+      capturedBody = init?.body as string;
+      return new Response(
+        JSON.stringify({
+          choices: [{ message: { content: "ok" }, finish_reason: "stop" }],
+          model: "gpt-4o",
+        }),
+        { status: 200 },
+      );
+    };
+
+    const provider = openaiProvider({ apiKey: "sk-test" });
+    await provider.chat([{ role: "user", content: "test" }]);
+
+    const body = JSON.parse(capturedBody);
+    expect(body.model).toBe("gpt-4o");
+  });
+
+  it("stream skips malformed JSON chunks without crashing", async () => {
+    globalThis.fetch = async () =>
+      new Response(
+        sseStream([
+          'data: {"choices":[{"delta":{"content":"ok"}}]}',
+          "data: {invalid json",
+          "data: [DONE]",
+        ]),
+        { status: 200 },
+      );
+
+    const provider = openaiProvider({ apiKey: "sk-test" });
+    const chunks: Array<{ content: string; done: boolean }> = [];
+    for await (const chunk of provider.stream!(
+      [{ role: "user", content: "hi" }],
+    )) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks).toEqual([
+      { content: "ok", done: false },
+      { content: "", done: true },
+    ]);
+  });
+
   it("stream throws on non-200", async () => {
     globalThis.fetch = async () =>
       new Response("Server error", { status: 500 });
@@ -378,6 +454,84 @@ describe("anthropicProvider", () => {
     await expect(
       provider.chat([{ role: "user", content: "hi" }]),
     ).rejects.toThrow("Anthropic error 401: Authentication required");
+  });
+
+  it("chat with no content blocks returns empty string", async () => {
+    globalThis.fetch = async () =>
+      new Response(
+        JSON.stringify({
+          content: [],
+          model: "claude-sonnet-4-20250514",
+          stop_reason: "end_turn",
+        }),
+        { status: 200 },
+      );
+
+    const provider = anthropicProvider({ apiKey: "sk-ant-test" });
+    const result = await provider.chat([{ role: "user", content: "hi" }]);
+    expect(result.content).toBe("");
+  });
+
+  it("chat without usage in response returns undefined usage", async () => {
+    globalThis.fetch = async () =>
+      new Response(
+        JSON.stringify({
+          content: [{ type: "text", text: "ok" }],
+          model: "claude-sonnet-4-20250514",
+          stop_reason: "end_turn",
+        }),
+        { status: 200 },
+      );
+
+    const provider = anthropicProvider({ apiKey: "sk-ant-test" });
+    const result = await provider.chat([{ role: "user", content: "hi" }]);
+    expect(result.usage).toBeUndefined();
+  });
+
+  it("chat with custom model sends correct model in body", async () => {
+    let capturedBody = "";
+
+    globalThis.fetch = async (_url: string | URL | Request, init?: RequestInit) => {
+      capturedBody = init?.body as string;
+      return new Response(
+        JSON.stringify({
+          content: [{ type: "text", text: "ok" }],
+          model: "claude-opus-4-20250514",
+          stop_reason: "end_turn",
+        }),
+        { status: 200 },
+      );
+    };
+
+    const provider = anthropicProvider({ apiKey: "sk-ant-test", model: "claude-opus-4-20250514" });
+    await provider.chat([{ role: "user", content: "test" }]);
+
+    const body = JSON.parse(capturedBody);
+    expect(body.model).toBe("claude-opus-4-20250514");
+  });
+
+  it("chat with custom baseUrl sends to the correct URL", async () => {
+    let capturedUrl = "";
+
+    globalThis.fetch = async (url: string | URL | Request, _init?: RequestInit) => {
+      capturedUrl = typeof url === "string" ? url : url.toString();
+      return new Response(
+        JSON.stringify({
+          content: [{ type: "text", text: "ok" }],
+          model: "claude-sonnet-4-20250514",
+          stop_reason: "end_turn",
+        }),
+        { status: 200 },
+      );
+    };
+
+    const provider = anthropicProvider({
+      apiKey: "sk-ant-test",
+      baseUrl: "https://my-proxy.example.com/v1",
+    });
+    await provider.chat([{ role: "user", content: "test" }]);
+
+    expect(capturedUrl).toBe("https://my-proxy.example.com/v1/messages");
   });
 
   it("uses default max_tokens 4096", async () => {

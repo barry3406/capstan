@@ -80,6 +80,30 @@ describe("emit and subscribe", () => {
     // Should not throw
     await emitEvent(evt, "silence");
   });
+
+  it("delivers empty string payload", async () => {
+    const evt = defineEvent<string>("empty.string");
+    const received: string[] = [];
+    onEvent(evt, (s) => { received.push(s); });
+    await emitEvent(evt, "");
+    expect(received).toEqual([""]);
+  });
+
+  it("delivers null payload", async () => {
+    const evt = defineEvent<null>("null.event");
+    const received: unknown[] = [];
+    onEvent(evt, (p) => { received.push(p); });
+    await emitEvent(evt, null);
+    expect(received).toEqual([null]);
+  });
+
+  it("delivers zero as payload", async () => {
+    const evt = defineEvent<number>("zero.event");
+    const received: number[] = [];
+    onEvent(evt, (n) => { received.push(n); });
+    await emitEvent(evt, 0);
+    expect(received).toEqual([0]);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -124,6 +148,16 @@ describe("unsubscribe", () => {
     unsub(); // second call should not throw
     await emitEvent(evt, 99);
     expect(calls).toEqual([]);
+  });
+
+  it("emit after all subscribers unsubscribed does not throw", async () => {
+    const evt = defineEvent<string>("all.unsub");
+    const unsub1 = onEvent(evt, () => {});
+    const unsub2 = onEvent(evt, () => {});
+    unsub1();
+    unsub2();
+    // Should not throw even though all listeners are gone
+    await emitEvent(evt, "orphan");
   });
 });
 
@@ -194,6 +228,28 @@ describe("async handlers", () => {
     expect(results).toContain(10);
     // Both ran concurrently, so total time should be closer to 30ms than 60ms
     expect(elapsed).toBeLessThan(55);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Error handling in handlers
+// ---------------------------------------------------------------------------
+
+describe("handler error propagation", () => {
+  it("propagates sync handler errors through emitEvent", async () => {
+    const evt = defineEvent<string>("error.sync");
+    onEvent(evt, () => {
+      throw new Error("handler-boom");
+    });
+    await expect(emitEvent(evt, "trigger")).rejects.toThrow("handler-boom");
+  });
+
+  it("propagates async handler rejection through emitEvent", async () => {
+    const evt = defineEvent<string>("error.async");
+    onEvent(evt, async () => {
+      throw new Error("async-boom");
+    });
+    await expect(emitEvent(evt, "trigger")).rejects.toThrow("async-boom");
   });
 });
 

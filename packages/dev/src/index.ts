@@ -12,3 +12,5 @@ export { createVercelHandler, createVercelNodeHandler, generateVercelConfig } fr
 export { createFlyAdapter } from "./adapter-fly.js";
 export type { FlyConfig } from "./adapter-fly.js";
 export { createCloudflareHandler, generateWranglerConfig } from "./adapter-cloudflare.js";
+export { createViteConfig, createViteDevMiddleware, buildClient } from "./vite.js";
+export type { CapstanViteConfig } from "./vite.js";

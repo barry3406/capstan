@@ -45,8 +45,7 @@ describe("withSpan (OTel not installed — graceful degradation)", () => {
       await withSpan("test.span", {}, async () => {
         throw err;
       });
-      // Should not reach here
-      expect(true).toBe(false);
+      expect.unreachable("should have thrown");
     } catch (caught) {
       expect(caught).toBeInstanceOf(CustomError);
       expect((caught as CustomError).code).toBe("CUSTOM");

@@ -48,6 +48,22 @@ describe("Counter", () => {
     const out = c.serialize("ops", "");
     expect(out).toContain('ops{op="batch"} 10');
   });
+
+  it("defaults to increment by 1 when no amount specified", () => {
+    const c = new Counter();
+    c.inc();
+    c.inc();
+    const out = c.serialize("two", "");
+    expect(out).toContain("two 2");
+  });
+
+  it("handles empty labels object same as no labels", () => {
+    const c = new Counter();
+    c.inc({});
+    const out = c.serialize("empty_labels", "");
+    // Should serialize without label brackets
+    expect(out).toContain("empty_labels");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -77,6 +93,25 @@ describe("Histogram", () => {
     expect(out).toContain('latency_count{method="GET"} 2');
     expect(out).toContain('latency_sum{method="POST"} 100');
     expect(out).toContain('latency_count{method="POST"} 1');
+  });
+
+  it("records zero-value observation", () => {
+    const h = new Histogram();
+    h.observe(undefined, 0);
+    const out = h.serialize("zero_test", "");
+    expect(out).toContain("zero_test_sum 0");
+    expect(out).toContain("zero_test_count 1");
+  });
+
+  it("accumulates many observations correctly", () => {
+    const h = new Histogram();
+    for (let i = 1; i <= 100; i++) {
+      h.observe(undefined, i);
+    }
+    const out = h.serialize("sum_test", "");
+    // Sum of 1..100 = 5050
+    expect(out).toContain("sum_test_sum 5050");
+    expect(out).toContain("sum_test_count 100");
   });
 });
 

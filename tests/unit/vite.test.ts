@@ -108,6 +108,39 @@ describe("createViteDevMiddleware", () => {
     const catchResult: { middleware: unknown; close: () => Promise<void> } | null = null;
     expect(catchResult).toBeNull();
   });
+
+  it("createViteDevMiddleware returns middleware and close function on success", async () => {
+    // Vite is installed and creates a dev server even for nonexistent paths
+    // in middleware mode. Verify the return shape.
+    const result = await createViteDevMiddleware({ rootDir: "/nonexistent-path-xyz", isDev: true });
+    expect(result).not.toBeNull();
+    expect(typeof result!.close).toBe("function");
+    expect(result!.middleware).toBeDefined();
+    await result!.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// createViteConfig — edge cases
+// ---------------------------------------------------------------------------
+
+describe("createViteConfig — edge cases", () => {
+  it("handles empty rootDir", () => {
+    const cfg = createViteConfig({ rootDir: "", isDev: true });
+    expect(cfg.root).toBe("");
+    expect(cfg.mode).toBe("development");
+  });
+
+  it("handles rootDir with trailing slash", () => {
+    const cfg = createViteConfig({ rootDir: "/app/", isDev: false });
+    expect(cfg.root).toBe("/app/");
+  });
+
+  it("clientEntry with empty string uses empty string (nullish coalescing only checks null/undefined)", () => {
+    const cfg = createViteConfig({ rootDir: "/app", isDev: true, clientEntry: "" });
+    // ?? only checks null/undefined, not empty string, so empty string passes through
+    expect((cfg.build as any).rollupOptions.input).toBe("");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -142,5 +175,13 @@ describe("buildClient", () => {
       }
     };
     await expect(fn()).rejects.toThrow("Some other error");
+  });
+
+  it("actually calls buildClient and rethrows non-module-resolution errors", async () => {
+    // Vite IS installed, so buildClient will call vite.build() which will fail
+    // with a build error (not "Cannot find module"), so it should rethrow.
+    await expect(
+      buildClient({ rootDir: "/nonexistent", isDev: false }),
+    ).rejects.toThrow();
   });
 });

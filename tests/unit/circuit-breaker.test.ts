@@ -326,4 +326,48 @@ describe("CircuitBreaker — edge cases", () => {
     expect(err.message).toBe("test");
     expect(err).toBeInstanceOf(Error);
   });
+
+  it("handles synchronous throws (not just async rejections)", async () => {
+    const cb = new CircuitBreaker({ failureThreshold: 1, resetTimeout: 5000 });
+    const syncThrow = () => {
+      throw new Error("sync-boom");
+    };
+    try {
+      await cb.execute(syncThrow as unknown as () => Promise<never>);
+      expect.unreachable("should have thrown");
+    } catch (err) {
+      expect((err as Error).message).toBe("sync-boom");
+    }
+    expect(cb.getState()).toBe("open");
+  });
+
+  it("CircuitOpenError can be caught with instanceof check", async () => {
+    const cb = new CircuitBreaker({ failureThreshold: 1, resetTimeout: 5000 });
+    try { await cb.execute(failingFn()); } catch { /* expected */ }
+    try {
+      await cb.execute(succeedingFn("no"));
+    } catch (err) {
+      expect(err instanceof CircuitOpenError).toBe(true);
+      expect(err instanceof Error).toBe(true);
+    }
+  });
+
+  it("works correctly after multiple reset cycles", async () => {
+    const cb = new CircuitBreaker({ failureThreshold: 1, resetTimeout: 60000 });
+
+    // Cycle 1: open then reset
+    try { await cb.execute(failingFn()); } catch { /* expected */ }
+    expect(cb.getState()).toBe("open");
+    cb.reset();
+
+    // Cycle 2: open then reset
+    try { await cb.execute(failingFn()); } catch { /* expected */ }
+    expect(cb.getState()).toBe("open");
+    cb.reset();
+
+    // Should work fine now
+    const result = await cb.execute(succeedingFn("after-two-resets"));
+    expect(result).toBe("after-two-resets");
+    expect(cb.getState()).toBe("closed");
+  });
 });

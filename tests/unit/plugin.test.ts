@@ -428,4 +428,56 @@ describe("plugin edge cases", () => {
     expect(plugin.name).toBe("typed-plugin");
     expect(plugin.version).toBe("1.0.0");
   });
+
+  it("plugin with throwing setup propagates error", async () => {
+    const plugin = definePlugin({
+      name: "bad-plugin",
+      setup() {
+        throw new Error("setup-explosion");
+      },
+    });
+
+    await expect(
+      createCapstanApp({
+        app: { name: "test" },
+        plugins: [plugin],
+      }),
+    ).rejects.toThrow("setup-explosion");
+  });
+
+  it("plugin with async setup rejection propagates error", async () => {
+    const plugin = definePlugin({
+      name: "async-bad-plugin",
+      async setup() {
+        throw new Error("async-setup-fail");
+      },
+    });
+
+    await expect(
+      createCapstanApp({
+        app: { name: "test" },
+        plugins: [plugin],
+      }),
+    ).rejects.toThrow("async-setup-fail");
+  });
+
+  it("plugin with no version has undefined version", () => {
+    const plugin = definePlugin({
+      name: "no-version",
+      setup() {},
+    });
+    expect(plugin.version).toBeUndefined();
+  });
+
+  it("plugin with empty name still works", async () => {
+    const plugin = definePlugin({
+      name: "",
+      setup() {},
+    });
+    const capstan = await createCapstanApp({
+      app: { name: "test" },
+      plugins: [plugin],
+    });
+    expect(capstan).toBeDefined();
+  });
 });
