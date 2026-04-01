@@ -465,6 +465,60 @@ export default defineConfig({
 });
 ```
 
+## WebSocket Support
+
+Capstan provides first-class WebSocket support for real-time bidirectional communication. Use `defineWebSocket()` to declare WebSocket endpoints and `WebSocketRoom` for pub/sub messaging.
+
+### Defining a WebSocket Route
+
+```typescript
+import { defineWebSocket } from "@zauso-ai/capstan-core";
+
+export const echo = defineWebSocket("/ws/echo", {
+  onOpen(ws) {
+    console.log("Client connected");
+  },
+  onMessage(ws, message) {
+    ws.send(`echo: ${message}`);
+  },
+  onClose(ws, code, reason) {
+    console.log(`Disconnected: ${code}`);
+  },
+});
+```
+
+The handler receives lifecycle callbacks: `onOpen`, `onMessage`, `onClose`, and `onError`. All callbacks are optional.
+
+### WebSocketRoom (Pub/Sub)
+
+`WebSocketRoom` manages a set of connected clients and provides `broadcast()` for fan-out messaging:
+
+```typescript
+import { defineWebSocket, WebSocketRoom } from "@zauso-ai/capstan-core";
+
+const lobby = new WebSocketRoom();
+
+export const chat = defineWebSocket("/ws/chat", {
+  onOpen(ws) {
+    lobby.join(ws);
+    lobby.broadcast(`User joined (${lobby.size} online)`, ws);
+  },
+  onMessage(ws, msg) {
+    lobby.broadcast(String(msg), ws); // Send to everyone except sender
+  },
+  onClose(ws) {
+    lobby.leave(ws);
+    lobby.broadcast(`User left (${lobby.size} online)`);
+  },
+});
+```
+
+Rooms are independent -- a client can belong to multiple rooms, and broadcasting in one room does not affect others. The `broadcast()` method automatically skips clients whose connection is no longer open.
+
+### Node.js Adapter
+
+The dev server's Node.js adapter handles WebSocket upgrades automatically using the `ws` package (optional peer dependency). Register routes via `registerWebSocketRoute()` from `@zauso-ai/capstan-dev`.
+
 ## EU AI Act Compliance
 
 Capstan provides built-in compliance primitives for the EU AI Act. Use `defineCompliance()` to declare risk level, enable audit logging, and attach transparency metadata.

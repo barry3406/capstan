@@ -6,7 +6,7 @@ export { buildCSS, detectCSSMode, buildTailwind, startTailwindWatch } from "./cs
 export type { CSSMode } from "./css.js";
 export type { DevServerConfig, DevServerInstance } from "./types.js";
 export type { ServerAdapter } from "./adapter.js";
-export { createNodeAdapter } from "./adapter-node.js";
+export { createNodeAdapter, registerWSRoute as registerWebSocketRoute, clearWSRoutes as clearWebSocketRoutes } from "./adapter-node.js";
 export { createBunAdapter } from "./adapter-bun.js";
 export { createVercelAdapter } from "./adapter-vercel.js";
 export { createFlyAdapter } from "./adapter-fly.js";

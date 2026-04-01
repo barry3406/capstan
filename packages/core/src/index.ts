@@ -89,3 +89,10 @@ export type { CircuitBreakerConfig, CircuitState } from "./circuit-breaker.js";
 
 export { verifyCapstanApp, renderRuntimeVerifyText } from "./verify.js";
 export type { VerifyReport, VerifyDiagnostic, VerifyStep } from "./verify.js";
+
+export { defineWebSocket, WebSocketRoom } from "./websocket.js";
+export type {
+  WebSocketHandler,
+  WebSocketClient,
+  WebSocketRoute,
+} from "./websocket.js";

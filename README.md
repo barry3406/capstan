@@ -105,6 +105,7 @@ Think of it as **Next.js if it were designed from day one for a world where half
 - **Redis state backend** — `RedisStore` adapter for `KeyValueStore<T>`, plus `setAuditStore()` for Redis-backed audit logging
 - **Deployment adapters** — Vercel and Fly.io deployment skeletons included
 - **CSS pipeline** — Lightning CSS processing built-in, Tailwind v4 auto-detection, zero-config
+- **WebSocket support** — `defineWebSocket()` for real-time endpoints, `WebSocketRoom` for pub/sub broadcast
 - **Interactive CLI** — colored output, grouped help, fuzzy command matching, `@clack/prompts` interactive scaffolder with auto-install
 
 ---

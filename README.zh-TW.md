@@ -125,6 +125,7 @@
 - **EU AI Act 合規原語** — `defineCompliance()` 設定風險等級、稽核日誌與透明度聲明；自動產生 `GET /capstan/audit` 端點
 
 ### 開發與建置
+- **WebSocket 支援** — `defineWebSocket()` 即時端點，`WebSocketRoom` 發布/訂閱廣播
 - **互動式 CLI** — 彩色輸出、分組說明、模糊比對、`@clack/prompts` 互動式鷹架及自動安裝
 - **多執行環境適配器** — 同時支援 Node.js 與 Bun 執行環境
 - **Turborepo 並行建構** — 利用 Turborepo 實現多套件並行建置

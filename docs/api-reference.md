@@ -511,6 +511,79 @@ function clearAuditLog(): void
 
 ---
 
+### defineWebSocket(path, handler)
+
+Define a WebSocket route handler for real-time bidirectional communication.
+
+```typescript
+function defineWebSocket(
+  path: string,
+  handler: WebSocketHandler,
+): WebSocketRoute
+
+interface WebSocketHandler {
+  onOpen?: (ws: WebSocketClient) => void;
+  onMessage?: (ws: WebSocketClient, message: string | ArrayBuffer) => void;
+  onClose?: (ws: WebSocketClient, code: number, reason: string) => void;
+  onError?: (ws: WebSocketClient, error: Error) => void;
+}
+
+interface WebSocketClient {
+  send(data: string | ArrayBuffer): void;
+  close(code?: number, reason?: string): void;
+  readonly readyState: number;
+}
+
+interface WebSocketRoute {
+  path: string;
+  handler: WebSocketHandler;
+}
+```
+
+**Usage:**
+
+```typescript
+import { defineWebSocket } from "@zauso-ai/capstan-core";
+
+export const chat = defineWebSocket("/ws/chat", {
+  onOpen(ws) { console.log("client connected"); },
+  onMessage(ws, message) { ws.send(`echo: ${message}`); },
+  onClose(ws, code, reason) { console.log("disconnected", code); },
+});
+```
+
+---
+
+### WebSocketRoom
+
+Pub/sub room for broadcasting messages across connected clients.
+
+```typescript
+class WebSocketRoom {
+  join(client: WebSocketClient): void;
+  leave(client: WebSocketClient): void;
+  broadcast(message: string, exclude?: WebSocketClient): void;
+  get size(): number;
+  close(): void;
+}
+```
+
+**Usage:**
+
+```typescript
+import { defineWebSocket, WebSocketRoom } from "@zauso-ai/capstan-core";
+
+const lobby = new WebSocketRoom();
+
+export const ws = defineWebSocket("/ws/lobby", {
+  onOpen(ws) { lobby.join(ws); },
+  onMessage(ws, msg) { lobby.broadcast(String(msg), ws); },
+  onClose(ws) { lobby.leave(ws); },
+});
+```
+
+---
+
 ### Types
 
 ```typescript

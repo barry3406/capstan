@@ -402,6 +402,7 @@ Capstan 内置多层安全防护：
 
 ### 基础设施与工具
 
+- **WebSocket 支持** — `defineWebSocket()` 实时端点，`WebSocketRoom` 发布/订阅广播
 - **交互式 CLI** — 彩色输出、分组帮助信息、模糊匹配、`@clack/prompts` 交互式脚手架及自动安装
 - **多运行时适配器** — 同时支持 Node.js 和 Bun 运行时，自动选择最优适配器
 - **Turborepo 并行构建** — 利用 Turborepo 实现包级别的并行编译，大幅缩短构建时间

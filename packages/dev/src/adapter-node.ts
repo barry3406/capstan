@@ -4,6 +4,30 @@ import type { Socket } from "node:net";
 import { Readable } from "node:stream";
 
 import type { ServerAdapter } from "./adapter.js";
+// WebSocket types are inlined here to avoid a build-order dependency on the
+// core package's dist output. They mirror the interfaces exported from
+// `@zauso-ai/capstan-core/websocket`.
+
+/** @see WSClient in @zauso-ai/capstan-core */
+interface WSClient {
+  send(data: string | ArrayBuffer): void;
+  close(code?: number, reason?: string): void;
+  readonly readyState: number;
+}
+
+/** @see WebSocketHandler in @zauso-ai/capstan-core */
+interface WSHandler {
+  onOpen?: (ws: WSClient) => void;
+  onMessage?: (ws: WSClient, message: string | ArrayBuffer) => void;
+  onClose?: (ws: WSClient, code: number, reason: string) => void;
+  onError?: (ws: WSClient, error: Error) => void;
+}
+
+/** @see WSRoute in @zauso-ai/capstan-core */
+interface WSRoute {
+  path: string;
+  handler: WSHandler;
+}
 
 // ---------------------------------------------------------------------------
 // Live Reload (SSE)
@@ -92,6 +116,27 @@ function readBody(req: IncomingMessage, maxBytes: number = DEFAULT_MAX_BODY_SIZE
 // ---------------------------------------------------------------------------
 // Node.js adapter
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// WebSocket route registry
+// ---------------------------------------------------------------------------
+
+const wsRoutes: WSRoute[] = [];
+
+/**
+ * Register a {@link WSRoute} so the Node adapter upgrades matching
+ * requests to WebSocket connections.
+ */
+export function registerWSRoute(route: WSRoute): void {
+  wsRoutes.push(route);
+}
+
+/**
+ * Clear all registered WebSocket routes (useful in tests / hot reload).
+ */
+export function clearWSRoutes(): void {
+  wsRoutes.length = 0;
+}
 
 export interface NodeAdapterOptions {
   /** Maximum request body size in bytes (default: 1 MB). */
@@ -219,6 +264,70 @@ export function createNodeAdapter(options?: NodeAdapterOptions): ServerAdapter {
             res.writeHead(500, { "Content-Type": "application/json" });
           }
           res.end(JSON.stringify({ error: "Internal Server Error" }));
+        }
+      });
+
+      // -----------------------------------------------------------------
+      // WebSocket upgrade handling (uses `ws` package when available)
+      // -----------------------------------------------------------------
+      server.on("upgrade", async (req: IncomingMessage, socket: Socket, head: Buffer) => {
+        const url = new URL(req.url ?? "/", `http://${req.headers.host ?? `${host}:${port}`}`);
+        const matched = wsRoutes.find((r) => r.path === url.pathname);
+        if (!matched) {
+          socket.destroy();
+          return;
+        }
+
+        try {
+          // Dynamically import `ws` so it remains an optional dependency.
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const wsMod: any = await (import("ws" as string) as Promise<any>);
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const wss = new wsMod.WebSocketServer({ noServer: true }) as any;
+
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          wss.handleUpgrade(req, socket, head, (rawWs: any) => {
+            const client: WSClient = {
+              send: (data: string | ArrayBuffer) => {
+                if (rawWs.readyState === 1) { // WebSocket.OPEN
+                  rawWs.send(data);
+                }
+              },
+              close: (code?: number, reason?: string) => {
+                rawWs.close(code, reason);
+              },
+              get readyState() {
+                return rawWs.readyState as number;
+              },
+            };
+
+            if (matched.handler.onOpen) matched.handler.onOpen(client);
+
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            rawWs.on("message", (data: any) => {
+              if (matched.handler.onMessage) {
+                const msg = typeof data === "string" ? data : data.toString();
+                matched.handler.onMessage(client, msg);
+              }
+            });
+
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            rawWs.on("close", (code: any, reason: any) => {
+              if (matched.handler.onClose) {
+                matched.handler.onClose(client, code, reason.toString());
+              }
+            });
+
+            rawWs.on("error", (err: Error) => {
+              if (matched.handler.onError) {
+                matched.handler.onError(client, err);
+              }
+            });
+          });
+        } catch {
+          // `ws` package not installed — reject the upgrade.
+          socket.write("HTTP/1.1 501 Not Implemented\r\n\r\n");
+          socket.destroy();
         }
       });
 

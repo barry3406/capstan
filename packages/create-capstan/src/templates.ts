@@ -958,6 +958,24 @@ export default definePlugin({
 });
 \`\`\`
 
+## WebSocket Support
+
+Use \`defineWebSocket()\` for real-time bidirectional communication and \`WebSocketRoom\` for pub/sub messaging:
+
+\`\`\`typescript
+import { defineWebSocket, WebSocketRoom } from "@zauso-ai/capstan-core";
+
+const room = new WebSocketRoom();
+
+export const chat = defineWebSocket("/ws/chat", {
+  onOpen(ws)    { room.join(ws); },
+  onMessage(ws, msg) { room.broadcast(String(msg), ws); },
+  onClose(ws)   { room.leave(ws); },
+});
+\`\`\`
+
+The handler accepts \`onOpen\`, \`onMessage\`, \`onClose\`, and \`onError\` callbacks. \`WebSocketRoom.broadcast()\` sends to all open clients except an optional excluded client. The Node.js adapter handles upgrades automatically via the \`ws\` package (optional peer dependency).
+
 ## Pluggable State Stores (KeyValueStore)
 
 Capstan uses a \`KeyValueStore<T>\` interface for approvals, rate limiting, DPoP replay detection, and audit logging. By default, an in-memory \`MemoryStore\` is used. For production, use the built-in \`RedisStore\` or implement a custom adapter:
