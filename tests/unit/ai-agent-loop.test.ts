@@ -422,6 +422,347 @@ describe("runAgentLoop", () => {
     expect(result.toolCalls).toHaveLength(1);
     expect(result.toolCalls[0]!.result).toBe("success");
   });
+
+  // --- JSON parsing edge cases ---
+
+  it("valid JSON object without 'tool' field → treated as final response", async () => {
+    const llm = mockLLM([JSON.stringify({ result: "done" })]);
+
+    const result = await runAgentLoop(llm, { goal: "test" }, []);
+
+    expect(result.status).toBe("completed");
+    expect(result.result).toBe(JSON.stringify({ result: "done" }));
+    expect(result.toolCalls).toHaveLength(0);
+  });
+
+  it("valid JSON array → treated as final response", async () => {
+    const llm = mockLLM([JSON.stringify([1, 2, 3])]);
+
+    const result = await runAgentLoop(llm, { goal: "test" }, []);
+
+    expect(result.status).toBe("completed");
+    expect(result.result).toBe(JSON.stringify([1, 2, 3]));
+    expect(result.toolCalls).toHaveLength(0);
+  });
+
+  it("valid JSON string → treated as final response", async () => {
+    const llm = mockLLM([JSON.stringify("hello")]);
+
+    const result = await runAgentLoop(llm, { goal: "test" }, []);
+
+    expect(result.status).toBe("completed");
+    expect(result.result).toBe('"hello"');
+    expect(result.toolCalls).toHaveLength(0);
+  });
+
+  it("tool call then plain text → 2 iterations, 1 tool call", async () => {
+    const llm = mockLLM([
+      JSON.stringify({ tool: "echo", arguments: { msg: "hi" } }),
+      "All done.",
+    ]);
+
+    const echoTool: AgentTool = {
+      name: "echo",
+      description: "Echoes input",
+      async execute(args) {
+        return args.msg;
+      },
+    };
+
+    const result = await runAgentLoop(llm, { goal: "Echo hi" }, [echoTool]);
+
+    expect(result.status).toBe("completed");
+    expect(result.iterations).toBe(2);
+    expect(result.toolCalls).toHaveLength(1);
+    expect(result.toolCalls[0]!.tool).toBe("echo");
+    expect(result.result).toBe("All done.");
+  });
+
+  // --- Tool execution edge cases ---
+
+  it("tool throws a non-Error object (string) → uses String(err)", async () => {
+    const llm = mockLLM([
+      JSON.stringify({ tool: "bad", arguments: {} }),
+      "Handled the error.",
+    ]);
+
+    const badTool: AgentTool = {
+      name: "bad",
+      description: "Throws a string",
+      async execute() {
+        throw "string error";
+      },
+    };
+
+    const result = await runAgentLoop(llm, { goal: "test" }, [badTool]);
+
+    expect(result.status).toBe("completed");
+    expect(result.toolCalls).toHaveLength(1);
+    expect(result.toolCalls[0]!.result).toEqual({ error: "string error" });
+  });
+
+  it("tool throws undefined → handles gracefully", async () => {
+    const llm = mockLLM([
+      JSON.stringify({ tool: "throws-undef", arguments: {} }),
+      "Handled.",
+    ]);
+
+    const throwsUndefTool: AgentTool = {
+      name: "throws-undef",
+      description: "Throws undefined",
+      async execute() {
+        throw undefined;
+      },
+    };
+
+    const result = await runAgentLoop(llm, { goal: "test" }, [throwsUndefTool]);
+
+    expect(result.status).toBe("completed");
+    expect(result.toolCalls).toHaveLength(1);
+    expect(result.toolCalls[0]!.result).toEqual({ error: "undefined" });
+  });
+
+  // --- Max iterations ---
+
+  it("maxIterations=1 → only one LLM call then max_iterations", async () => {
+    const llm = mockLLM([
+      JSON.stringify({ tool: "noop", arguments: {} }),
+    ]);
+
+    const noopTool: AgentTool = {
+      name: "noop",
+      description: "Does nothing",
+      async execute() {
+        return "ok";
+      },
+    };
+
+    const result = await runAgentLoop(
+      llm,
+      { goal: "test", maxIterations: 1 },
+      [noopTool],
+    );
+
+    expect(result.status).toBe("max_iterations");
+    expect(result.iterations).toBe(1);
+    expect(result.toolCalls).toHaveLength(1);
+  });
+
+  it("LLM keeps returning tool calls until maxIterations → correct count", async () => {
+    const maxIter = 5;
+    const llm = mockLLM(
+      Array.from({ length: maxIter + 5 }, () =>
+        JSON.stringify({ tool: "counter", arguments: {} }),
+      ),
+    );
+
+    let count = 0;
+    const counterTool: AgentTool = {
+      name: "counter",
+      description: "Counts invocations",
+      async execute() {
+        return ++count;
+      },
+    };
+
+    const result = await runAgentLoop(
+      llm,
+      { goal: "count", maxIterations: maxIter },
+      [counterTool],
+    );
+
+    expect(result.status).toBe("max_iterations");
+    expect(result.iterations).toBe(maxIter);
+    expect(result.toolCalls).toHaveLength(maxIter);
+    expect(count).toBe(maxIter);
+  });
+
+  // --- beforeToolCall ---
+
+  it("beforeToolCall blocks with no reason → uses default reason", async () => {
+    const llm = mockLLM([
+      JSON.stringify({ tool: "action", arguments: {} }),
+    ]);
+
+    const actionTool: AgentTool = {
+      name: "action",
+      description: "An action",
+      async execute() {
+        return "ok";
+      },
+    };
+
+    const result = await runAgentLoop(llm, { goal: "test" }, [actionTool], {
+      beforeToolCall: async () => ({ allowed: false }),
+    });
+
+    expect(result.status).toBe("approval_required");
+    expect(result.pendingApproval!.reason).toBe("Tool call blocked by policy");
+  });
+
+  // --- onMemoryEvent ---
+
+  it("onMemoryEvent receives exact formatted string with tool name, args, and result", async () => {
+    const llm = mockLLM([
+      JSON.stringify({ tool: "lookup", arguments: { key: "x", value: 42 } }),
+      "Done.",
+    ]);
+
+    const memoryEvents: string[] = [];
+
+    const lookupTool: AgentTool = {
+      name: "lookup",
+      description: "Looks up",
+      async execute() {
+        return { found: true };
+      },
+    };
+
+    await runAgentLoop(llm, { goal: "test" }, [lookupTool], {
+      onMemoryEvent: async (content) => {
+        memoryEvents.push(content);
+      },
+    });
+
+    expect(memoryEvents).toHaveLength(1);
+    expect(memoryEvents[0]).toBe(
+      `Tool lookup called with ${JSON.stringify({ key: "x", value: 42 })} => ${JSON.stringify({ found: true })}`,
+    );
+  });
+
+  // --- callStack ---
+
+  it("tool in callStack is excluded from available tools in system prompt", async () => {
+    const capturedMessages: LLMMessage[][] = [];
+
+    const llm: LLMProvider = {
+      name: "mock",
+      async chat(messages: LLMMessage[]): Promise<LLMResponse> {
+        capturedMessages.push([...messages]);
+        return { content: "done", model: "mock-1" };
+      },
+    };
+
+    const excludedTool: AgentTool = {
+      name: "excluded-tool",
+      description: "Should be excluded",
+      async execute() {
+        return "should not run";
+      },
+    };
+
+    const includedTool: AgentTool = {
+      name: "included-tool",
+      description: "Should be included",
+      async execute() {
+        return "ok";
+      },
+    };
+
+    await runAgentLoop(
+      llm,
+      { goal: "test" },
+      [excludedTool, includedTool],
+      { callStack: new Set(["excluded-tool"]) },
+    );
+
+    // The system prompt should NOT mention excluded-tool
+    const systemMsg = capturedMessages[0]![0]!.content;
+    expect(systemMsg).not.toContain("excluded-tool");
+    expect(systemMsg).toContain("included-tool");
+  });
+
+  it("multiple tools in callStack → all excluded", async () => {
+    const capturedMessages: LLMMessage[][] = [];
+
+    const llm: LLMProvider = {
+      name: "mock",
+      async chat(messages: LLMMessage[]): Promise<LLMResponse> {
+        capturedMessages.push([...messages]);
+        return { content: "done", model: "mock-1" };
+      },
+    };
+
+    const tool1: AgentTool = { name: "blocked-1", description: "Blocked 1", async execute() { return "no"; } };
+    const tool2: AgentTool = { name: "blocked-2", description: "Blocked 2", async execute() { return "no"; } };
+    const tool3: AgentTool = { name: "allowed", description: "Allowed", async execute() { return "yes"; } };
+
+    await runAgentLoop(
+      llm,
+      { goal: "test" },
+      [tool1, tool2, tool3],
+      { callStack: new Set(["blocked-1", "blocked-2"]) },
+    );
+
+    const systemMsg = capturedMessages[0]![0]!.content;
+    expect(systemMsg).not.toContain("blocked-1");
+    expect(systemMsg).not.toContain("blocked-2");
+    expect(systemMsg).toContain("allowed");
+  });
+
+  // --- Empty/null edge cases ---
+
+  it("empty goal string → still works", async () => {
+    const llm = mockLLM(["response to empty goal"]);
+
+    const result = await runAgentLoop(llm, { goal: "" }, []);
+
+    expect(result.status).toBe("completed");
+    expect(result.result).toBe("response to empty goal");
+  });
+
+  it("config.systemPrompt overrides default system prompt completely", async () => {
+    const capturedMessages: LLMMessage[][] = [];
+
+    const llm: LLMProvider = {
+      name: "mock",
+      async chat(messages: LLMMessage[]): Promise<LLMResponse> {
+        capturedMessages.push([...messages]);
+        return { content: "done", model: "mock-1" };
+      },
+    };
+
+    await runAgentLoop(
+      llm,
+      { goal: "test", systemPrompt: "Custom system prompt only." },
+      [],
+    );
+
+    const systemMsg = capturedMessages[0]![0]!;
+    expect(systemMsg.role).toBe("system");
+    expect(systemMsg.content).toBe("Custom system prompt only.");
+    // Should NOT contain the default "You are a helpful agent" text
+    expect(systemMsg.content).not.toContain("You are a helpful agent");
+  });
+
+  it("tools array with duplicate names → first match wins", async () => {
+    const llm = mockLLM([
+      JSON.stringify({ tool: "dup", arguments: {} }),
+      "Done.",
+    ]);
+
+    const tool1: AgentTool = {
+      name: "dup",
+      description: "First dup",
+      async execute() {
+        return "first";
+      },
+    };
+
+    const tool2: AgentTool = {
+      name: "dup",
+      description: "Second dup",
+      async execute() {
+        return "second";
+      },
+    };
+
+    const result = await runAgentLoop(llm, { goal: "test" }, [tool1, tool2]);
+
+    expect(result.toolCalls).toHaveLength(1);
+    // find() returns the first match
+    expect(result.toolCalls[0]!.result).toBe("first");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -512,6 +853,96 @@ describe("createAI", () => {
     const result = await ai.agent.run({ goal: "Compute something" });
     expect(result.status).toBe("completed");
     expect(result.result).toBe("The final answer is 7.");
+  });
+
+  it("with no memory config → memory still works (BuiltinMemoryBackend created)", async () => {
+    const llm = mockLLM([]);
+    // No memory config at all
+    const ai = createAI({ llm });
+
+    const id = await ai.remember("test memory");
+    expect(typeof id).toBe("string");
+
+    const results = await ai.recall("test memory");
+    expect(results.length).toBe(1);
+    expect(results[0]!.content).toBe("test memory");
+  });
+
+  it("with no defaultScope → uses { type: 'default', id: 'default' }", async () => {
+    const llm = mockLLM([]);
+    const ai = createAI({ llm }); // no defaultScope
+
+    await ai.remember("default scoped entry keyword");
+    const results = await ai.recall("default scoped entry keyword");
+    expect(results.length).toBe(1);
+    // The entry should be stored under the default scope
+    expect(results[0]!.scope).toEqual({ type: "default", id: "default" });
+  });
+
+  it("memory.about creates independent accessor (store in about scope, recall from default returns nothing)", async () => {
+    const llm = mockLLM([]);
+    const ai = createAI({ llm });
+
+    const projectMemory = ai.memory.about("project", "p-999");
+    await projectMemory.remember("project specific data keyword");
+
+    // Recall from default scope should NOT find it
+    const defaultResults = await ai.recall("project specific data keyword");
+    expect(defaultResults).toEqual([]);
+
+    // Recall from the about scope should find it
+    const projectResults = await projectMemory.recall("project specific data keyword");
+    expect(projectResults.length).toBe(1);
+    expect(projectResults[0]!.content).toBe("project specific data keyword");
+  });
+
+  it("memory.forget delegates to backend", async () => {
+    const llm = mockLLM([]);
+    const ai = createAI({ llm });
+
+    const id = await ai.remember("to be forgotten keyword");
+    // Verify it exists
+    const before = await ai.recall("to be forgotten keyword");
+    expect(before.length).toBe(1);
+
+    // Forget via memory.forget
+    const removed = await ai.memory.forget(id);
+    expect(removed).toBe(true);
+
+    // Verify it's gone
+    const after = await ai.recall("to be forgotten keyword");
+    expect(after).toEqual([]);
+
+    // Second forget returns false
+    const removedAgain = await ai.memory.forget(id);
+    expect(removedAgain).toBe(false);
+  });
+
+  it("agent.run passes tools from config", async () => {
+    const llm = mockLLM([
+      JSON.stringify({ tool: "multiply", arguments: { a: 3, b: 4 } }),
+      "The result is 12.",
+    ]);
+    const ai = createAI({ llm });
+
+    const multiplyTool: AgentTool = {
+      name: "multiply",
+      description: "Multiplies two numbers",
+      async execute(args) {
+        return (args.a as number) * (args.b as number);
+      },
+    };
+
+    const result = await ai.agent.run({
+      goal: "Multiply 3 and 4",
+      tools: [multiplyTool],
+    });
+
+    expect(result.status).toBe("completed");
+    expect(result.toolCalls).toHaveLength(1);
+    expect(result.toolCalls[0]!.tool).toBe("multiply");
+    expect(result.toolCalls[0]!.result).toBe(12);
+    expect(result.result).toBe("The result is 12.");
   });
 });
 

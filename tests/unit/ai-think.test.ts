@@ -174,6 +174,61 @@ describe("think", () => {
 
     await expect(think(llm, "test", { schema })).rejects.toThrow();
   });
+
+  it("with schema — LLM returns unparseable JSON → throws SyntaxError", async () => {
+    const llm = mockProvider({ content: "{broken json!!!" });
+    const schema = { parse: (d: unknown) => d };
+
+    await expect(think(llm, "test", { schema })).rejects.toThrow(SyntaxError);
+  });
+
+  it("with schema — valid JSON but schema.parse throws → propagates schema error", async () => {
+    const llm = mockProvider({ content: '{"value":1}' });
+    const schema = {
+      parse(_data: unknown): never {
+        throw new TypeError("Schema validation failed: expected string");
+      },
+    };
+
+    await expect(think(llm, "test", { schema })).rejects.toThrow("Schema validation failed: expected string");
+  });
+
+  it("with temperature=0 passes temperature:0 to LLM (boundary for !== undefined)", async () => {
+    let capturedOpts: any = null;
+    const llm = mockProvider({
+      onChat: (_msgs, opts) => { capturedOpts = opts; },
+    });
+
+    await think(llm, "test", { temperature: 0 });
+
+    expect(capturedOpts?.temperature).toBe(0);
+  });
+
+  it("with maxTokens=0 does NOT pass maxTokens (falsy check)", async () => {
+    let capturedOpts: any = null;
+    const llm = mockProvider({
+      onChat: (_msgs, opts) => { capturedOpts = opts; },
+    });
+
+    await think(llm, "test", { maxTokens: 0 });
+
+    // Line 11 uses `if (opts?.maxTokens)` which is falsy for 0
+    expect(capturedOpts?.maxTokens).toBeUndefined();
+  });
+
+  it("with empty prompt string still calls LLM with empty user message", async () => {
+    let capturedMessages: LLMMessage[] = [];
+    const llm = mockProvider({
+      content: "response to empty",
+      onChat: (msgs) => { capturedMessages = msgs; },
+    });
+
+    const result = await think(llm, "");
+
+    expect(capturedMessages).toHaveLength(1);
+    expect(capturedMessages[0]).toEqual({ role: "user", content: "" });
+    expect(result).toBe("response to empty");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -224,6 +279,22 @@ describe("generate", () => {
     expect(capturedOpts?.temperature).toBe(0.9);
     expect(capturedOpts?.maxTokens).toBe(1000);
   });
+
+  it("with no opts works with defaults", async () => {
+    const llm = mockProvider({ content: "default result" });
+
+    const result = await generate(llm, "test");
+
+    expect(result).toBe("default result");
+  });
+
+  it("when LLM returns empty string returns empty string", async () => {
+    const llm = mockProvider({ content: "" });
+
+    const result = await generate(llm, "test");
+
+    expect(result).toBe("");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -258,6 +329,63 @@ describe("thinkStream", () => {
     };
 
     await expect(consume()).rejects.toThrow("LLM provider does not support streaming");
+  });
+
+  it("yields nothing when all chunks have empty content", async () => {
+    const llm = mockProvider({
+      streamChunks: [
+        { content: "", done: false },
+        { content: "", done: false },
+        { content: "", done: true },
+      ],
+    });
+
+    const chunks: string[] = [];
+    for await (const chunk of thinkStream(llm, "hello")) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks).toEqual([]);
+  });
+
+  it("yields content from chunk that has content AND done=true then stops", async () => {
+    const llm = mockProvider({
+      streamChunks: [
+        { content: "first", done: false },
+        { content: "last-with-done", done: true },
+        { content: "should-not-appear", done: false },
+      ],
+    });
+
+    const chunks: string[] = [];
+    for await (const chunk of thinkStream(llm, "hello")) {
+      chunks.push(chunk);
+    }
+
+    // "last-with-done" has content (yielded) AND done=true (stops iteration)
+    // "should-not-appear" is never reached because done=true causes return
+    expect(chunks).toEqual(["first", "last-with-done"]);
+  });
+
+  it("propagates LLM stream errors", async () => {
+    const llm: LLMProvider = {
+      name: "mock",
+      async chat() { return { content: "", model: "mock" }; },
+      async *stream() {
+        yield { content: "ok", done: false };
+        throw new Error("Stream connection lost");
+      },
+    };
+
+    const chunks: string[] = [];
+    const consume = async () => {
+      for await (const chunk of thinkStream(llm, "test")) {
+        chunks.push(chunk);
+      }
+    };
+
+    await expect(consume()).rejects.toThrow("Stream connection lost");
+    expect(chunks).toEqual(["ok"]);
   });
 
   it("with systemPrompt sends correct messages", async () => {
