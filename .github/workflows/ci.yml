@@ -50,7 +50,7 @@ jobs:
           name: dist
           path: packages/
       - name: Run tests (Bun)
-        run: bun test tests/unit/ tests/integration/
+        run: npm run test:new
 
   test-node:
     needs: build
@@ -70,5 +70,5 @@ jobs:
         with:
           name: dist
           path: packages/
-      - name: Run tests (Bun on Node build)
+      - name: Run tests (Node.js)
         run: npm run test:new

@@ -562,13 +562,14 @@ describe("createDatabase", () => {
     db.close();
   });
 
-  it("creates a file-based SQLite database via bun:sqlite", async () => {
-    const dir = await makeTempDir();
-    const dbPath = join(dir, "test.db");
+  it("creates a file-based SQLite database via bun:sqlite", () => {
     const { Database } = require("bun:sqlite");
+    const dbPath = join(tmpdir(), `capstan-test-${Date.now()}.db`);
     const db = new Database(dbPath);
     expect(db).toBeDefined();
     db.close();
+    // Cleanup
+    try { require("node:fs").unlinkSync(dbPath); } catch {}
   });
 
   it("throws helpful error when pg is not installed for postgres provider", async () => {

@@ -20,13 +20,9 @@ import type {
 // Helpers
 // ---------------------------------------------------------------------------
 
+// Each describe block that needs a temp dir creates its own.
+// This avoids global afterEach blocking unrelated tests (e.g. DocumentShell).
 let tempDir: string;
-beforeEach(async () => {
-  tempDir = await mkdtemp(join(tmpdir(), "css-test-"));
-});
-afterEach(async () => {
-  await rm(tempDir, { recursive: true, force: true });
-});
 
 function makeLoaderArgs(overrides?: Partial<LoaderArgs>): LoaderArgs {
   return {
@@ -74,6 +70,8 @@ function makeRenderOptions(
 // ---------------------------------------------------------------------------
 
 describe("detectCSSMode", () => {
+  beforeEach(async () => { tempDir = await mkdtemp(join(tmpdir(), "css-detect-")); });
+  afterEach(async () => { await rm(tempDir, { recursive: true, force: true }).catch(() => {}); });
   it('returns "none" when app/styles/main.css does not exist', async () => {
     // tempDir has no app/styles/ at all
     const mode = await detectCSSMode(tempDir);
@@ -163,6 +161,8 @@ describe("detectCSSMode", () => {
 // ---------------------------------------------------------------------------
 
 describe("buildCSS", () => {
+  beforeEach(async () => { tempDir = await mkdtemp(join(tmpdir(), "css-build-")); });
+  afterEach(async () => { await rm(tempDir, { recursive: true, force: true }).catch(() => {}); });
   it("produces an output file from input CSS", async () => {
     const inFile = join(tempDir, "input.css");
     const outFile = join(tempDir, "dist", "output.css");
@@ -292,6 +292,8 @@ describe("buildCSS", () => {
 // ---------------------------------------------------------------------------
 
 describe("watchStyles", () => {
+  beforeEach(async () => { tempDir = await mkdtemp(join(tmpdir(), "css-watch-")); });
+  afterEach(async () => { await rm(tempDir, { recursive: true, force: true }).catch(() => {}); });
   it("returns an object with a close() method", async () => {
     await mkdir(join(tempDir, "styles"), { recursive: true });
     await writeFile(join(tempDir, "styles", "main.css"), "body {}");
