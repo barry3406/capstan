@@ -28,7 +28,7 @@
   },
   "peerDependencies": {
     "lightningcss": "^1.0.0",
-    "vite": "^6.0.0"
+    "vite": ">=6.0.0"
   },
   "peerDependenciesMeta": {
     "lightningcss": {
