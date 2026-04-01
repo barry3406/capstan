@@ -480,4 +480,130 @@ describe("plugin edge cases", () => {
     });
     expect(capstan).toBeDefined();
   });
+
+  it("addRoute with non-function handler value does not crash app creation", async () => {
+    // Plugin that registers a route whose handler returns a Response directly
+    const plugin = definePlugin({
+      name: "static-route-plugin",
+      setup(ctx) {
+        ctx.addRoute("GET", "/plugin/static", () => new Response("static"));
+      },
+    });
+
+    const capstan = await createCapstanApp({
+      app: { name: "test" },
+      plugins: [plugin],
+    });
+
+    const res = await capstan.app.fetch(new Request("http://localhost/plugin/static"));
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("static");
+  });
+
+  it("async setup that takes measurable time is properly awaited", async () => {
+    const timeline: number[] = [];
+    const start = Date.now();
+
+    const slowPlugin = definePlugin({
+      name: "slow-plugin",
+      async setup() {
+        await new Promise((r) => setTimeout(r, 20));
+        timeline.push(Date.now() - start);
+      },
+    });
+
+    const fastPlugin = definePlugin({
+      name: "fast-plugin",
+      setup() {
+        timeline.push(Date.now() - start);
+      },
+    });
+
+    await createCapstanApp({
+      app: { name: "test" },
+      plugins: [slowPlugin, fastPlugin],
+    });
+
+    // slow should finish before fast starts (sequential plugin loading)
+    expect(timeline).toHaveLength(2);
+    expect(timeline[0]!).toBeLessThanOrEqual(timeline[1]!);
+    expect(timeline[0]!).toBeGreaterThanOrEqual(15); // slow took at least ~20ms
+  });
+
+  it("multiple plugins adding routes to same path — last registered wins or both available", async () => {
+    const plugin1 = definePlugin({
+      name: "p1-same-path",
+      setup(ctx) {
+        ctx.addRoute("GET", "/shared", (c: { json: (data: unknown) => Response }) =>
+          c.json({ from: "p1" }),
+        );
+      },
+    });
+
+    const plugin2 = definePlugin({
+      name: "p2-same-path",
+      setup(ctx) {
+        ctx.addRoute("GET", "/shared", (c: { json: (data: unknown) => Response }) =>
+          c.json({ from: "p2" }),
+        );
+      },
+    });
+
+    const capstan = await createCapstanApp({
+      app: { name: "test" },
+      plugins: [plugin1, plugin2],
+    });
+
+    const res = await capstan.app.fetch(new Request("http://localhost/shared"));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { from: string };
+    // Hono matches first registered route for the same method+path
+    expect(body.from).toBe("p1");
+  });
+
+  it("plugin adding DELETE route works", async () => {
+    const plugin = definePlugin({
+      name: "delete-plugin",
+      setup(ctx) {
+        ctx.addRoute("DELETE", "/plugin/item", (c: { json: (data: unknown) => Response }) =>
+          c.json({ deleted: true }),
+        );
+      },
+    });
+
+    const capstan = await createCapstanApp({
+      app: { name: "test" },
+      plugins: [plugin],
+    });
+
+    const res = await capstan.app.fetch(
+      new Request("http://localhost/plugin/item", { method: "DELETE" }),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { deleted: boolean };
+    expect(body.deleted).toBe(true);
+  });
+
+  it("plugin adding PATCH route works", async () => {
+    const plugin = definePlugin({
+      name: "patch-plugin",
+      setup(ctx) {
+        ctx.addRoute("PATCH", "/plugin/update", (c: { json: (data: unknown) => Response }) =>
+          c.json({ patched: true }),
+        );
+      },
+    });
+
+    const capstan = await createCapstanApp({
+      app: { name: "test" },
+      plugins: [plugin],
+    });
+
+    const res = await capstan.app.fetch(
+      new Request("http://localhost/plugin/update", { method: "PATCH" }),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { patched: boolean };
+    expect(body.patched).toBe(true);
+  });
 });

@@ -310,4 +310,72 @@ describe("edge cases", () => {
     // The implementation treats 0 as falsy, so no slicing occurs
     expect(log).toHaveLength(1);
   });
+
+  it("audit entry with all optional fields undefined", async () => {
+    const entry: AuditEntry = {
+      timestamp: "2025-03-01T00:00:00.000Z",
+      requestId: "opt-undef",
+      method: "GET",
+      path: "/api/health",
+      riskLevel: "minimal",
+      auth: { type: "none" },
+      input: undefined as unknown as null,
+      output: undefined as unknown as null,
+      durationMs: 1,
+      transparency: undefined,
+    };
+    await recordAuditEntry(entry);
+    const log = await getAuditLog();
+    expect(log).toHaveLength(1);
+    expect(log[0]!.requestId).toBe("opt-undef");
+    expect(log[0]!.transparency).toBeUndefined();
+  });
+
+  it("getAuditLog since future date returns empty", async () => {
+    await recordAuditEntry(makeEntry({ timestamp: "2025-06-01T00:00:00.000Z" }));
+    const log = await getAuditLog({ since: "2099-01-01T00:00:00.000Z" });
+    expect(log).toHaveLength(0);
+  });
+
+  it("setAuditStore then clearAuditLog clears custom store", async () => {
+    const customStore = new MemoryStore<AuditEntry>();
+    setAuditStore(customStore);
+
+    await recordAuditEntry(makeEntry({ requestId: "custom-1" }));
+    await recordAuditEntry(makeEntry({ requestId: "custom-2" }));
+
+    let log = await getAuditLog();
+    expect(log).toHaveLength(2);
+
+    await clearAuditLog();
+    log = await getAuditLog();
+    expect(log).toHaveLength(0);
+
+    // Custom store should also be empty
+    const keys = await customStore.keys();
+    expect(keys).toHaveLength(0);
+  });
+
+  it("record entries with same timestamp are all preserved", async () => {
+    const ts = "2025-01-01T12:00:00.000Z";
+    await recordAuditEntry(makeEntry({ timestamp: ts, requestId: "dup-1" }));
+    await recordAuditEntry(makeEntry({ timestamp: ts, requestId: "dup-2" }));
+    await recordAuditEntry(makeEntry({ timestamp: ts, requestId: "dup-3" }));
+    const log = await getAuditLog();
+    expect(log).toHaveLength(3);
+  });
+
+  it("audit entry with every risk level", async () => {
+    const levels: RiskLevel[] = ["high", "limited", "minimal", "unacceptable"];
+    for (const level of levels) {
+      await recordAuditEntry(makeEntry({ riskLevel: level, requestId: `risk-${level}` }));
+    }
+    const log = await getAuditLog();
+    expect(log).toHaveLength(4);
+    const riskLevels = log.map((e) => e.riskLevel);
+    expect(riskLevels).toContain("high");
+    expect(riskLevels).toContain("limited");
+    expect(riskLevels).toContain("minimal");
+    expect(riskLevels).toContain("unacceptable");
+  });
 });

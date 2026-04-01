@@ -11,54 +11,64 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
+  build:
     runs-on: ubuntu-latest
-    name: Build & Test
-
+    name: Build
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js 22
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: "22"
           cache: "npm"
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.x"
+      - run: npm install
+      - name: Build all packages
+        run: npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: packages/*/dist/
 
-      - name: Install dependencies
-        run: npm install
+  test-bun:
+    needs: build
+    runs-on: ubuntu-latest
+    name: Test (Bun)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.x"
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: packages/
+      - name: Run tests (Bun)
+        run: bun test tests/unit/ tests/integration/
 
-      - name: Build core
-        run: cd packages/core && npx tsc -p tsconfig.json --listEmittedFiles
-
-      - name: Build router
-        run: npm run build --workspace packages/router
-
-      - name: Build db
-        run: npm run build --workspace packages/db
-
-      - name: Build auth
-        run: npm run build --workspace packages/auth
-
-      - name: Build agent
-        run: npm run build --workspace packages/agent
-
-      - name: Build react
-        run: npm run build --workspace packages/react
-
-      - name: Build dev
-        run: npm run build --workspace packages/dev
-
-      - name: Build cli
-        run: npm run build --workspace packages/cli
-
-      - name: Build create-capstan-app
-        run: npm run build --workspace packages/create-capstan
-
-      - name: Run tests
+  test-node:
+    needs: build
+    runs-on: ubuntu-latest
+    name: Test (Node.js 22)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.x"
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: packages/
+      - name: Run tests (Bun on Node build)
         run: npm run test:new

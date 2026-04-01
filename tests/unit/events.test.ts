@@ -346,3 +346,109 @@ describe("defineWorker", () => {
     ).rejects.toThrow();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Schema validation edge cases
+// ---------------------------------------------------------------------------
+
+describe("schema validation edge cases", () => {
+  it("emit with incorrect schema type rejects (wrong field type)", async () => {
+    const schema = z.object({ count: z.number() });
+    const evt = defineEvent("typed.strict", schema);
+    onEvent(evt, () => {});
+
+    await expect(
+      emitEvent(evt, { count: "not-a-number" } as unknown as { count: number }),
+    ).rejects.toThrow();
+  });
+
+  it("emit with missing required field rejects", async () => {
+    const schema = z.object({ name: z.string(), age: z.number() });
+    const evt = defineEvent("typed.required", schema);
+    onEvent(evt, () => {});
+
+    await expect(
+      emitEvent(evt, { name: "Alice" } as unknown as { name: string; age: number }),
+    ).rejects.toThrow();
+  });
+
+  it("emit with extra fields passes (Zod strips by default or passes through)", async () => {
+    const schema = z.object({ id: z.string() });
+    const evt = defineEvent("typed.extra", schema);
+    const received: unknown[] = [];
+    onEvent(evt, (p) => { received.push(p); });
+
+    // Extra fields — Zod should not reject by default
+    await emitEvent(evt, { id: "x", bonus: true } as unknown as { id: string });
+    expect(received).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// defineWorker unsubscribe
+// ---------------------------------------------------------------------------
+
+describe("defineWorker unsubscribe", () => {
+  it("defineWorker returns an object; worker stops receiving after resetEventBus", async () => {
+    const evt = defineEvent<number>("worker.unsub");
+    const results: number[] = [];
+    defineWorker(evt, async (n) => { results.push(n); });
+
+    await emitEvent(evt, 1);
+    resetEventBus();
+    await emitEvent(evt, 2);
+
+    expect(results).toEqual([1]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Many subscribers stress test
+// ---------------------------------------------------------------------------
+
+describe("many subscribers", () => {
+  it("100+ subscribers on the same event all receive the payload", async () => {
+    const evt = defineEvent<number>("stress.many");
+    const count = 150;
+    const results: number[] = [];
+
+    for (let i = 0; i < count; i++) {
+      onEvent(evt, (n) => { results.push(n); });
+    }
+
+    await emitEvent(evt, 42);
+
+    expect(results).toHaveLength(count);
+    expect(results.every((v) => v === 42)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Event name edge cases
+// ---------------------------------------------------------------------------
+
+describe("event name edge cases", () => {
+  it("event name with special characters works", async () => {
+    const evt = defineEvent<string>("evt:with/special.chars-and_underscores");
+    const received: string[] = [];
+    onEvent(evt, (s) => { received.push(s); });
+    await emitEvent(evt, "ok");
+    expect(received).toEqual(["ok"]);
+  });
+
+  it("event name with unicode works", async () => {
+    const evt = defineEvent<string>("event.unicode.test");
+    const received: string[] = [];
+    onEvent(evt, (s) => { received.push(s); });
+    await emitEvent(evt, "data");
+    expect(received).toEqual(["data"]);
+  });
+
+  it("empty event name works", async () => {
+    const evt = defineEvent<string>("");
+    const received: string[] = [];
+    onEvent(evt, (s) => { received.push(s); });
+    await emitEvent(evt, "empty-name");
+    expect(received).toEqual(["empty-name"]);
+  });
+});

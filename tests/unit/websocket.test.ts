@@ -203,4 +203,102 @@ describe("WebSocketRoom", () => {
 
     expect(shared.sent).toEqual(["from-a", "from-b"]);
   });
+
+  it("broadcast with multiple closed clients skips all of them", () => {
+    const room = new WebSocketRoom();
+    const c1 = mockClient({ readyState: 3 });
+    const c2 = mockClient({ readyState: 0 }); // CONNECTING
+    const c3 = mockClient({ readyState: 2 }); // CLOSING
+    const open = mockClient();
+    room.join(c1);
+    room.join(c2);
+    room.join(c3);
+    room.join(open);
+
+    room.broadcast("test");
+
+    expect(c1.sent).toEqual([]);
+    expect(c2.sent).toEqual([]);
+    expect(c3.sent).toEqual([]);
+    expect(open.sent).toEqual(["test"]);
+  });
+
+  it("leave a client not in room is a no-op (no error)", () => {
+    const room = new WebSocketRoom();
+    const outsider = mockClient();
+    // Should not throw
+    room.leave(outsider);
+    expect(room.size).toBe(0);
+  });
+
+  it("broadcast with ArrayBuffer data", () => {
+    const room = new WebSocketRoom();
+    const c = mockClient();
+    room.join(c);
+
+    const buf = new ArrayBuffer(4);
+    room.broadcast(buf);
+
+    expect(c.sent).toHaveLength(1);
+    expect(c.sent[0]).toBe(buf);
+  });
+
+  it("close on already-empty room does not throw", () => {
+    const room = new WebSocketRoom();
+    room.close();
+    expect(room.size).toBe(0);
+  });
+
+  it("join after close works (room is reusable)", () => {
+    const room = new WebSocketRoom();
+    const c1 = mockClient();
+    room.join(c1);
+    room.close();
+    expect(room.size).toBe(0);
+
+    const c2 = mockClient();
+    room.join(c2);
+    expect(room.size).toBe(1);
+    room.broadcast("after-close");
+    expect(c2.sent).toEqual(["after-close"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// defineWebSocket additional edge cases
+// ---------------------------------------------------------------------------
+
+describe("defineWebSocket edge cases", () => {
+  it("handler with no callbacks (empty object) is valid", () => {
+    const route = defineWebSocket("/ws/empty", {});
+    expect(route.path).toBe("/ws/empty");
+    expect(route.handler.onOpen).toBeUndefined();
+    expect(route.handler.onMessage).toBeUndefined();
+    expect(route.handler.onClose).toBeUndefined();
+    expect(route.handler.onError).toBeUndefined();
+  });
+
+  it("handler with all callbacks defined", () => {
+    const calls: string[] = [];
+    const handler: WebSocketHandler = {
+      onOpen: () => { calls.push("open"); },
+      onMessage: () => { calls.push("message"); },
+      onClose: () => { calls.push("close"); },
+      onError: () => { calls.push("error"); },
+    };
+    const route = defineWebSocket("/ws/all", handler);
+
+    // Invoke each callback to verify they work
+    route.handler.onOpen!(mockClient());
+    route.handler.onMessage!(mockClient(), "data");
+    route.handler.onClose!(mockClient());
+    route.handler.onError!(mockClient(), new Error("test"));
+
+    expect(calls).toEqual(["open", "message", "close", "error"]);
+  });
+
+  it("path with trailing slash is preserved", () => {
+    const route = defineWebSocket("/ws/trailing/", { onOpen: () => {} });
+    expect(route.path).toBe("/ws/trailing/");
+  });
 });
