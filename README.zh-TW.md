@@ -98,8 +98,11 @@
 - **React Server Components 基礎** — RSC 基礎架構支援，`ClientOnly`、`serverOnly()` 守衛
 - **Image & Font 最佳化** — 響應式 srcset、預載入、延遲載入、模糊佔位符、`defineFont()` 支援 CSS 變數
 - **Metadata API** — `defineMetadata()` 用於 SEO、OpenGraph、Twitter Cards，支援標題範本和 `mergeMetadata()`
-- **錯誤邊界與重設** — `<ErrorBoundary fallback={...}>` 支援重試，`<NotFound>` 404 元件
+- **錯誤邊界與重設** — `<ErrorBoundary fallback={...}>` 支援重試，`<NotFound>` 404 元件；`_error.tsx` 檔案慣例實現目錄級錯誤邊界
+- **載入 UI** — `_loading.tsx` 檔案慣例用於 Suspense 回退，按目錄作用域（同佈局）
 - **快取層與 ISR** — `cacheSet`/`cacheGet` 支援 TTL + 標籤，`cached()` stale-while-revalidate 裝飾器，`cacheInvalidateTag()` 批次失效
+- **回應快取與渲染策略** — 頁面級 `renderMode: "isr"` 搭配回應快取，背景重驗證，交叉失效
+- **客戶端 SPA 路由** — `<Link>` 元件支援預取（`hover` / `viewport` / `none`），`useNavigate()`、`useRouterState()` Hook，基於 history 的捲動恢復，零設定 View Transitions
 - **CSS 管線** — 內建 Lightning CSS 處理，Tailwind v4 自動偵測，零設定
 
 ### Agent 協定
@@ -470,7 +473,7 @@ Capstan 包含 10 個執行時期套件：
 | `@zauso-ai/capstan-auth` | JWT 工作階段、Agent 用 API 金鑰驗證、OAuth 提供者（Google、GitHub）、權限檢查（`"human"` / `"agent"` / `"anonymous"`） |
 | `@zauso-ai/capstan-agent` | `CapabilityRegistry`、MCP 伺服器（型別化參數）、A2A 轉接器（SSE）、OpenAPI 產生器 |
 | `@zauso-ai/capstan-ai` | 獨立 AI 工具包：`createAI`、`think`/`generate`（結構化 + 串流）、`remember`/`recall` 記憶系統（混合搜尋）、`memory.about()` 實體級記憶、`agent.run()` 自編排迴圈 |
-| `@zauso-ai/capstan-react` | 搭配 loader 的 SSR、版面配置、`Outlet`、hydration、`Image`、`defineFont`、`defineMetadata`、`ErrorBoundary` |
+| `@zauso-ai/capstan-react` | SSR + loader、版面配置、`Outlet`、選擇性水合、ISR 渲染策略、`<Link>` SPA 路由（預取 + View Transitions）、`Image`、`defineFont`、`defineMetadata`、`ErrorBoundary` |
 | `@zauso-ai/capstan-dev` | 開發伺服器，含檔案監看、即時路由重新載入、MCP/A2A 端點 |
 | `@zauso-ai/capstan-cli` | CLI：`dev`、`build`、`start`、`verify`、`add`、`mcp`、`db:*` |
 | `create-capstan-app` | 專案鷹架工具（`--template blank`、`--template tickets`） |

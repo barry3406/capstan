@@ -112,8 +112,11 @@ Think of it as **Next.js if it were designed from day one for a world where half
 - **AI toolkit (`@zauso-ai/capstan-ai`)** — standalone package: `createAI()` factory, `think<T>(prompt, { schema })` for structured reasoning, `generate(prompt)` for text, streaming variants, `remember()`/`recall()` memory with hybrid search, `memory.about(type, id)` scoped memory, `agent.run()` self-orchestrating loop with tool use
 - **Image & Font optimization** — responsive srcset, preload, lazy loading, blur-up placeholder, `defineFont()` with CSS variable support
 - **Metadata API** — `defineMetadata()` for SEO, OpenGraph, Twitter Cards with title templates and `mergeMetadata()`
-- **Error boundaries with reset** — `<ErrorBoundary fallback={...}>` with retry, `<NotFound>` 404 component
+- **Error boundaries with reset** — `<ErrorBoundary fallback={...}>` with retry, `<NotFound>` 404 component; `_error.tsx` file convention for directory-scoped error boundaries
+- **Loading UI** — `_loading.tsx` file convention for Suspense fallbacks, scoped by directory like layouts
 - **Cache layer with ISR** — `cacheSet`/`cacheGet` with TTL + tags, `cached()` stale-while-revalidate decorator, `cacheInvalidateTag()` bulk invalidation
+- **Response cache & Render strategies** — page-level `renderMode: "isr"` with response cache, stale-while-revalidate, background revalidation, cross-invalidation
+- **Client-side SPA router** — `<Link>` component with prefetch (`hover` / `viewport` / `none`), `useNavigate()`, `useRouterState()`, history-based scroll restoration, zero-config View Transitions
 - **Interactive CLI** — colored output, grouped help, fuzzy command matching, `@clack/prompts` interactive scaffolder with auto-install
 
 ---
@@ -474,7 +477,7 @@ Capstan ships 10 runtime packages:
 | `@zauso-ai/capstan-auth` | JWT sessions, API key auth, OAuth providers (Google, GitHub), DPoP (RFC 9449), SPIFFE/mTLS, token-aware rate limiting (`"human"` / `"agent"` / `"anonymous"`) |
 | `@zauso-ai/capstan-agent` | `CapabilityRegistry`, MCP server (stdio + Streamable HTTP), MCP client, A2A adapter (SSE), OpenAPI generator, LangChain integration |
 | `@zauso-ai/capstan-ai` | Standalone AI toolkit: `createAI`, `think`/`generate` (structured + streaming), `remember`/`recall` memory with hybrid search, `memory.about()` scoped memory, `agent.run()` self-orchestrating loop |
-| `@zauso-ai/capstan-react` | SSR with loaders, layouts, `Outlet`, selective hydration (`full` / `visible` / `none`), RSC foundations, `Image`, `defineFont`, `defineMetadata`, `ErrorBoundary` |
+| `@zauso-ai/capstan-react` | SSR with loaders, layouts, `Outlet`, selective hydration, ISR render strategies, `<Link>` SPA router with prefetch & View Transitions, `Image`, `defineFont`, `defineMetadata`, `ErrorBoundary` |
 | `@zauso-ai/capstan-dev` | Dev server with file watching, hot route reload, MCP/A2A endpoints |
 | `@zauso-ai/capstan-cli` | CLI: `dev`, `build`, `start`, `verify`, `add`, `mcp`, `db:*` |
 | `create-capstan-app` | Project scaffolder (`--template blank`, `--template tickets`) |

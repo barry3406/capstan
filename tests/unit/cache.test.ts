@@ -288,6 +288,65 @@ describe("setCacheStore", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Tag index consistency (verifies cross-tag cleanup on overwrite/invalidate)
+// ---------------------------------------------------------------------------
+
+describe("tag index consistency", () => {
+  test("overwrite with different tags: old tag no longer references key", async () => {
+    await cacheSet("k", "v1", { tags: ["old-tag"] });
+    await cacheSet("k", "v2", { tags: ["new-tag"] });
+
+    // Invalidating the old tag should NOT remove the key
+    await cacheInvalidateTag("old-tag");
+    expect(await cacheGet("k")).toBeDefined();
+
+    // Invalidating the new tag SHOULD remove it
+    await cacheInvalidateTag("new-tag");
+    expect(await cacheGet("k")).toBeUndefined();
+  });
+
+  test("multi-tag entry: invalidating one tag cleans all tag references", async () => {
+    await cacheSet("multi", "val", { tags: ["alpha", "beta"] });
+    await cacheInvalidateTag("alpha");
+
+    // Entry is gone
+    expect(await cacheGet("multi")).toBeUndefined();
+    // "beta" should no longer reference the deleted key
+    expect(await cacheInvalidateTag("beta")).toBe(0);
+  });
+
+  test("cacheInvalidate cleans tag index", async () => {
+    await cacheSet("k", "v", { tags: ["t1", "t2"] });
+    await cacheInvalidate("k");
+
+    // Both tags should be cleaned
+    expect(await cacheInvalidateTag("t1")).toBe(0);
+    expect(await cacheInvalidateTag("t2")).toBe(0);
+  });
+
+  test("setCacheStore resets tag index", async () => {
+    await cacheSet("k", "v", { tags: ["t"] });
+    setCacheStore(new MemoryStore());
+
+    // Tag from previous store should not be reachable
+    expect(await cacheInvalidateTag("t")).toBe(0);
+  });
+
+  test("overwrite with overlapping tags: shared tag still works", async () => {
+    await cacheSet("k", "v1", { tags: ["keep", "old"] });
+    await cacheSet("k", "v2", { tags: ["keep", "new"] });
+
+    // "old" should not reference "k" anymore
+    expect(await cacheInvalidateTag("old")).toBe(0);
+    expect(await cacheGet("k")).toBeDefined();
+
+    // "keep" (shared) should still work
+    await cacheInvalidateTag("keep");
+    expect(await cacheGet("k")).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Edge cases
 // ---------------------------------------------------------------------------
 

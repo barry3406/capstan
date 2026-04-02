@@ -1,4 +1,4 @@
-export type RouteType = "page" | "api" | "layout" | "middleware";
+export type RouteType = "page" | "api" | "layout" | "middleware" | "loading" | "error";
 
 export interface RouteEntry {
   /** Absolute file path */
@@ -21,6 +21,10 @@ export interface RouteEntry {
   hydration?: "full" | "visible" | "none";
   /** Whether the page component uses client-side interactivity */
   componentType?: "server" | "client";
+  /** Nearest _loading.tsx file path (for Suspense boundary) */
+  loading?: string;
+  /** Nearest _error.tsx file path (for ErrorBoundary) */
+  error?: string;
 }
 
 export interface RouteManifest {

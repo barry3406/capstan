@@ -121,19 +121,52 @@ export async function loadApiHandlers(filePath: string): Promise<{
 export async function loadPageModule(filePath: string): Promise<{
   default?: unknown;
   loader?: unknown;
+  renderMode?: unknown;
+  revalidate?: unknown;
+  cacheTags?: unknown;
+  metadata?: unknown;
+  generateStaticParams?: unknown;
 }> {
   const mod = await loadRouteModule(filePath);
 
   const result: {
     default?: unknown;
     loader?: unknown;
+    renderMode?: unknown;
+    revalidate?: unknown;
+    cacheTags?: unknown;
+    metadata?: unknown;
+    generateStaticParams?: unknown;
   } = {};
 
   if (mod["default"] !== undefined) result.default = mod["default"];
   if (mod["loader"] !== undefined) result.loader = mod["loader"];
+  if (mod["renderMode"] !== undefined) result.renderMode = mod["renderMode"];
+  if (mod["revalidate"] !== undefined) result.revalidate = mod["revalidate"];
+  if (mod["cacheTags"] !== undefined) result.cacheTags = mod["cacheTags"];
+  if (mod["metadata"] !== undefined) result.metadata = mod["metadata"];
+  if (mod["generateStaticParams"] !== undefined) result.generateStaticParams = mod["generateStaticParams"];
 
   return result;
 }
+
+/**
+ * Import a boundary file (_loading.tsx or _error.tsx) and extract its
+ * default component export. Both file types have identical loading
+ * semantics — the only difference is which React wrapper they end up in.
+ */
+async function loadBoundaryModule(filePath: string): Promise<{
+  default?: unknown;
+}> {
+  const mod = await loadRouteModule(filePath);
+  return mod["default"] !== undefined ? { default: mod["default"] } : {};
+}
+
+/** Import a _loading.tsx file and extract the default component. */
+export const loadLoadingModule = loadBoundaryModule;
+
+/** Import a _error.tsx file and extract the default component. */
+export const loadErrorModule = loadBoundaryModule;
 
 /**
  * Import a layout file and extract the default component.

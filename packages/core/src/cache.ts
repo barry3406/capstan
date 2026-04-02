@@ -1,5 +1,6 @@
 import type { KeyValueStore } from "./store.js";
 import { MemoryStore } from "./store.js";
+import { responseCacheInvalidateTag } from "./response-cache.js";
 
 export interface CacheOptions {
   /** Time-to-live in seconds */
@@ -20,10 +21,21 @@ export interface CacheEntry<T> {
 }
 
 let cacheStore: KeyValueStore<CacheEntry<unknown>> = new MemoryStore();
-const tagIndex = new Map<string, Set<string>>(); // tag -> cache keys
+let tagIndex = new Map<string, Set<string>>(); // tag -> cache keys
 
 export function setCacheStore(store: KeyValueStore<CacheEntry<unknown>>): void {
   cacheStore = store;
+  tagIndex = new Map();
+}
+
+/**
+ * Remove a key from every tag set in the index. Cleans up empty tag sets.
+ */
+function removeKeyFromTagIndex(key: string): void {
+  for (const [tag, keys] of tagIndex) {
+    keys.delete(key);
+    if (keys.size === 0) tagIndex.delete(tag);
+  }
 }
 
 /**
@@ -43,7 +55,8 @@ export async function cacheSet<T>(key: string, data: T, opts?: CacheOptions): Pr
   const ttlMs = opts?.ttl ? opts.ttl * 1000 : undefined;
   await cacheStore.set(key, entry as CacheEntry<unknown>, ttlMs);
 
-  // Update tag index
+  // Clean old tag references AFTER the write succeeds, then register new ones.
+  removeKeyFromTagIndex(key);
   for (const tag of entry.tags) {
     if (!tagIndex.has(tag)) tagIndex.set(tag, new Set());
     tagIndex.get(tag)!.add(key);
@@ -79,13 +92,24 @@ export async function cacheGet<T>(key: string): Promise<{ data: T; stale: boolea
  */
 export async function cacheInvalidateTag(tag: string): Promise<number> {
   const keys = tagIndex.get(tag);
-  if (!keys) return 0;
-
   let count = 0;
-  for (const key of keys) {
-    if (await cacheStore.delete(key)) count++;
+  if (keys) {
+    for (const key of keys) {
+      if (await cacheStore.delete(key)) {
+        // Clean this key from ALL tag sets (not just the current tag) so
+        // the index stays consistent — mirrors response-cache behavior.
+        removeKeyFromTagIndex(key);
+        count++;
+      }
+    }
+    // Ensure the tag set itself is removed (may already be empty after
+    // removeKeyFromTagIndex, but be explicit).
+    tagIndex.delete(tag);
   }
-  tagIndex.delete(tag);
+
+  // Also invalidate the response cache so page-level ISR entries
+  // tagged with the same key are evicted in a single call.
+  count += await responseCacheInvalidateTag(tag);
   return count;
 }
 
@@ -93,7 +117,11 @@ export async function cacheInvalidateTag(tag: string): Promise<number> {
  * Invalidate a specific cache entry.
  */
 export async function cacheInvalidate(key: string): Promise<boolean> {
-  return cacheStore.delete(key);
+  const deleted = await cacheStore.delete(key);
+  if (deleted) {
+    removeKeyFromTagIndex(key);
+  }
+  return deleted;
 }
 
 /**

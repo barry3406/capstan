@@ -162,6 +162,8 @@ Capstan uses a file-based routing convention in the `app/routes/` directory. The
 | `*.page.tsx`        | Page        | React page component (SSR)          |
 | `_layout.tsx`       | Layout      | Wraps nested routes via `<Outlet>` |
 | `_middleware.ts`    | Middleware  | Runs before handlers in scope       |
+| `_loading.tsx`      | Loading     | Suspense fallback for pages in scope |
+| `_error.tsx`        | Error       | Error boundary for pages in scope    |
 
 ### URL Mapping Examples
 
@@ -219,6 +221,43 @@ app/routes/
   api/
     _middleware.ts         # Runs for all /api/* routes (after root middleware)
 ```
+
+### Loading & Error Conventions
+
+`_loading.tsx` and `_error.tsx` are file conventions that work like layouts — they apply to all pages in their directory and subdirectories, with the nearest file winning.
+
+```
+app/routes/
+  _loading.tsx               # Default loading UI for all pages
+  _error.tsx                 # Default error UI for all pages
+  index.page.tsx
+  dashboard/
+    _loading.tsx             # Dashboard-specific loading (overrides parent)
+    index.page.tsx           # Uses dashboard _loading.tsx + root _error.tsx
+```
+
+`_loading.tsx` exports a default component used as a `<Suspense>` fallback during streaming SSR:
+
+```typescript
+export default function Loading() {
+  return <div className="spinner">Loading...</div>;
+}
+```
+
+`_error.tsx` exports a default component used as an `<ErrorBoundary>` fallback when the page throws:
+
+```typescript
+export default function ErrorFallback({ error, reset }: { error: Error; reset: () => void }) {
+  return (
+    <div>
+      <p>Something went wrong: {error.message}</p>
+      <button onClick={reset}>Try again</button>
+    </div>
+  );
+}
+```
+
+The scanner automatically detects these files and wraps the nearest page in `<Suspense>` / `<ErrorBoundary>` during rendering.
 
 ## defineMiddleware()
 
@@ -954,4 +993,219 @@ By default, the cache uses an in-memory store. For production, swap to a custom 
 import { setCacheStore } from "@zauso-ai/capstan-core";
 
 setCacheStore(new RedisStore(redis, "cache:"));
+```
+
+### Response Cache
+
+The response cache is a separate cache layer for full-page HTML output, used by ISR render strategies. It stores `ResponseCacheEntry` objects containing the rendered HTML, headers, status code, and cache tags.
+
+```typescript
+import {
+  responseCacheGet,
+  responseCacheSet,
+  responseCacheInvalidateTag,
+  responseCacheInvalidate,
+  responseCacheClear,
+  setResponseCacheStore,
+} from "@zauso-ai/capstan-core";
+
+// Retrieve cached response
+const result = await responseCacheGet("/blog");
+if (result) {
+  const { entry, stale } = result;
+  // entry.html, entry.statusCode, entry.headers, entry.tags
+  // stale = true means the entry is past its revalidateAfter time
+}
+
+// Store a page response
+await responseCacheSet("/blog", {
+  html: renderedHtml,
+  headers: { "content-type": "text/html" },
+  statusCode: 200,
+  createdAt: Date.now(),
+  revalidateAfter: Date.now() + 60_000,
+  tags: ["blog"],
+});
+
+// Invalidate all entries tagged "blog"
+const count = await responseCacheInvalidateTag("blog");
+
+// For production, swap the backend store:
+setResponseCacheStore(new RedisStore(redis, "resp:"));
+```
+
+**Cross-invalidation:** Calling `cacheInvalidateTag("blog")` from the data cache also evicts response cache entries tagged `"blog"`. This means when you invalidate data, the corresponding ISR pages are automatically re-rendered on the next request.
+
+## Render Strategies
+
+Capstan supports multiple rendering strategies controlled by page-level exports.
+
+### RenderMode
+
+Export `renderMode` from a page to control how it's rendered:
+
+| Mode | Behavior |
+|------|----------|
+| `"ssr"` | Server-render on every request (default) |
+| `"isr"` | Incremental Static Regeneration — serve cached HTML, revalidate in background |
+| `"ssg"` | Static Site Generation (build-time, Phase 3) |
+| `"streaming"` | Streaming SSR with `renderToReadableStream` |
+
+### ISR Example
+
+```typescript
+// app/routes/blog/index.page.tsx
+import { useLoaderData } from "@zauso-ai/capstan-react";
+import type { LoaderArgs } from "@zauso-ai/capstan-react";
+
+export const renderMode = "isr";
+export const revalidate = 60;          // seconds
+export const cacheTags = ["blog"];
+
+export async function loader({ fetch }: LoaderArgs) {
+  return { posts: await fetch.get("/api/posts") };
+}
+
+export default function BlogPage() {
+  const { posts } = useLoaderData<{ posts: Array<{ id: string; title: string }> }>();
+  return (
+    <ul>
+      {posts.map(p => <li key={p.id}>{p.title}</li>)}
+    </ul>
+  );
+}
+```
+
+ISR behavior:
+- **Cache HIT (fresh):** Returns cached HTML immediately
+- **Cache HIT (stale):** Returns stale HTML immediately, revalidates in background
+- **Cache MISS:** Renders the page, stores in response cache, returns HTML
+
+### Strategy Classes
+
+The framework provides three strategy implementations:
+
+- **`SSRStrategy`** — Renders on every request via `renderPage()` or `renderPageStream()`. This is the default.
+- **`ISRStrategy`** — Checks response cache first, uses stale-while-revalidate pattern. Falls back to `SSRStrategy` on cache miss.
+- **`SSGStrategy`** — Static Site Generation stub (Phase 3, currently falls back to SSR).
+
+Use `createStrategy(mode)` to instantiate:
+
+```typescript
+import { createStrategy } from "@zauso-ai/capstan-react";
+
+const strategy = createStrategy("isr");
+const result = await strategy.render({ options, url, revalidate: 60, cacheTags: ["blog"] });
+// result.cacheStatus: "HIT" | "MISS" | "STALE"
+```
+
+## Client-Side Navigation
+
+Capstan includes a built-in client-side SPA router that enables instant page transitions without full-page reloads, while maintaining progressive enhancement — everything works without JavaScript.
+
+### `<Link>` Component
+
+```typescript
+import { Link } from "@zauso-ai/capstan-react/client";
+
+<Link href="/about">About</Link>
+<Link href="/dashboard" prefetch="viewport">Dashboard</Link>
+<Link href="/settings" prefetch="none" replace>Settings</Link>
+```
+
+`<Link>` renders a standard `<a>` tag. When the client router is active, clicks are intercepted for SPA navigation. Props:
+
+| Prop | Type | Default | Description |
+|------|------|---------|-------------|
+| `href` | `string` | — | Target URL (required) |
+| `prefetch` | `"none" \| "hover" \| "viewport"` | `"hover"` | When to prefetch |
+| `replace` | `boolean` | `false` | Replace history entry |
+| `scroll` | `boolean` | `true` | Scroll to top after nav |
+
+All standard HTML anchor attributes are also supported.
+
+### Programmatic Navigation
+
+```typescript
+import { useNavigate, useRouterState } from "@zauso-ai/capstan-react/client";
+
+function MyComponent() {
+  const navigate = useNavigate();
+  const { url, status, error } = useRouterState();
+
+  return (
+    <div>
+      {status === "loading" && <Spinner />}
+      <button onClick={() => navigate("/dashboard", { replace: true })}>
+        Go to Dashboard
+      </button>
+    </div>
+  );
+}
+```
+
+- `useRouterState()` returns `{ url, status, error? }` where `status` is `"idle" | "loading" | "error"`
+- `useNavigate()` returns a function `(url, opts?) => void`
+
+### NavigationProvider
+
+Wrap your app root with `<NavigationProvider>` to bridge the imperative router with React:
+
+```typescript
+import { NavigationProvider } from "@zauso-ai/capstan-react/client";
+
+function App({ children }) {
+  return (
+    <NavigationProvider initialLoaderData={loaderData} initialParams={params}>
+      {children}
+    </NavigationProvider>
+  );
+}
+```
+
+It listens for `capstan:navigate` CustomEvents dispatched by the router and updates the `PageContext` so `useLoaderData()` and `useParams()` reflect the new route.
+
+### How Navigation Works
+
+When the client router navigates to a new page:
+
+1. **Request:** Fetch the URL with `X-Capstan-Nav: 1` header — the server returns a JSON `NavigationPayload` instead of full HTML
+2. **Server components:** The outlet HTML is morphed in-place using idiomorph, preserving layout stability via `data-capstan-layout` / `data-capstan-outlet` attributes
+3. **Client components:** A `capstan:navigate` CustomEvent triggers React reconciliation through `NavigationProvider`
+4. **History:** `pushState` (or `replaceState`) updates the URL
+5. **Scroll:** Scrolls to top (configurable) or restores previous position on back/forward
+
+### Prefetching
+
+The `PrefetchManager` handles two strategies:
+
+- **`"hover"`** (default) — Prefetches after 80ms hover on a `<Link>`. Cancelled if the pointer leaves.
+- **`"viewport"`** — Prefetches when a `<Link>` enters the viewport (IntersectionObserver with 200px margin).
+
+Prefetched payloads are stored in a `NavigationCache` (LRU, max 50 entries, 5-minute TTL).
+
+### Scroll Restoration
+
+Scroll positions are saved to `sessionStorage` keyed by a unique scroll key stored in `history.state`. Back/forward navigation automatically restores the previous scroll position.
+
+### View Transitions
+
+DOM mutations during navigation are wrapped in `document.startViewTransition()` when the browser supports it. This gives smooth cross-fade animations between pages with zero configuration. On unsupported browsers, navigation works normally without animation.
+
+### Bootstrap
+
+Call `bootstrapClient()` once at page load to initialize the router:
+
+```typescript
+import { bootstrapClient } from "@zauso-ai/capstan-react/client";
+
+bootstrapClient();
+```
+
+This reads the `window.__CAPSTAN_MANIFEST__` (injected by the server), creates the router singleton, and sets up global `<a>` click delegation. All internal links automatically get SPA navigation.
+
+To opt out for a specific link, add `data-capstan-external`:
+
+```html
+<a href="/legacy-page" data-capstan-external>Full page reload</a>
 ```

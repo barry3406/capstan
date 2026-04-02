@@ -612,7 +612,7 @@ function cacheGet<T>(key: string): Promise<T | undefined>
 
 ### cacheInvalidateTag(tag)
 
-Invalidate all cache entries associated with a tag.
+Invalidate all cache entries associated with a tag. Also invalidates response cache entries with the same tag (cross-invalidation).
 
 ```typescript
 function cacheInvalidateTag(tag: string): Promise<void>
@@ -639,6 +639,87 @@ Replace the default in-memory cache store with a custom `KeyValueStore`.
 
 ```typescript
 function setCacheStore(store: KeyValueStore<CacheEntry<unknown>>): void
+```
+
+---
+
+### ResponseCacheEntry
+
+Full-page response cache entry used by ISR render strategies.
+
+```typescript
+interface ResponseCacheEntry {
+  html: string;
+  headers: Record<string, string>;
+  statusCode: number;
+  createdAt: number;
+  revalidateAfter: number | null;
+  tags: string[];
+}
+```
+
+---
+
+### responseCacheGet(key)
+
+Retrieve a cached page response. Returns the entry and a `stale` boolean indicating whether it's past `revalidateAfter`.
+
+```typescript
+function responseCacheGet(key: string): Promise<{ entry: ResponseCacheEntry; stale: boolean } | undefined>
+```
+
+---
+
+### responseCacheSet(key, entry, opts?)
+
+Store a page response in the cache.
+
+```typescript
+function responseCacheSet(
+  key: string,
+  entry: ResponseCacheEntry,
+  opts?: { ttlMs?: number },
+): Promise<void>
+```
+
+---
+
+### responseCacheInvalidateTag(tag)
+
+Delete all response cache entries associated with a tag. Returns the number of invalidated entries.
+
+```typescript
+function responseCacheInvalidateTag(tag: string): Promise<number>
+```
+
+---
+
+### responseCacheInvalidate(key)
+
+Delete a single response cache entry by key.
+
+```typescript
+function responseCacheInvalidate(key: string): Promise<boolean>
+```
+
+---
+
+### responseCacheClear()
+
+Clear all entries in the response cache.
+
+```typescript
+function responseCacheClear(): Promise<void>
+```
+
+---
+
+### setResponseCacheStore(store)
+
+Replace the default in-memory response cache store with a custom `KeyValueStore`.
+
+```typescript
+function setResponseCacheStore(store: KeyValueStore<ResponseCacheEntry>): void
 ```
 
 ---
@@ -2136,6 +2217,310 @@ Pre-built 404 component for use with error boundaries or route handlers.
 
 ```typescript
 function NotFound(): ReactElement
+```
+
+---
+
+### RenderMode
+
+Type for controlling page rendering strategy.
+
+```typescript
+type RenderMode = "ssr" | "ssg" | "isr" | "streaming"
+```
+
+---
+
+### RenderStrategy
+
+Interface for pluggable render strategies.
+
+```typescript
+interface RenderStrategy {
+  render(ctx: RenderStrategyContext): Promise<RenderStrategyResult>
+}
+
+interface RenderStrategyContext {
+  options: RenderPageOptions;
+  url: string;
+  revalidate?: number;
+  cacheTags?: string[];
+}
+
+interface RenderStrategyResult extends RenderResult {
+  cacheStatus?: "HIT" | "MISS" | "STALE";
+}
+```
+
+---
+
+### SSRStrategy
+
+Renders the page on every request. This is the default strategy.
+
+```typescript
+class SSRStrategy implements RenderStrategy {}
+```
+
+---
+
+### ISRStrategy
+
+Incremental Static Regeneration. Checks the response cache first, serves stale content while revalidating in the background.
+
+```typescript
+class ISRStrategy implements RenderStrategy {}
+```
+
+---
+
+### SSGStrategy
+
+Static Site Generation stub (falls back to SSR). Full implementation in Phase 3.
+
+```typescript
+class SSGStrategy implements RenderStrategy {}
+```
+
+---
+
+### createStrategy(mode)
+
+Factory function to create a render strategy instance.
+
+```typescript
+function createStrategy(mode: RenderMode): RenderStrategy
+```
+
+---
+
+### renderPartialStream(options)
+
+Render a page and its inner layouts without the document shell. Used for client-side navigation payloads.
+
+```typescript
+function renderPartialStream(options: RenderPageOptions): Promise<RenderStreamResult>
+```
+
+---
+
+## @zauso-ai/capstan-react/client
+
+Client-side SPA router, navigation primitives, and prefetching. Import from the `/client` subpath.
+
+```typescript
+import { Link, useNavigate, useRouterState, bootstrapClient } from "@zauso-ai/capstan-react/client";
+```
+
+---
+
+### Link
+
+Navigation link component that renders a standard `<a>` tag with SPA interception.
+
+```typescript
+function Link(props: LinkProps): ReactElement
+
+interface LinkProps extends AnchorHTMLAttributes<HTMLAnchorElement> {
+  href: string;
+  prefetch?: PrefetchStrategy;  // default: "hover"
+  replace?: boolean;
+  scroll?: boolean;             // default: true
+}
+```
+
+**Usage:**
+
+```typescript
+<Link href="/about">About</Link>
+<Link href="/posts" prefetch="viewport">Posts</Link>
+<Link href="/settings" replace>Settings</Link>
+```
+
+---
+
+### CapstanRouter
+
+Core router class that manages client-side navigation state.
+
+```typescript
+class CapstanRouter {
+  readonly state: RouterState;
+  navigate(url: string, opts?: NavigateOptions): Promise<void>;
+  prefetch(url: string): Promise<void>;
+  subscribe(listener: (state: RouterState) => void): () => void;
+  destroy(): void;
+}
+```
+
+Access via singleton:
+
+```typescript
+import { getRouter, initRouter } from "@zauso-ai/capstan-react/client";
+
+const router = getRouter();           // null if not initialized
+const router = initRouter(manifest);  // create singleton
+```
+
+---
+
+### NavigationProvider
+
+React context provider that bridges the imperative router with React components.
+
+```typescript
+function NavigationProvider(props: {
+  children: ReactNode;
+  initialLoaderData?: unknown;
+  initialParams?: Record<string, string>;
+  initialAuth?: { isAuthenticated: boolean; type: string };
+}): ReactElement
+```
+
+Listens for `capstan:navigate` CustomEvents and updates `PageContext` so `useLoaderData()` and `useParams()` reflect the current route.
+
+---
+
+### useRouterState()
+
+React hook that returns the current router state. Re-renders when state changes.
+
+```typescript
+function useRouterState(): RouterState
+
+interface RouterState {
+  url: string;
+  status: RouterStatus;  // "idle" | "loading" | "error"
+  error?: Error;
+}
+```
+
+---
+
+### useNavigate()
+
+React hook that returns a navigation function.
+
+```typescript
+function useNavigate(): (url: string, opts?: { replace?: boolean; scroll?: boolean }) => void
+```
+
+---
+
+### bootstrapClient()
+
+Initialize the client router. Reads `window.__CAPSTAN_MANIFEST__`, creates the router singleton, and sets up global `<a>` click delegation.
+
+```typescript
+function bootstrapClient(): void
+```
+
+---
+
+### NavigationCache
+
+LRU cache for navigation payloads.
+
+```typescript
+class NavigationCache {
+  constructor(maxSize?: number, ttlMs?: number);  // defaults: 50, 5min
+  get(url: string): NavigationPayload | undefined;
+  set(url: string, payload: NavigationPayload): void;
+  has(url: string): boolean;
+  delete(url: string): boolean;
+  clear(): void;
+  readonly size: number;
+}
+```
+
+---
+
+### PrefetchManager
+
+Manages link prefetching via IntersectionObserver and pointer events.
+
+```typescript
+class PrefetchManager {
+  observe(element: Element, strategy: PrefetchStrategy): void;
+  unobserve(element: Element): void;
+  destroy(): void;
+}
+```
+
+Strategies: `"viewport"` (IntersectionObserver, 200px margin), `"hover"` (80ms delay), `"none"`.
+
+---
+
+### withViewTransition(fn)
+
+Wrap DOM mutations in the View Transitions API when supported. Falls back to direct execution.
+
+```typescript
+function withViewTransition(fn: () => void | Promise<void>): Promise<void>
+```
+
+---
+
+### Client Types
+
+```typescript
+type RouterStatus = "idle" | "loading" | "error";
+type PrefetchStrategy = "none" | "hover" | "viewport";
+
+interface NavigationPayload {
+  url: string;
+  layoutKey: string;
+  html?: string;
+  loaderData: unknown;
+  metadata?: { title?: string; description?: string };
+  componentType: "server" | "client";
+}
+
+interface NavigateOptions {
+  replace?: boolean;
+  state?: unknown;
+  scroll?: boolean;
+  noCache?: boolean;
+}
+
+interface ClientRouteEntry {
+  urlPattern: string;
+  componentType: "server" | "client";
+  layouts: string[];
+}
+
+interface ClientRouteManifest {
+  routes: ClientRouteEntry[];
+}
+
+interface NavigateEventDetail {
+  url: string;
+  loaderData: unknown;
+  params: Record<string, string>;
+  metadata?: { title?: string; description?: string };
+}
+```
+
+---
+
+### Manifest Utilities
+
+```typescript
+function getManifest(): ClientRouteManifest | null;
+function matchRoute(manifest: ClientRouteManifest, pathname: string): { route: ClientRouteEntry; params: Record<string, string> } | null;
+function findSharedLayout(from: string | undefined, to: string): string;
+```
+
+---
+
+### Scroll Utilities
+
+```typescript
+function generateScrollKey(): string;
+function setCurrentScrollKey(key: string): void;
+function saveScrollPosition(): void;
+function restoreScrollPosition(key: string | null): boolean;
+function scrollToTop(): void;
 ```
 
 ---

@@ -1,14 +1,25 @@
 import { renderToReadableStream } from "react-dom/server";
-import { createElement } from "react";
+import { createElement, Suspense } from "react";
 import type { ReactElement } from "react";
 import { PageContext } from "./loader.js";
 import { OutletProvider } from "./layout.js";
+import { ErrorBoundary } from "./error-boundary.js";
 import type {
   HydrationMode,
   RenderPageOptions,
   RenderResult,
   RenderStreamResult,
 } from "./types.js";
+
+/**
+ * React 18's `renderToReadableStream` returns a `ReadableStream` with an
+ * additional `allReady` promise that resolves once ALL content (including
+ * Suspense boundaries) has been emitted. The DOM typings don't include it
+ * because it's React-specific, so we extend the type here.
+ */
+interface ReactDOMStream extends ReadableStream<Uint8Array> {
+  allReady: Promise<void>;
+}
 
 /**
  * Escapes a string for safe embedding inside a <script> tag.
@@ -82,13 +93,47 @@ export async function renderPageStream(
   // 3. Render page component
   let content: ReactElement = createElement(pageModule.default, {});
 
-  // 4. Wrap in layouts from innermost to outermost
+  // 3a. Wrap in loading boundary (Suspense) if _loading.tsx provided
+  if (options.loadingComponent) {
+    content = createElement(
+      Suspense,
+      { fallback: createElement(options.loadingComponent) },
+      content,
+    );
+  }
+
+  // 3b. Wrap in error boundary if _error.tsx provided
+  if (options.errorComponent) {
+    content = createElement(
+      ErrorBoundary,
+      {
+        fallback: (error: Error, reset: () => void) =>
+          createElement(options.errorComponent!, { error, reset }),
+      },
+      content,
+    );
+  }
+
+  // 4. Wrap in layouts from innermost to outermost.
+  //    When layoutKeys are provided (parallel to layouts), emit stable
+  //    data-capstan-layout / data-capstan-outlet DOM attributes that
+  //    the client router uses as morph targets during SPA navigation.
   for (let i = layouts.length - 1; i >= 0; i--) {
     const layout = layouts[i]!;
-    content = createElement(OutletProvider, {
-      outlet: content,
+    const layoutKey = options.layoutKeys?.[i];
+
+    const outlet = layoutKey
+      ? createElement("div", { "data-capstan-outlet": layoutKey }, content)
+      : content;
+
+    const wrapped = createElement(OutletProvider, {
+      outlet,
       children: createElement(layout.default, {}),
     });
+
+    content = layoutKey
+      ? createElement("div", { "data-capstan-layout": layoutKey }, wrapped)
+      : wrapped;
   }
 
   // 5. Wrap in PageContext provider
@@ -149,14 +194,85 @@ export async function renderPageStream(
             };
 
   // 11. Render to a ReadableStream with hydration bootstrap
-  const stream = await renderToReadableStream(finalTree, streamOptions);
+  const stream = await renderToReadableStream(finalTree, streamOptions) as ReactDOMStream;
 
-  // `allReady` resolves once the entire document (including all Suspense
-  // boundaries) has been emitted.  Callers serving bots/crawlers can await
-  // it before piping the stream to guarantee a complete response.
-  const allReady = (stream as unknown as { allReady: Promise<void> }).allReady;
+  return { stream, allReady: stream.allReady, loaderData, statusCode: 200 };
+}
 
-  return { stream, allReady, loaderData, statusCode: 200 };
+/**
+ * Render a page and its inner layouts WITHOUT the document shell.
+ * Used by the dev server to produce navigation payloads for
+ * client-side SPA navigation (X-Capstan-Nav: 1 requests).
+ *
+ * Returns plain HTML suitable for morphdom-ing into the page outlet.
+ */
+export async function renderPartialStream(
+  options: RenderPageOptions,
+): Promise<{ html: string; loaderData: unknown; statusCode: number }> {
+  const { pageModule, layouts, loaderArgs, params } = options;
+
+  // Run loader
+  let loaderData: unknown = null;
+  if (pageModule.loader) {
+    loaderData = await pageModule.loader(loaderArgs);
+  }
+
+  const contextValue = { loaderData, params, auth: loaderArgs.ctx.auth };
+
+  // Render page component
+  let content: ReactElement = createElement(pageModule.default, {});
+
+  // Suspense / ErrorBoundary wrapping
+  if (options.loadingComponent) {
+    content = createElement(
+      Suspense,
+      { fallback: createElement(options.loadingComponent) },
+      content,
+    );
+  }
+  if (options.errorComponent) {
+    content = createElement(
+      ErrorBoundary,
+      {
+        fallback: (error: Error, reset: () => void) =>
+          createElement(options.errorComponent!, { error, reset }),
+      },
+      content,
+    );
+  }
+
+  // Wrap in layouts (same as full render but without document shell)
+  for (let i = layouts.length - 1; i >= 0; i--) {
+    const layout = layouts[i]!;
+    const layoutKey = options.layoutKeys?.[i];
+    const outlet = layoutKey
+      ? createElement("div", { "data-capstan-outlet": layoutKey }, content)
+      : content;
+    const wrapped = createElement(OutletProvider, {
+      outlet,
+      children: createElement(layout.default, {}),
+    });
+    content = layoutKey
+      ? createElement("div", { "data-capstan-layout": layoutKey }, wrapped)
+      : wrapped;
+  }
+
+  // Wrap in PageContext but NOT in DocumentShell
+  const tree = createElement(PageContext.Provider, { value: contextValue }, content);
+
+  // Render to string — no hydration bootstrap for partial renders
+  const stream = await renderToReadableStream(tree);
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let html = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    html += decoder.decode(value, { stream: true });
+  }
+  html += decoder.decode();
+
+  return { html, loaderData, statusCode: 200 };
 }
 
 /**

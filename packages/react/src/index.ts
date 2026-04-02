@@ -16,6 +16,7 @@ export type {
   LoaderArgs,
   LoaderFunction,
   HydrationMode,
+  RenderMode,
   PageModule,
   LayoutModule,
   RenderPageOptions,
@@ -23,3 +24,8 @@ export type {
   RenderStreamResult,
   CapstanPageContext,
 } from "./types.js";
+export { createStrategy, SSRStrategy, ISRStrategy, SSGStrategy } from "./render-strategy.js";
+export type { RenderStrategy, RenderStrategyContext, RenderStrategyResult } from "./render-strategy.js";
+export { renderPartialStream } from "./ssr.js";
+export { Link } from "./client/link.js";
+export type { LinkProps } from "./client/link.js";

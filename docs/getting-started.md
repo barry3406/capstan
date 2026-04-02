@@ -62,6 +62,8 @@ my-app/
 | `*.page.tsx`         | React page component (SSR)         |
 | `_layout.tsx`        | Layout wrapper (nests via Outlet)  |
 | `_middleware.ts`     | Middleware (runs before handlers)  |
+| `_loading.tsx`       | Suspense fallback for pages        |
+| `_error.tsx`         | Error boundary for pages           |
 | `[param].api.ts`     | Dynamic route segment              |
 | `[...catchAll].api.ts` | Catch-all route segment          |
 
@@ -198,3 +200,16 @@ POST http://localhost:3000/capstan/approvals/:id     # Approve or deny
 ```
 
 When an API route's policy evaluates to `"approve"`, the request is held for human review. See [Core Concepts](./core-concepts.md) for details.
+
+## Client-Side Navigation
+
+Use `<Link>` from `@zauso-ai/capstan-react/client` instead of plain `<a>` tags for client-side navigation with automatic prefetching and SPA transitions:
+
+```typescript
+import { Link } from "@zauso-ai/capstan-react/client";
+
+<Link href="/about">About</Link>
+<Link href="/dashboard" prefetch="viewport">Dashboard</Link>
+```
+
+See [Core Concepts — Client-Side Navigation](./core-concepts.md#client-side-navigation) for full details on the router, programmatic navigation, scroll restoration, and View Transitions.

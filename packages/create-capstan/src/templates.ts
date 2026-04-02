@@ -257,6 +257,8 @@ app/
     *.page.tsx         — Page route: export default React component + optional loader
     _layout.tsx        — Layout wrapper: wraps all sibling and child routes
     _middleware.ts     — Middleware: runs before all sibling and child routes
+    _loading.tsx       — Suspense fallback for sibling/child pages
+    _error.tsx         — Error boundary for sibling/child pages
     [param]/           — Dynamic segment: value available via ctx/params
     [...catchAll]/     — Catch-all segment: matches any remaining path
   models/              — Data model definitions (defineModel)
@@ -427,6 +429,92 @@ export default function InteractivePage() {
   return <button onClick={() => setCount(c => c + 1)}>{count}</button>;
 }
 \`\`\`
+
+### Render Mode & ISR
+
+Control how each page is rendered by exporting \`renderMode\`, \`revalidate\`, and \`cacheTags\`:
+
+\`\`\`typescript
+// app/routes/blog/index.page.tsx
+export const renderMode = "isr";    // "ssr" (default) | "ssg" | "isr" | "streaming"
+export const revalidate = 60;       // Revalidate every 60 seconds (ISR)
+export const cacheTags = ["blog"];   // Invalidate via cacheInvalidateTag("blog")
+
+export async function loader({ fetch }: LoaderArgs) {
+  return { posts: await fetch.get("/api/posts") };
+}
+
+export default function BlogPage() {
+  const { posts } = useLoaderData<{ posts: Post[] }>();
+  return <ul>{posts.map(p => <li key={p.id}>{p.title}</li>)}</ul>;
+}
+\`\`\`
+
+ISR behavior: fresh cache returns immediately, stale cache returns + revalidates in background, miss renders and caches. \`cacheInvalidateTag("blog")\` evicts both data cache and page cache entries.
+
+### Loading & Error Boundaries
+
+\`_loading.tsx\` and \`_error.tsx\` are file conventions like \`_layout.tsx\`. They scope to all pages in the same directory and subdirectories, with the nearest file winning.
+
+\`\`\`
+app/routes/
+  _loading.tsx           # Default loading UI for all pages
+  _error.tsx             # Default error UI for all pages
+  index.page.tsx
+  dashboard/
+    _loading.tsx         # Dashboard-specific loading (overrides parent)
+    index.page.tsx
+\`\`\`
+
+\`_loading.tsx\` — export a default React component (no props). Used as \`<Suspense>\` fallback:
+
+\`\`\`typescript
+export default function Loading() {
+  return <div className="spinner">Loading...</div>;
+}
+\`\`\`
+
+\`_error.tsx\` — export a default React component receiving \`{ error, reset }\`. Used as \`<ErrorBoundary>\` fallback:
+
+\`\`\`typescript
+export default function ErrorFallback({ error, reset }: { error: Error; reset: () => void }) {
+  return (
+    <div>
+      <p>Something went wrong: {error.message}</p>
+      <button onClick={reset}>Try again</button>
+    </div>
+  );
+}
+\`\`\`
+
+### Client-Side Navigation
+
+Use \`<Link>\` for SPA navigation without full-page reloads:
+
+\`\`\`typescript
+import { Link } from "@zauso-ai/capstan-react/client";
+
+<Link href="/about">About</Link>
+<Link href="/posts" prefetch="viewport">Posts</Link>
+<Link href="/settings" prefetch="none" replace>Settings</Link>
+\`\`\`
+
+\`Link\` renders a standard \`<a>\` (works without JS). When the client router is active, clicks are intercepted for instant SPA transitions. Prefetch strategies: \`"hover"\` (default, 80ms delay), \`"viewport"\` (IntersectionObserver), \`"none"\`.
+
+Programmatic navigation:
+
+\`\`\`typescript
+import { useNavigate, useRouterState } from "@zauso-ai/capstan-react/client";
+
+function MyComponent() {
+  const navigate = useNavigate();
+  const { url, status } = useRouterState(); // status: "idle" | "loading" | "error"
+
+  return <button onClick={() => navigate("/dashboard")}>Go</button>;
+}
+\`\`\`
+
+Add \`data-capstan-external\` to any \`<a>\` tag to opt out of SPA interception. View Transitions are applied automatically when the browser supports \`document.startViewTransition()\`.
 
 ### ServerOnly Wrapper
 
@@ -1290,6 +1378,37 @@ import { ErrorBoundary, NotFound } from "@zauso-ai/capstan-react";
 <NotFound />
 \`\`\`
 
+## Response Cache
+
+The response cache stores full-page HTML output for ISR render strategies. It is separate from the data cache but shares cross-invalidation.
+
+\`\`\`typescript
+import {
+  responseCacheGet, responseCacheSet, responseCacheInvalidateTag,
+  responseCacheInvalidate, responseCacheClear, setResponseCacheStore,
+} from "@zauso-ai/capstan-core";
+
+// Retrieve cached response (includes staleness check)
+const result = await responseCacheGet("/blog");
+if (result) {
+  const { entry, stale } = result;
+  // entry: { html, headers, statusCode, createdAt, revalidateAfter, tags }
+}
+
+// Store a page response with tags
+await responseCacheSet("/blog", {
+  html, headers: {}, statusCode: 200,
+  createdAt: Date.now(), revalidateAfter: Date.now() + 60000,
+  tags: ["blog"],
+});
+
+// Cross-invalidation: cacheInvalidateTag() also evicts response cache
+await cacheInvalidateTag("blog"); // clears BOTH data cache + response cache entries
+
+// For production, swap the store (default is in-memory):
+setResponseCacheStore(new RedisStore(redis, "resp:"));
+\`\`\`
+
 ## Cache Layer (ISR)
 
 \`\`\`typescript
@@ -1305,6 +1424,50 @@ const getUsers = cached(async () => fetchUsers(), { ttl: 60, tags: ["users"] });
 // Bulk invalidation by tag
 await cacheInvalidateTag("users");
 \`\`\`
+
+## Client-Side Router
+
+Capstan includes a built-in SPA router. Import from \`@zauso-ai/capstan-react/client\`:
+
+\`\`\`typescript
+import { Link, useNavigate, useRouterState, bootstrapClient } from "@zauso-ai/capstan-react/client";
+\`\`\`
+
+### Link Component
+
+\`<Link>\` renders a standard \`<a>\` that works without JavaScript. When the router is active, clicks are intercepted for instant SPA transitions.
+
+| Prop | Type | Default | Description |
+|------|------|---------|-------------|
+| \`href\` | \`string\` | — | Target URL (required) |
+| \`prefetch\` | \`"none" \\| "hover" \\| "viewport"\` | \`"hover"\` | When to prefetch the target page |
+| \`replace\` | \`boolean\` | \`false\` | Replace history entry instead of push |
+| \`scroll\` | \`boolean\` | \`true\` | Scroll to top after navigation |
+
+Plus all standard HTML anchor attributes.
+
+### Programmatic Navigation
+
+\`\`\`typescript
+const navigate = useNavigate();
+navigate("/dashboard");
+navigate("/settings", { replace: true, scroll: false });
+
+const { url, status, error } = useRouterState();
+// status: "idle" | "loading" | "error"
+\`\`\`
+
+### Bootstrap
+
+Call \`bootstrapClient()\` once at page load. It reads \`window.__CAPSTAN_MANIFEST__\`, initializes the router, and sets up global \`<a>\` click delegation. All internal links get SPA navigation automatically.
+
+To opt out for specific links, add \`data-capstan-external\`:
+
+\`\`\`html
+<a href="/legacy" data-capstan-external>Full reload</a>
+\`\`\`
+
+View Transitions (\`document.startViewTransition()\`) are applied automatically when the browser supports them.
 `;
 }
 

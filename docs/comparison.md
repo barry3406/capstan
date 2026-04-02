@@ -19,6 +19,11 @@
 | **Approval workflow**       | Built-in human-in-the-loop                 | Not available                        |
 | **Verification**            | `capstan verify` (7-step AI TDD loop)      | `tsc` + linting                      |
 | **SSR**                     | React SSR with loaders                     | React Server Components              |
+| **ISR**                     | Built-in `renderMode: "isr"` + response cache | Built-in (page-level `revalidate`) |
+| **Client-side router**      | Built-in SPA router with `<Link>`, prefetch | Built-in (`next/link`, `next/router`) |
+| **View Transitions**        | Built-in `withViewTransition()` wrapper    | Experimental via `next/navigation`   |
+| **Loading UI**              | `_loading.tsx` file convention             | `loading.tsx` file convention        |
+| **Error boundaries**        | `_error.tsx` file convention + `<ErrorBoundary>` | `error.tsx` file convention    |
 | **Selective hydration**     | `<ServerOnly>` component                   | React Server Components (partial)    |
 | **RAG / vector search**     | Built-in `field.vector()`, `defineEmbedding()` | Not available                    |
 | **MCP client**              | Built-in `createMcpClient()`               | Not available                        |
@@ -39,8 +44,8 @@
 ### When to use Next.js over Capstan
 
 - You are building a primarily human-facing web application
-- You need React Server Components, streaming SSR, or edge runtime
-- You rely on the Next.js ecosystem (Vercel, middleware, ISR, etc.)
+- You need React Server Components or edge runtime
+- You rely on the Next.js ecosystem (Vercel, middleware, etc.)
 - Your project requires mature community support and extensive documentation
 
 ---
@@ -127,6 +132,11 @@ LangGraph is a framework for building stateful, multi-actor AI applications usin
 | Agent manifest               |    +    |    -    |   -    |     -     |
 | File-based routing           |    +    |    +    |   -    |     -     |
 | React SSR                    |    +    |    +    |   -    |     -     |
+| Client-side SPA router       |    +    |    +    |   -    |     -     |
+| ISR (stale-while-revalidate) |    +    |    +    |   -    |     -     |
+| View Transitions API         |    +    |    ~    |   -    |     -     |
+| Loading UI conventions       |    +    |    +    |   -    |     -     |
+| Link prefetching             |    +    |    +    |   -    |     -     |
 | Built-in database layer      |    +    |    -    |   ~    |     -     |
 | Built-in auth (JWT + API key)|    +    |    -    |   -    |     -     |
 | Policy engine                |    +    |    -    |   -    |     -     |

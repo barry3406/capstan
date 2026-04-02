@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { openSync, readSync, closeSync } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
 
@@ -9,18 +9,32 @@ import type { RouteEntry, RouteManifest, RouteType } from "./types.js";
  * for a "use client" directive at the top of the file.
  */
 function detectComponentType(filePath: string): "server" | "client" {
+  // Read only the first 128 bytes — enough to detect "use client" directive
+  // without pulling the entire file into memory.
+  let fd: number;
   try {
-    // Read only the first 100 bytes — enough to detect the directive
-    const fd = readFileSync(filePath, { encoding: "utf-8", flag: "r" });
-    const head = fd.slice(0, 100);
-    const firstLine = head.split(/\r?\n/)[0]?.trim() ?? "";
-    if (firstLine === '"use client"' || firstLine === "'use client'" || firstLine === '"use client";' || firstLine === "'use client';") {
-      return "client";
-    }
+    fd = openSync(filePath, "r");
   } catch {
-    // If we can't read the file, default to server
+    return "server";
   }
-  return "server";
+  try {
+    const buf = Buffer.alloc(128);
+    const bytesRead = readSync(fd, buf, 0, 128, 0);
+    const head = buf.toString("utf-8", 0, bytesRead);
+    const firstLine = head.split(/\r?\n/)[0]?.trim() ?? "";
+    return (
+      firstLine === '"use client"' ||
+      firstLine === "'use client'" ||
+      firstLine === '"use client";' ||
+      firstLine === "'use client';"
+    )
+      ? "client"
+      : "server";
+  } catch {
+    return "server";
+  } finally {
+    closeSync(fd);
+  }
 }
 
 /**
@@ -30,6 +44,8 @@ function detectComponentType(filePath: string): "server" | "client" {
 function classifyFile(filename: string): RouteType | null {
   if (filename === "_layout.tsx") return "layout";
   if (filename === "_middleware.ts") return "middleware";
+  if (filename === "_loading.tsx") return "loading";
+  if (filename === "_error.tsx") return "error";
   if (filename.endsWith(".page.tsx")) return "page";
   if (filename.endsWith(".api.ts")) return "api";
   return null;
@@ -151,6 +167,27 @@ function collectMiddlewares(routesDir: string, relativeDir: string): string[] {
 }
 
 /**
+ * Find the nearest file with the given name by walking up from the route's
+ * directory to the routes root.  Returns the first match (innermost wins).
+ */
+function findNearest(
+  routesDir: string,
+  relativeDir: string,
+  filename: string,
+  existingAbsolute: Set<string>,
+): string | undefined {
+  const parts = relativeDir === "" || relativeDir === "." ? [] : relativeDir.split(path.sep);
+
+  // Walk from innermost to outermost
+  for (let i = parts.length; i >= 0; i--) {
+    const dir = i === 0 ? routesDir : path.join(routesDir, ...parts.slice(0, i));
+    const candidate = path.join(dir, filename);
+    if (existingAbsolute.has(candidate)) return candidate;
+  }
+  return undefined;
+}
+
+/**
  * Recursively walk a directory, returning all files as paths relative to the root.
  */
 async function walkDir(dir: string, root: string): Promise<string[]> {
@@ -231,7 +268,7 @@ export async function scanRoutes(routesDir: string): Promise<RouteManifest> {
     // Build URL pattern
     const dirInfo = dirToSegments(relativeDir);
 
-    if (routeType === "layout" || routeType === "middleware") {
+    if (routeType === "layout" || routeType === "middleware" || routeType === "loading" || routeType === "error") {
       // Layouts and middlewares don't get their own URL pattern —
       // they are referenced by other routes. But we still include them
       // in the manifest so they can be discovered.
@@ -284,6 +321,10 @@ export async function scanRoutes(routesDir: string): Promise<RouteManifest> {
 
     if (routeType === "page") {
       entry.componentType = detectComponentType(absoluteFilePath);
+      const nearestLoading = findNearest(resolvedRoot, relativeDir, "_loading.tsx", absolutePathSet);
+      const nearestError = findNearest(resolvedRoot, relativeDir, "_error.tsx", absolutePathSet);
+      if (nearestLoading) entry.loading = nearestLoading;
+      if (nearestError) entry.error = nearestError;
     }
 
     routes.push(entry);
@@ -295,9 +336,11 @@ export async function scanRoutes(routesDir: string): Promise<RouteManifest> {
   // 3. By file path as tiebreaker
   const typeOrder: Record<RouteType, number> = {
     layout: 0,
-    middleware: 1,
-    page: 2,
-    api: 3,
+    loading: 1,
+    error: 2,
+    middleware: 3,
+    page: 4,
+    api: 5,
   };
 
   routes.sort((a, b) => {

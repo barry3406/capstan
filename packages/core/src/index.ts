@@ -107,3 +107,13 @@ export {
   setCacheStore,
 } from "./cache.js";
 export type { CacheOptions, CacheEntry } from "./cache.js";
+
+export {
+  responseCacheGet,
+  responseCacheSet,
+  responseCacheInvalidateTag,
+  responseCacheInvalidate,
+  responseCacheClear,
+  setResponseCacheStore,
+} from "./response-cache.js";
+export type { ResponseCacheEntry } from "./response-cache.js";

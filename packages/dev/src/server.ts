@@ -15,7 +15,7 @@ import {
 } from "@zauso-ai/capstan-core";
 import type { APIDefinition, HttpMethod, CapstanContext, CapstanAuthContext } from "@zauso-ai/capstan-core";
 
-import { loadApiHandlers, loadLayoutModule, loadPageModule, invalidateModuleCache } from "./loader.js";
+import { loadApiHandlers, loadLayoutModule, loadPageModule, loadLoadingModule, loadErrorModule, invalidateModuleCache } from "./loader.js";
 import { watchRoutes, watchStyles } from "./watcher.js";
 import { printStartupBanner } from "./printer.js";
 import type { DevServerConfig, DevServerInstance } from "./types.js";
@@ -41,6 +41,20 @@ const LIVE_RELOAD_SCRIPT = `<script>
 </script>`;
 
 /**
+ * Escape a string for safe embedding in HTML text content.
+ * Prevents XSS when interpolating user-controlled or config values into
+ * the fallback HTML shell.
+ */
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+/**
  * Inject the live-reload `<script>` into an HTML string by placing it
  * immediately before `</body>`. If `</body>` is not found the script is
  * appended at the end as a best-effort fallback.
@@ -51,6 +65,28 @@ function injectLiveReload(html: string): string {
     return html.slice(0, idx) + LIVE_RELOAD_SCRIPT + "\n" + html.slice(idx);
   }
   return html + LIVE_RELOAD_SCRIPT;
+}
+
+/**
+ * Inject the client route manifest into an HTML page as a script tag
+ * before `</body>`.  The client router reads this at bootstrap to know
+ * which routes exist and their component types.
+ */
+function injectManifest(html: string, manifest: RouteManifest): string {
+  const clientRoutes = manifest.routes
+    .filter((r) => r.type === "page")
+    .map((r) => ({
+      urlPattern: r.urlPattern,
+      componentType: r.componentType ?? "server",
+      layouts: r.layouts,
+    }));
+
+  const script = `<script>window.__CAPSTAN_MANIFEST__=${JSON.stringify({ routes: clientRoutes }).replace(/</g, "\\u003c")}</script>`;
+  const idx = html.lastIndexOf("</body>");
+  if (idx !== -1) {
+    return html.slice(0, idx) + script + "\n" + html.slice(idx);
+  }
+  return html + script;
 }
 
 /**
@@ -529,6 +565,19 @@ async function buildApp(
 
       const ctx = buildStandaloneContext(request, pageAuth);
 
+      // Build common loaderArgs used by both full render and nav payload
+      const loaderArgs = {
+        params,
+        request,
+        ctx: { auth: ctx.auth },
+        fetch: {
+          get: async () => null,
+          post: async () => null,
+          put: async () => null,
+          delete: async () => null,
+        },
+      };
+
       // Run loader if present
       let loaderData: unknown = null;
       if (typeof pageModule.loader === "function") {
@@ -540,17 +589,7 @@ async function buildApp(
               ctx: { auth: CapstanContext["auth"] };
               fetch: Record<string, unknown>;
             }) => Promise<unknown>
-          )({
-            params,
-            request,
-            ctx: { auth: ctx.auth },
-            fetch: {
-              get: async () => null,
-              post: async () => null,
-              put: async () => null,
-              delete: async () => null,
-            },
-          });
+          )(loaderArgs);
         } catch (err) {
           // eslint-disable-next-line no-console
           console.error(
@@ -560,6 +599,68 @@ async function buildApp(
         }
       }
 
+      // --- Client-side navigation payload (X-Capstan-Nav: 1) ----------------
+      // When the client router requests a navigation payload, return JSON
+      // with the rendered HTML (for server components) or just loaderData
+      // (for client components) instead of a full HTML document.
+      const isNavRequest = c.req.header("X-Capstan-Nav") === "1";
+      if (isNavRequest) {
+        const componentType = route.componentType ?? "server";
+        const layoutKey = route.layouts.length > 0
+          ? route.layouts[route.layouts.length - 1]!
+          : "/";
+
+        const navPayload: Record<string, unknown> = {
+          url: route.urlPattern,
+          layoutKey,
+          loaderData,
+          componentType,
+          metadata: typeof pageModule.metadata === "object" ? pageModule.metadata : undefined,
+        };
+
+        // For server components, pre-render partial HTML
+        if (componentType === "server") {
+          try {
+            if (!_reactPkg) {
+              const reactModuleName = "@zauso-ai/capstan-react";
+              _reactPkg = (await import(reactModuleName)) as NonNullable<typeof _reactPkg>;
+            }
+            const renderPartial = ((_reactPkg as Record<string, unknown>)["renderPartialStream"]) as
+              | ((opts: Record<string, unknown>) => Promise<{ html: string }>) | undefined;
+
+            if (renderPartial) {
+              const layoutResults = await Promise.all(
+                route.layouts.map(async (layoutPath) => {
+                  try {
+                    const layoutMod = await loadLayoutModule(layoutPath);
+                    return layoutMod.default ? { default: layoutMod.default } : null;
+                  } catch { return null; }
+                })
+              );
+              const loadedLayouts: Array<{ default: unknown }> = [];
+              for (const l of layoutResults) {
+                if (l !== null) loadedLayouts.push(l);
+              }
+
+              const { html } = await renderPartial({
+                pageModule: { default: pageModule.default, loader: pageModule.loader },
+                layouts: loadedLayouts,
+                params,
+                request,
+                loaderArgs,
+                layoutKeys: route.layouts,
+              });
+              navPayload["html"] = html;
+            }
+          } catch {
+            // Partial render failed — client will get loaderData only
+          }
+        }
+
+        return c.json(navPayload);
+      }
+
+      // --- Full-page SSR render ----------------------------------------------
       // Attempt full SSR via @zauso-ai/capstan-react. If the package is available
       // and the page module has a valid React component, render it.
       // We use a dynamic import so the dev server works even when
@@ -587,6 +688,34 @@ async function buildApp(
           if (l !== null) loadedLayouts.push(l);
         }
 
+        // Load _loading.tsx and _error.tsx if present on this route
+        let loadingComponent: unknown = undefined;
+        let errorComponent: unknown = undefined;
+        if (route.loading) {
+          try {
+            const loadingMod = await loadLoadingModule(route.loading);
+            if (loadingMod.default) loadingComponent = loadingMod.default;
+          } catch (err) {
+            // eslint-disable-next-line no-console
+            console.warn(
+              `[capstan] Failed to load _loading.tsx ${route.loading}:`,
+              err instanceof Error ? err.message : err,
+            );
+          }
+        }
+        if (route.error) {
+          try {
+            const errorMod = await loadErrorModule(route.error);
+            if (errorMod.default) errorComponent = errorMod.default;
+          } catch (err) {
+            // eslint-disable-next-line no-console
+            console.warn(
+              `[capstan] Failed to load _error.tsx ${route.error}:`,
+              err instanceof Error ? err.message : err,
+            );
+          }
+        }
+
         const renderOpts = {
           pageModule: {
             default: pageModule.default,
@@ -595,17 +724,10 @@ async function buildApp(
           layouts: loadedLayouts,
           params,
           request,
-          loaderArgs: {
-            params,
-            request,
-            ctx: { auth: ctx.auth },
-            fetch: {
-              get: async () => null,
-              post: async () => null,
-              put: async () => null,
-              delete: async () => null,
-            },
-          },
+          loaderArgs,
+          loadingComponent,
+          errorComponent,
+          layoutKeys: route.layouts,
         };
 
         // Prefer streaming SSR when available.  We collect the stream to a
@@ -629,27 +751,30 @@ async function buildApp(
           }
           html += decoder.decode();
 
-          return c.html(injectLiveReload(html), statusCode as 200);
+          return c.html(injectLiveReload(injectManifest(html, manifest)), statusCode as 200);
         }
 
         const result = await reactPkg.renderPage(renderOpts);
 
-        return c.html(injectLiveReload(result.html), result.statusCode as 200);
+        return c.html(injectLiveReload(injectManifest(result.html, manifest)), result.statusCode as 200);
       } catch {
         // @zauso-ai/capstan-react not available or render failed -- serve a
         // minimal HTML shell that exposes loader data.
+        const serializedData = JSON.stringify({ loaderData, params })
+          .replace(/</g, "\\u003c")
+          .replace(/>/g, "\\u003e");
         const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>${config.appName ?? "Capstan App"}</title>
+  <title>${escapeHtml(config.appName ?? "Capstan App")}</title>
 </head>
 <body>
   <div id="capstan-root">
-    <p>Page: ${route.urlPattern}</p>
+    <p>Page: ${escapeHtml(route.urlPattern)}</p>
   </div>
-  <script>window.__CAPSTAN_DATA__ = ${JSON.stringify({ loaderData, params }).replace(/</g, '\\u003c').replace(/>/g, '\\u003e')}</script>
+  <script>window.__CAPSTAN_DATA__ = ${serializedData}</script>
 ${LIVE_RELOAD_SCRIPT}
 </body>
 </html>`;

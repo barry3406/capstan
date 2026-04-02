@@ -25,6 +25,8 @@ export type LoaderFunction<T = unknown> = (args: LoaderArgs) => Promise<T>;
 
 export type HydrationMode = "full" | "visible" | "none";
 
+export type RenderMode = "ssr" | "ssg" | "isr" | "streaming";
+
 export interface PageModule {
   default: (props: Record<string, unknown>) => ReactElement;
   loader?: LoaderFunction;
@@ -32,6 +34,12 @@ export interface PageModule {
   hydration?: HydrationMode;
   /** Whether the component is a server or client component */
   componentType?: "server" | "client";
+  /** Rendering strategy (default: "ssr") */
+  renderMode?: RenderMode;
+  /** ISR revalidation interval in seconds */
+  revalidate?: number;
+  /** Cache tags for ISR invalidation */
+  cacheTags?: string[];
 }
 
 export interface LayoutModule {
@@ -48,6 +56,12 @@ export interface RenderPageOptions {
   hydration?: HydrationMode;
   /** Whether the component is a server or client component */
   componentType?: "server" | "client";
+  /** Error boundary component from nearest _error.tsx */
+  errorComponent?: (props: { error: Error; reset: () => void }) => ReactElement;
+  /** Loading/Suspense fallback component from nearest _loading.tsx */
+  loadingComponent?: () => ReactElement;
+  /** Layout keys for data-capstan-layout/outlet attributes (parallel to layouts) */
+  layoutKeys?: string[];
 }
 
 export interface RenderResult {
