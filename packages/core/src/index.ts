@@ -96,3 +96,14 @@ export type {
   WebSocketClient,
   WebSocketRoute,
 } from "./websocket.js";
+
+export {
+  cacheSet,
+  cacheGet,
+  cacheInvalidateTag,
+  cacheInvalidate,
+  cacheClear,
+  cached,
+  setCacheStore,
+} from "./cache.js";
+export type { CacheOptions, CacheEntry } from "./cache.js";
