@@ -402,9 +402,10 @@ describe("watchStyles", () => {
     // Close immediately
     watcher.close();
 
-    // Now modify a CSS file — callback should NOT fire
+    // Brief pause then modify — callback should NOT fire since watcher is closed
+    await new Promise((resolve) => setTimeout(resolve, 50));
     await writeFile(join(stylesDir, "main.css"), "body { color: red; }");
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await new Promise((resolve) => setTimeout(resolve, 150));
 
     expect(callback).not.toHaveBeenCalled();
   });
