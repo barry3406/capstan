@@ -696,6 +696,119 @@ for await (const chunk of openai.stream!([
 
 The `LLMProvider` interface can be implemented for other providers. Both providers support `systemPrompt`, `temperature`, `maxTokens`, and structured `responseFormat` options.
 
+## AI Toolkit (@zauso-ai/capstan-ai)
+
+`@zauso-ai/capstan-ai` is a standalone AI agent toolkit that works independently OR with the Capstan framework. It provides structured reasoning, text generation, persistent memory, and a self-orchestrating agent loop.
+
+### Standalone Usage (No Capstan Required)
+
+```typescript
+import { createAI } from "@zauso-ai/capstan-ai";
+import { openaiProvider } from "@zauso-ai/capstan-agent";
+
+const ai = createAI({
+  llm: openaiProvider({ apiKey: process.env.OPENAI_API_KEY! }),
+});
+```
+
+### Structured Reasoning with think()
+
+`think()` sends a prompt to the LLM and parses the response against a Zod schema, returning a fully typed result:
+
+```typescript
+import { z } from "zod";
+
+const analysis = await ai.think("Classify this support ticket: 'My payment failed'", {
+  schema: z.object({
+    category: z.enum(["billing", "technical", "account", "other"]),
+    priority: z.enum(["low", "medium", "high"]),
+    sentiment: z.enum(["positive", "neutral", "negative"]),
+  }),
+});
+// analysis.category === "billing", analysis.priority === "high", etc.
+```
+
+### Text Generation with generate()
+
+`generate()` returns raw text from the LLM:
+
+```typescript
+const summary = await ai.generate("Summarize this document in 3 bullet points...");
+```
+
+Both `think()` and `generate()` have streaming variants -- `thinkStream()` and `generateStream()` -- that yield partial results as the LLM generates tokens.
+
+### Memory System
+
+The memory system provides persistent, searchable memory scoped to any entity:
+
+```typescript
+// Store memories
+await ai.remember("Customer prefers email communication");
+await ai.remember("Last order was #4521, shipped 2024-03-15");
+
+// Retrieve relevant memories (hybrid search: vector + keyword + recency)
+const memories = await ai.recall("How does the customer want to be contacted?");
+
+// Scope memory to a specific entity
+const customerMemory = ai.memory.about("customer", "cust_123");
+await customerMemory.remember("VIP customer since 2022");
+const relevant = await customerMemory.recall("customer status");
+
+// Build LLM context from memories
+const context = await ai.memory.assembleContext({
+  query: "customer communication preferences",
+  maxTokens: 2000,
+});
+
+// Delete a memory
+await ai.memory.forget(memoryId);
+```
+
+Memory features:
+- **Auto-dedup**: memories with >0.92 cosine similarity are merged
+- **Hybrid recall**: vector similarity (0.7 weight) + keyword matching (0.3 weight) + recency decay
+- **Entity scoping**: `memory.about(type, id)` isolates memory per entity
+- **Pluggable backends**: implement `MemoryBackend` for Mem0, Hindsight, Redis, or custom storage
+
+### Agent Loop
+
+The self-orchestrating agent loop reasons about a goal, selects and executes tools, and repeats until the goal is achieved:
+
+```typescript
+const result = await ai.agent.run({
+  goal: "Research the customer's recent issues and draft a response email",
+  about: ["customer", "cust_123"],
+  tools: [searchTickets, getCustomerHistory, draftEmail],
+});
+```
+
+Agent loop features:
+- **Recursion prevention**: tracks `callStack` to avoid infinite loops
+- **`beforeToolCall` hook**: enforce policies or require approval before tool execution
+- **Configurable iteration limit**: `maxIterations` (default: 10)
+- **Entity-scoped memory**: `about` option automatically scopes all memory operations
+
+### Using with Capstan Handlers
+
+When used inside Capstan `defineAPI()` handlers, the AI toolkit integrates with the request context:
+
+```typescript
+export const POST = defineAPI({
+  // ...
+  async handler({ input, ctx }) {
+    const analysis = await ctx.think(input.message, {
+      schema: z.object({ intent: z.string(), confidence: z.number() }),
+    });
+
+    await ctx.remember(`User asked about: ${analysis.intent}`);
+    const history = await ctx.recall(input.message);
+
+    return { analysis, relatedHistory: history };
+  },
+});
+```
+
 ## Deployment
 
 ### Production Build & Start

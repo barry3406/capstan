@@ -663,6 +663,309 @@ interface LLMProvider {
 
 ---
 
+## @zauso-ai/capstan-ai
+
+Standalone AI toolkit. Works independently or with the Capstan framework.
+
+### createAI(config)
+
+Factory function that creates a standalone AI instance with all capabilities. No Capstan framework required.
+
+```typescript
+function createAI(config: AIConfig): AIContext
+
+interface AIConfig {
+  llm: LLMProvider;
+  memory?: {
+    backend?: MemoryBackend;
+    embedding?: { embed(texts: string[]): Promise<number[][]>; dimensions: number };
+    autoExtract?: boolean;
+  };
+  defaultScope?: MemoryScope;
+}
+
+interface AIContext {
+  think<T = string>(prompt: string, opts?: ThinkOptions<T>): Promise<T>;
+  generate(prompt: string, opts?: GenerateOptions): Promise<string>;
+  thinkStream(prompt: string, opts?: Omit<ThinkOptions, "schema">): AsyncIterable<string>;
+  generateStream(prompt: string, opts?: GenerateOptions): AsyncIterable<string>;
+  remember(content: string, opts?: RememberOptions): Promise<string>;
+  recall(query: string, opts?: RecallOptions): Promise<MemoryEntry[]>;
+  memory: {
+    about(type: string, id: string): MemoryAccessor;
+    forget(entryId: string): Promise<boolean>;
+    assembleContext(opts: AssembleContextOptions): Promise<string>;
+  };
+  agent: {
+    run(config: AgentRunConfig): Promise<AgentRunResult>;
+  };
+}
+```
+
+**Usage:**
+
+```typescript
+import { createAI } from "@zauso-ai/capstan-ai";
+import { openaiProvider } from "@zauso-ai/capstan-agent";
+
+const ai = createAI({
+  llm: openaiProvider({ apiKey: process.env.OPENAI_API_KEY! }),
+});
+
+// Structured reasoning with Zod schema
+const result = await ai.think("Classify this ticket", {
+  schema: z.object({ category: z.string(), priority: z.enum(["low", "medium", "high"]) }),
+});
+
+// Text generation
+const summary = await ai.generate("Summarize this document...");
+```
+
+---
+
+### think(llm, prompt, opts?)
+
+Structured reasoning: sends a prompt to the LLM and optionally parses the response against a schema.
+
+```typescript
+function think<T = string>(
+  llm: LLMProvider,
+  prompt: string,
+  opts?: ThinkOptions<T>,
+): Promise<T>
+
+interface ThinkOptions<T = unknown> {
+  schema?: { parse: (data: unknown) => T };
+  model?: string;
+  temperature?: number;
+  maxTokens?: number;
+  systemPrompt?: string;
+  memory?: boolean;
+  about?: [string, string];
+}
+```
+
+When `schema` is provided, the LLM is asked for JSON output and the result is parsed and validated. Without a schema, the raw text is returned.
+
+---
+
+### generate(llm, prompt, opts?)
+
+Text generation: sends a prompt to the LLM and returns the raw text response.
+
+```typescript
+function generate(
+  llm: LLMProvider,
+  prompt: string,
+  opts?: GenerateOptions,
+): Promise<string>
+
+interface GenerateOptions {
+  model?: string;
+  temperature?: number;
+  maxTokens?: number;
+  systemPrompt?: string;
+  memory?: boolean;
+  about?: [string, string];
+}
+```
+
+---
+
+### thinkStream(llm, prompt, opts?)
+
+Streaming text generation. Requires the LLM provider to support `stream()`. Yields text chunks as tokens are generated.
+
+```typescript
+function thinkStream(
+  llm: LLMProvider,
+  prompt: string,
+  opts?: GenerateOptions,
+): AsyncIterable<string>
+```
+
+Throws if the LLM provider does not implement `stream()`.
+
+---
+
+### generateStream(llm, prompt, opts?)
+
+Alias for `thinkStream`. Streaming text generation that yields chunks as the LLM generates tokens.
+
+```typescript
+function generateStream(
+  llm: LLMProvider,
+  prompt: string,
+  opts?: GenerateOptions,
+): AsyncIterable<string>
+```
+
+---
+
+### MemoryAccessor
+
+The developer-facing memory interface, returned by `createMemoryAccessor()` or `ai.memory.about()`.
+
+```typescript
+interface MemoryAccessor {
+  remember(content: string, opts?: RememberOptions): Promise<string>;
+  recall(query: string, opts?: RecallOptions): Promise<MemoryEntry[]>;
+  forget(entryId: string): Promise<boolean>;
+  about(type: string, id: string): MemoryAccessor;
+  assembleContext(opts: AssembleContextOptions): Promise<string>;
+}
+
+interface RememberOptions {
+  scope?: MemoryScope;
+  type?: "fact" | "event" | "preference" | "instruction";
+  importance?: "low" | "medium" | "high" | "critical";
+  metadata?: Record<string, unknown>;
+}
+
+interface RecallOptions {
+  scope?: MemoryScope;
+  limit?: number;         // Max results (default: 10)
+  minScore?: number;      // Minimum relevance score
+  types?: string[];       // Filter by memory type
+}
+
+interface MemoryScope {
+  type: string;
+  id: string;
+}
+
+interface MemoryEntry {
+  id: string;
+  content: string;
+  scope: MemoryScope;
+  createdAt: string;
+  updatedAt: string;
+  metadata?: Record<string, unknown>;
+  embedding?: number[];
+  importance?: "low" | "medium" | "high" | "critical";
+  type?: "fact" | "event" | "preference" | "instruction";
+  accessCount: number;
+  lastAccessedAt: string;
+}
+
+interface AssembleContextOptions {
+  query: string;
+  maxTokens?: number;     // Default: 4000
+  scopes?: MemoryScope[];
+}
+```
+
+`remember()` stores a memory, automatically deduplicating (>0.92 cosine similarity merges with existing) and embedding for vector search. Returns the memory ID.
+
+`recall()` retrieves relevant memories using hybrid search: vector similarity (0.7 weight) + keyword matching (0.3 weight) + recency decay (30-day half-life).
+
+`about()` returns a new `MemoryAccessor` scoped to a specific entity. All subsequent operations are isolated to that scope.
+
+`assembleContext()` builds an LLM-ready context string from stored memories, sorted by importance and packed within a token budget.
+
+**Usage:**
+
+```typescript
+const customerMemory = ai.memory.about("customer", "cust_123");
+await customerMemory.remember("Prefers email communication", { type: "preference" });
+const relevant = await customerMemory.recall("communication preferences");
+await ai.memory.forget(relevant[0].id);
+```
+
+---
+
+### runAgentLoop(llm, config, tools, opts?)
+
+Self-orchestrating agent loop. The LLM reasons about a goal, selects and executes tools, feeds results back, and repeats until done or the iteration limit is reached.
+
+```typescript
+function runAgentLoop(
+  llm: LLMProvider,
+  config: AgentRunConfig,
+  tools: AgentTool[],
+  opts?: {
+    beforeToolCall?: (tool: string, args: unknown) => Promise<{ allowed: boolean; reason?: string }>;
+    afterToolCall?: (tool: string, args: unknown, result: unknown) => Promise<void>;
+    callStack?: Set<string>;
+    onMemoryEvent?: (content: string) => Promise<void>;
+  },
+): Promise<AgentRunResult>
+
+interface AgentTool {
+  name: string;
+  description: string;
+  parameters?: Record<string, unknown>;
+  execute(args: Record<string, unknown>): Promise<unknown>;
+}
+
+interface AgentRunConfig {
+  goal: string;
+  about?: [string, string];
+  maxIterations?: number;  // Default: 10
+  memory?: boolean;
+  tools?: AgentTool[];
+  systemPrompt?: string;
+  excludeRoutes?: string[];
+}
+
+interface AgentRunResult {
+  result: unknown;
+  iterations: number;
+  toolCalls: Array<{ tool: string; args: unknown; result: unknown }>;
+  status: "completed" | "max_iterations" | "approval_required";
+  pendingApproval?: { tool: string; args: unknown; reason: string };
+}
+```
+
+The loop uses JSON-based tool calling: the LLM responds with `{"tool": "name", "arguments": {...}}` to invoke a tool, or plain text to finish. The `beforeToolCall` hook enables policy enforcement -- returning `{ allowed: false }` stops the loop with `"approval_required"` status. Tools in the `callStack` set are excluded to prevent recursion.
+
+**Usage via `ai.agent.run()`:**
+
+```typescript
+const result = await ai.agent.run({
+  goal: "Research the customer's recent issues and draft a summary",
+  about: ["customer", "cust_123"],
+  tools: [searchTickets, getCustomerHistory],
+});
+// result.status, result.result, result.iterations, result.toolCalls
+```
+
+---
+
+### BuiltinMemoryBackend
+
+Default in-memory backend with optional vector search support. Suitable for development and testing. No external dependencies.
+
+```typescript
+class BuiltinMemoryBackend implements MemoryBackend {
+  constructor(opts?: { embedding?: MemoryEmbedder });
+}
+
+interface MemoryEmbedder {
+  embed(texts: string[]): Promise<number[][]>;
+  dimensions: number;
+}
+```
+
+Features: keyword-only fallback when no embedder is provided, hybrid search (vector + keyword + recency decay) when embedder is present, auto-dedup at >0.92 cosine similarity.
+
+---
+
+### MemoryBackend (Interface)
+
+Pluggable backend interface for memory storage. Implement for custom backends (Mem0, Hindsight, Redis, etc.).
+
+```typescript
+interface MemoryBackend {
+  store(entry: Omit<MemoryEntry, "id" | "accessCount" | "lastAccessedAt" | "createdAt" | "updatedAt">): Promise<string>;
+  query(scope: MemoryScope, text: string, k: number): Promise<MemoryEntry[]>;
+  remove(id: string): Promise<boolean>;
+  clear(scope: MemoryScope): Promise<void>;
+}
+```
+
+---
+
 ### Types
 
 ```typescript

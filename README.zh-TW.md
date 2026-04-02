@@ -12,8 +12,8 @@
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Tests](https://img.shields.io/badge/tests-1125%20passing-brightgreen?logo=bun&logoColor=white)](https://bun.sh)
-[![Version](https://img.shields.io/badge/version-1.0.0--beta.6-orange)](https://github.com/barry3406/capstan)
+[![Tests](https://img.shields.io/badge/tests-1301%20passing-brightgreen?logo=bun&logoColor=white)](https://bun.sh)
+[![Version](https://img.shields.io/badge/version-1.0.0--beta.7-orange)](https://github.com/barry3406/capstan)
 [![ESM](https://img.shields.io/badge/ESM-only-blue)](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Modules)
 
 [快速開始](#-快速開始) · [為什麼選擇 Capstan？](#-為什麼選擇-capstan) · [架構](#-架構) · [文件](#-文件) · [參與貢獻](#-參與貢獻)
@@ -90,6 +90,7 @@
 ### 資料與 AI
 - **向量欄位 & RAG 原語** — `defineEmbedding` 搭配混合搜尋（語意 + 關鍵字）
 - **LangChain 整合** — 原生整合 LangChain 生態系
+- **AI 工具包（`@zauso-ai/capstan-ai`）** — 獨立 AI 工具包：`createAI()` 工廠函式（無需 Capstan 框架即可使用）、`think<T>(prompt, { schema })` 結構化推理、`generate(prompt)` 文字生成、串流變體、`remember()`/`recall()` 記憶系統（混合搜尋：向量相似度 + 關鍵字 + 時間衰減）、`memory.about(type, id)` 實體級記憶、`agent.run()` 自編排 Agent 迴圈
 
 ### 前端
 - **React SSR** — 搭配 loader 的伺服器端渲染、版面配置、`Outlet`、hydration
@@ -455,7 +456,7 @@ bunx capstan start
 
 ## 📦 套件
 
-Capstan 包含 9 個執行時期套件：
+Capstan 包含 10 個執行時期套件：
 
 | 套件 | 說明 |
 |------|------|
@@ -464,6 +465,7 @@ Capstan 包含 9 個執行時期套件：
 | `@zauso-ai/capstan-db` | Drizzle ORM、`defineModel`、欄位/關聯輔助函式、遷移、自動 CRUD（SQLite、PostgreSQL、MySQL） |
 | `@zauso-ai/capstan-auth` | JWT 工作階段、Agent 用 API 金鑰驗證、OAuth 提供者（Google、GitHub）、權限檢查（`"human"` / `"agent"` / `"anonymous"`） |
 | `@zauso-ai/capstan-agent` | `CapabilityRegistry`、MCP 伺服器（型別化參數）、A2A 轉接器（SSE）、OpenAPI 產生器 |
+| `@zauso-ai/capstan-ai` | 獨立 AI 工具包：`createAI`、`think`/`generate`（結構化 + 串流）、`remember`/`recall` 記憶系統（混合搜尋）、`memory.about()` 實體級記憶、`agent.run()` 自編排迴圈 |
 | `@zauso-ai/capstan-react` | 搭配 loader 的 SSR、版面配置、`Outlet`、hydration |
 | `@zauso-ai/capstan-dev` | 開發伺服器，含檔案監看、即時路由重新載入、MCP/A2A 端點 |
 | `@zauso-ai/capstan-cli` | CLI：`dev`、`build`、`start`、`verify`、`add`、`mcp`、`db:*` |
@@ -474,14 +476,14 @@ Capstan 包含 9 個執行時期套件：
 
 ## 🧑‍💻 參與貢獻
 
-Capstan 目前為 `v1.0.0-beta.6`。歡迎參與貢獻！
+Capstan 目前為 `v1.0.0-beta.7`。歡迎參與貢獻！
 
 ```bash
 git clone https://github.com/barry3406/capstan.git
 cd capstan
 bun install
 bun run build        # 建置 9 個執行時期套件
-bun run test:new     # Bun 測試（1125 項測試，約 18s）
+bun run test:new     # Bun 測試（1301 項測試，約 18s）
 ```
 
 ### 開發慣例

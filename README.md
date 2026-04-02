@@ -12,8 +12,8 @@ One `defineAPI()` call. Four protocol surfaces. Humans and AI agents, served sim
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Tests](https://img.shields.io/badge/tests-1125%20passing-brightgreen?logo=bun&logoColor=white)](https://bun.sh)
-[![Version](https://img.shields.io/badge/version-1.0.0--beta.6-orange)](https://github.com/barry3406/capstan)
+[![Tests](https://img.shields.io/badge/tests-1301%20passing-brightgreen?logo=bun&logoColor=white)](https://bun.sh)
+[![Version](https://img.shields.io/badge/version-1.0.0--beta.7-orange)](https://github.com/barry3406/capstan)
 [![ESM](https://img.shields.io/badge/ESM-only-blue)](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Modules)
 
 [Quick Start](#-quick-start) · [Why Capstan?](#-why-capstan) · [Architecture](#-architecture) · [Docs](#-documentation) · [Contributing](#-contributing)
@@ -109,6 +109,7 @@ Think of it as **Next.js if it were designed from day one for a world where half
 - **Deployment adapters** — Cloudflare Workers (`createCloudflareHandler`), Vercel (Edge + Node.js), Fly.io (write replay)
 - **CSS pipeline** — Lightning CSS processing built-in, Tailwind v4 auto-detection, zero-config
 - **WebSocket support** — `defineWebSocket()` for real-time endpoints, `WebSocketRoom` for pub/sub broadcast
+- **AI toolkit (`@zauso-ai/capstan-ai`)** — standalone package: `createAI()` factory, `think<T>(prompt, { schema })` for structured reasoning, `generate(prompt)` for text, streaming variants, `remember()`/`recall()` memory with hybrid search, `memory.about(type, id)` scoped memory, `agent.run()` self-orchestrating loop with tool use
 - **Interactive CLI** — colored output, grouped help, fuzzy command matching, `@clack/prompts` interactive scaffolder with auto-install
 
 ---
@@ -459,7 +460,7 @@ bunx capstan start
 
 ## 📦 Packages
 
-Capstan ships 9 runtime packages:
+Capstan ships 10 runtime packages:
 
 | Package | Description |
 |---------|-------------|
@@ -468,6 +469,7 @@ Capstan ships 9 runtime packages:
 | `@zauso-ai/capstan-db` | Drizzle ORM, `defineModel`, field/relation helpers, migrations, auto CRUD, vector fields, `defineEmbedding`, hybrid search (SQLite, PostgreSQL, MySQL) |
 | `@zauso-ai/capstan-auth` | JWT sessions, API key auth, OAuth providers (Google, GitHub), DPoP (RFC 9449), SPIFFE/mTLS, token-aware rate limiting (`"human"` / `"agent"` / `"anonymous"`) |
 | `@zauso-ai/capstan-agent` | `CapabilityRegistry`, MCP server (stdio + Streamable HTTP), MCP client, A2A adapter (SSE), OpenAPI generator, LangChain integration |
+| `@zauso-ai/capstan-ai` | Standalone AI toolkit: `createAI`, `think`/`generate` (structured + streaming), `remember`/`recall` memory with hybrid search, `memory.about()` scoped memory, `agent.run()` self-orchestrating loop |
 | `@zauso-ai/capstan-react` | SSR with loaders, layouts, `Outlet`, selective hydration (`full` / `visible` / `none`), RSC foundations |
 | `@zauso-ai/capstan-dev` | Dev server with file watching, hot route reload, MCP/A2A endpoints |
 | `@zauso-ai/capstan-cli` | CLI: `dev`, `build`, `start`, `verify`, `add`, `mcp`, `db:*` |
@@ -495,14 +497,14 @@ Detailed guides live in the [`docs/`](docs/) directory:
 
 ## 🧑‍💻 Contributing
 
-Capstan is in active beta (`v1.0.0-beta.6`). Contributions are welcome!
+Capstan is in active beta (`v1.0.0-beta.7`). Contributions are welcome!
 
 ```bash
 git clone https://github.com/barry3406/capstan.git
 cd capstan
 npm install
 npm run build        # Build 9 runtime packages
-npm run test:new     # Bun tests (1125 tests, ~18s)
+npm run test:new     # Bun tests (1301 tests, ~18s)
 ```
 
 ### Conventions

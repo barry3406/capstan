@@ -12,8 +12,8 @@
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Tests](https://img.shields.io/badge/tests-1125%20passing-brightgreen?logo=bun&logoColor=white)](https://bun.sh)
-[![Version](https://img.shields.io/badge/version-1.0.0--beta.6-orange)](https://github.com/barry3406/capstan)
+[![Tests](https://img.shields.io/badge/tests-1301%20passing-brightgreen?logo=bun&logoColor=white)](https://bun.sh)
+[![Version](https://img.shields.io/badge/version-1.0.0--beta.7-orange)](https://github.com/barry3406/capstan)
 [![ESM](https://img.shields.io/badge/ESM-only-blue)](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Modules)
 
 [快速上手](#-快速上手) · [为什么选择 Capstan？](#-为什么选择-capstan) · [架构](#-架构) · [文档](#-文档) · [参与贡献](#-参与贡献)
@@ -362,6 +362,7 @@ Capstan 内置多层安全防护：
 
 - **向量字段 & RAG 原语** — `defineEmbedding` 支持向量存储、混合搜索（关键词 + 语义），开箱即用的检索增强生成能力
 - **LangChain 集成** — 将 Capstan 能力注册表导出为 LangChain 工具，无缝对接 LangChain 工作流
+- **AI 工具包（`@zauso-ai/capstan-ai`）** — 独立 AI 工具包：`createAI()` 工厂函数（无需 Capstan 框架即可使用）、`think<T>(prompt, { schema })` 结构化推理、`generate(prompt)` 文本生成、流式变体、`remember()`/`recall()` 记忆系统（混合搜索：向量相似度 + 关键词 + 时间衰减）、`memory.about(type, id)` 实体级记忆、`agent.run()` 自编排 Agent 循环
 
 ### 渲染与前端
 
@@ -459,7 +460,7 @@ bunx capstan start
 
 ## 📦 包一览
 
-### 运行时框架（9 个包）
+### 运行时框架（10 个包）
 
 | 包名 | 说明 |
 |------|------|
@@ -468,6 +469,7 @@ bunx capstan start
 | `@zauso-ai/capstan-db` | Drizzle ORM、`defineModel`、字段/关联辅助函数、数据迁移、自动 CRUD（SQLite、PostgreSQL、MySQL） |
 | `@zauso-ai/capstan-auth` | JWT 会话、Agent API Key 认证、OAuth 提供者（Google、GitHub）、权限检查（`"human"` / `"agent"` / `"anonymous"`） |
 | `@zauso-ai/capstan-agent` | `CapabilityRegistry`、MCP 服务器（带类型参数）、A2A 适配器（SSE）、OpenAPI 生成器 |
+| `@zauso-ai/capstan-ai` | 独立 AI 工具包：`createAI`、`think`/`generate`（结构化 + 流式）、`remember`/`recall` 记忆系统（混合搜索）、`memory.about()` 实体级记忆、`agent.run()` 自编排循环 |
 | `@zauso-ai/capstan-react` | SSR + loader、布局组件、`Outlet`、客户端水合 |
 | `@zauso-ai/capstan-dev` | 开发服务器，支持文件监听、路由热重载、MCP/A2A 端点 |
 | `@zauso-ai/capstan-cli` | CLI 命令：`dev`、`build`、`start`、`verify`、`add`、`mcp`、`db:*` |
@@ -495,14 +497,14 @@ bunx capstan start
 
 ## 🧑‍💻 参与贡献
 
-Capstan 目前处于 Beta 阶段（`v1.0.0-beta.6`），欢迎贡献！
+Capstan 目前处于 Beta 阶段（`v1.0.0-beta.7`），欢迎贡献！
 
 ```bash
 git clone https://github.com/barry3406/capstan.git
 cd capstan
 bun install
 bun run build        # 构建 9 个运行时包
-bun run test:new     # Bun 测试（1125 项测试，约 18s）
+bun run test:new     # Bun 测试（1301 项测试，约 18s）
 ```
 
 ### 开发规范

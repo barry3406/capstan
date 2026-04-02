@@ -1070,6 +1070,100 @@ for await (const chunk of openai.stream!([
 
 Options: \`model\`, \`temperature\`, \`maxTokens\`, \`systemPrompt\`, \`responseFormat\` (structured output).
 
+## AI Toolkit (@zauso-ai/capstan-ai)
+
+Standalone AI agent toolkit — works independently OR with Capstan. Install separately:
+
+\`\`\`bash
+npm install @zauso-ai/capstan-ai
+\`\`\`
+
+### Standalone Usage (no Capstan required)
+
+\`\`\`typescript
+import { createAI } from "@zauso-ai/capstan-ai";
+import { openaiProvider } from "@zauso-ai/capstan-agent";
+
+const ai = createAI({
+  llm: openaiProvider({ apiKey: process.env.OPENAI_API_KEY! }),
+});
+
+// Structured reasoning — returns typed result matching Zod schema
+const analysis = await ai.think("Classify this ticket: 'Payment failed'", {
+  schema: z.object({
+    category: z.enum(["billing", "technical", "account"]),
+    priority: z.enum(["low", "medium", "high"]),
+  }),
+});
+
+// Text generation
+const summary = await ai.generate("Summarize this in 3 bullets...");
+
+// Streaming variants
+for await (const chunk of ai.generateStream("Write a report...")) {
+  process.stdout.write(chunk);
+}
+\`\`\`
+
+### Memory (remember / recall)
+
+\`\`\`typescript
+// Store memories (auto-dedup: >0.92 cosine similarity → merge)
+await ai.remember("Customer prefers email communication");
+
+// Retrieve relevant memories (hybrid: vector 0.7 + keyword 0.3 + recency)
+const memories = await ai.recall("contact preferences");
+
+// Scoped memory — isolate per entity
+const customerMem = ai.memory.about("customer", "cust_123");
+await customerMem.remember("VIP since 2022");
+const relevant = await customerMem.recall("status");
+
+// Build LLM context from memories
+const context = await ai.memory.assembleContext({
+  query: "customer preferences",
+  maxTokens: 2000,
+});
+
+// Delete a memory
+await ai.memory.forget(memoryId);
+\`\`\`
+
+### Agent Loop (self-orchestrating)
+
+\`\`\`typescript
+const result = await ai.agent.run({
+  goal: "Research customer issues and draft a response",
+  about: ["customer", "cust_123"],
+  tools: [searchTickets, getHistory],
+  beforeToolCall: async (tool, args) => {
+    // Policy/approval hook — return false to block
+    return true;
+  },
+});
+// result.success, result.result, result.iterations, result.callStack
+\`\`\`
+
+### Using in Capstan Handlers
+
+\`\`\`typescript
+export const POST = defineAPI({
+  // ...
+  async handler({ input, ctx }) {
+    const analysis = await ctx.think(input.message, {
+      schema: z.object({ intent: z.string(), confidence: z.number() }),
+    });
+    await ctx.remember(\`User asked about: \${analysis.intent}\`);
+    const history = await ctx.recall(input.message);
+    return { analysis, relatedHistory: history };
+  },
+});
+\`\`\`
+
+### Memory Backend
+
+The default \`BuiltinMemoryBackend\` stores in memory. For production, implement the \`MemoryBackend\` interface for Mem0, Hindsight, Redis, or any custom store.
+
 ## Build Pipeline (Optional Vite Integration)
 
 Capstan optionally integrates with Vite for client-side code splitting and HMR. Install \`vite\` as a peer dependency to enable:

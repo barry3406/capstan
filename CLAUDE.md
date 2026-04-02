@@ -12,7 +12,7 @@ A Bun-native AI Agent full-stack framework. Like Next.js but designed for both h
 # Build all packages (18 packages, dependency order)
 bun run build
 
-# Run new tests (Bun — 1125 tests in ~18s)
+# Run new tests (Bun — 1301 tests in ~18s)
 bun run test:new
 
 
@@ -37,13 +37,14 @@ bunx create-capstan-app
 
 ## Architecture
 
-### Packages (9 runtime)
+### Packages (10 runtime)
 
 - `@zauso-ai/capstan-core` — Hono HTTP server, defineAPI, defineMiddleware, definePolicy, approval workflow, events, circuit breaker, metrics, compliance
 - `@zauso-ai/capstan-router` — File-based routing (.page.tsx, .api.ts, _layout.tsx, _middleware.ts)
 - `@zauso-ai/capstan-db` — Drizzle ORM, defineModel, field/relation helpers, migration, auto CRUD, vector search, RAG
 - `@zauso-ai/capstan-auth` — JWT sessions, API key auth, OAuth providers, DPoP, SPIFFE/mTLS
 - `@zauso-ai/capstan-agent` — CapabilityRegistry, MCP server/client, A2A adapter, OpenAPI, LangChain, commerce, testing
+- `@zauso-ai/capstan-ai` — Standalone AI toolkit: createAI, think/generate (structured + streaming), memory (remember/recall/about/forget), agent loop with tool use
 - `@zauso-ai/capstan-react` — Streaming SSR, selective hydration, layouts, Outlet, ServerOnly
 - `@zauso-ai/capstan-dev` — Dev server, CSS pipeline, multi-runtime adapters, file watching
 - `@zauso-ai/capstan-cli` — CLI with colored output, fuzzy matching, grouped help
@@ -77,6 +78,7 @@ Auto-generated endpoints:
 - A2A adapter: `packages/agent/src/a2a.ts`
 - MCP adapter: `packages/agent/src/mcp.ts`
 - Auto CRUD: `packages/db/src/crud.ts`
+- AI toolkit: `packages/ai/src/` (ai.ts, memory.ts, agent.ts)
 
 ## Verifier (AI TDD Self-Loop)
 

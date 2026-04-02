@@ -1,6 +1,6 @@
 {
   "name": "create-capstan-app",
-  "version": "1.0.0-beta.6",
+  "version": "1.0.0-beta.7",
   "type": "module",
   "bin": {
     "create-capstan-app": "./dist/index.js"
