@@ -12,7 +12,7 @@
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Tests](https://img.shields.io/badge/tests-1301%20passing-brightgreen?logo=bun&logoColor=white)](https://bun.sh)
+[![Tests](https://img.shields.io/badge/tests-1404%20passing-brightgreen?logo=bun&logoColor=white)](https://bun.sh)
 [![Version](https://img.shields.io/badge/version-1.0.0--beta.7-orange)](https://github.com/barry3406/capstan)
 [![ESM](https://img.shields.io/badge/ESM-only-blue)](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Modules)
 
@@ -369,6 +369,10 @@ Capstan 内置多层安全防护：
 - **React SSR + Loader** — 服务端渲染，数据加载器、布局组件、`Outlet`
 - **选择性 hydration** — 支持 `full`（完整水合）、`visible`（可见时水合）、`none`（纯静态）三种模式，精细控制客户端 JavaScript 加载
 - **React Server Components 基础** — 服务端组件支持，`ClientOnly`、`serverOnly()` 守卫，减少客户端 bundle 体积
+- **Image & Font 优化** — 响应式 srcset、预加载、懒加载、模糊占位符、`defineFont()` 支持 CSS 变量
+- **Metadata API** — `defineMetadata()` 用于 SEO、OpenGraph、Twitter Cards，支持标题模板和 `mergeMetadata()`
+- **错误边界与重置** — `<ErrorBoundary fallback={...}>` 支持重试，`<NotFound>` 404 组件
+- **缓存层与 ISR** — `cacheSet`/`cacheGet` 支持 TTL + 标签，`cached()` stale-while-revalidate 装饰器，`cacheInvalidateTag()` 批量失效
 - **CSS 管线** — 内建 Lightning CSS 处理，Tailwind v4 自动检测，零配置
 
 ### Agent 协议
@@ -470,7 +474,7 @@ bunx capstan start
 | `@zauso-ai/capstan-auth` | JWT 会话、Agent API Key 认证、OAuth 提供者（Google、GitHub）、权限检查（`"human"` / `"agent"` / `"anonymous"`） |
 | `@zauso-ai/capstan-agent` | `CapabilityRegistry`、MCP 服务器（带类型参数）、A2A 适配器（SSE）、OpenAPI 生成器 |
 | `@zauso-ai/capstan-ai` | 独立 AI 工具包：`createAI`、`think`/`generate`（结构化 + 流式）、`remember`/`recall` 记忆系统（混合搜索）、`memory.about()` 实体级记忆、`agent.run()` 自编排循环 |
-| `@zauso-ai/capstan-react` | SSR + loader、布局组件、`Outlet`、客户端水合 |
+| `@zauso-ai/capstan-react` | SSR + loader、布局组件、`Outlet`、客户端水合、`Image`、`defineFont`、`defineMetadata`、`ErrorBoundary` |
 | `@zauso-ai/capstan-dev` | 开发服务器，支持文件监听、路由热重载、MCP/A2A 端点 |
 | `@zauso-ai/capstan-cli` | CLI 命令：`dev`、`build`、`start`、`verify`、`add`、`mcp`、`db:*` |
 | `create-capstan-app` | 项目脚手架（`--template blank`、`--template tickets`） |
@@ -504,7 +508,7 @@ git clone https://github.com/barry3406/capstan.git
 cd capstan
 bun install
 bun run build        # 构建 9 个运行时包
-bun run test:new     # Bun 测试（1301 项测试，约 18s）
+bun run test:new     # Bun 测试（1404 项测试，约 18s）
 ```
 
 ### 开发规范

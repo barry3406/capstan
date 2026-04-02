@@ -584,6 +584,65 @@ export const ws = defineWebSocket("/ws/lobby", {
 
 ---
 
+### cacheSet(key, data, opts?)
+
+Store a value in the cache with optional TTL, tags, and ISR revalidation.
+
+```typescript
+function cacheSet<T>(key: string, data: T, opts?: CacheOptions): Promise<void>
+
+interface CacheOptions {
+  ttl?: number;        // Time-to-live in seconds
+  tags?: string[];     // Cache tags for bulk invalidation
+  revalidate?: number; // Revalidate interval in seconds (ISR)
+}
+```
+
+---
+
+### cacheGet(key)
+
+Retrieve a cached value. Returns `undefined` on miss. Supports stale-while-revalidate when `revalidate` was set.
+
+```typescript
+function cacheGet<T>(key: string): Promise<T | undefined>
+```
+
+---
+
+### cacheInvalidateTag(tag)
+
+Invalidate all cache entries associated with a tag.
+
+```typescript
+function cacheInvalidateTag(tag: string): Promise<void>
+```
+
+---
+
+### cached(fn, opts?)
+
+Stale-while-revalidate decorator. Wraps an async function with caching. Subsequent calls return the cached value until TTL expires, then revalidate in the background.
+
+```typescript
+function cached<T>(
+  fn: () => Promise<T>,
+  opts?: CacheOptions & { key?: string },
+): () => Promise<T>
+```
+
+---
+
+### setCacheStore(store)
+
+Replace the default in-memory cache store with a custom `KeyValueStore`.
+
+```typescript
+function setCacheStore(store: KeyValueStore<CacheEntry<unknown>>): void
+```
+
+---
+
 ---
 
 ## @zauso-ai/capstan-agent — LLM Providers
@@ -1759,7 +1818,7 @@ interface A2ATask {
 
 ## @zauso-ai/capstan-react
 
-React SSR with loaders, layouts, and hydration.
+React SSR with loaders, layouts, hydration, Image, Font, Metadata, and ErrorBoundary.
 
 ### renderPage(options)
 
@@ -1912,6 +1971,171 @@ React context for page data.
 
 ```typescript
 const PageContext: React.Context<CapstanPageContext>
+```
+
+---
+
+### Image
+
+Optimized image component with responsive srcset, lazy loading, and blur-up placeholder.
+
+```typescript
+function Image(props: ImageProps): ReactElement
+
+interface ImageProps {
+  src: string;
+  alt: string;
+  width?: number;
+  height?: number;
+  priority?: boolean;       // eager loading + fetchpriority="high"
+  quality?: number;         // 1-100, default 80
+  placeholder?: "blur" | "empty";
+  blurDataURL?: string;
+  sizes?: string;
+  loading?: "lazy" | "eager";
+  className?: string;
+  style?: Record<string, string | number>;
+}
+```
+
+**Usage:**
+
+```typescript
+import { Image } from "@zauso-ai/capstan-react";
+
+<Image src="/hero.jpg" alt="Hero" width={1200} priority placeholder="blur" />
+```
+
+---
+
+### defineFont(config)
+
+Configure a font for optimized loading. Returns a className, style object, and CSS variable name.
+
+```typescript
+function defineFont(config: FontConfig): FontResult
+
+interface FontConfig {
+  family: string;
+  src?: string;
+  weight?: string | number;
+  style?: string;
+  display?: "auto" | "block" | "swap" | "fallback" | "optional";
+  preload?: boolean;
+  subsets?: string[];
+  variable?: string;
+}
+
+interface FontResult {
+  className: string;
+  style: { fontFamily: string };
+  variable?: string;
+}
+```
+
+---
+
+### fontPreloadLink(config)
+
+Generate a `<link rel="preload">` element for a font.
+
+```typescript
+function fontPreloadLink(config: FontConfig): ReactElement | null
+```
+
+---
+
+### defineMetadata(metadata)
+
+Define page metadata for SEO, OpenGraph, and Twitter Cards.
+
+```typescript
+function defineMetadata(metadata: Metadata): Metadata
+
+interface Metadata {
+  title?: string | { default: string; template?: string };
+  description?: string;
+  keywords?: string[];
+  robots?: string | { index?: boolean; follow?: boolean };
+  openGraph?: {
+    title?: string;
+    description?: string;
+    type?: string;
+    url?: string;
+    image?: string;
+    siteName?: string;
+  };
+  twitter?: {
+    card?: "summary" | "summary_large_image";
+    title?: string;
+    description?: string;
+    image?: string;
+  };
+  icons?: { icon?: string; apple?: string };
+  canonical?: string;
+  alternates?: Record<string, string>;
+}
+```
+
+---
+
+### generateMetadataElements(metadata)
+
+Convert a `Metadata` object into an array of React `<meta>`, `<title>`, and `<link>` elements for use in `<head>`.
+
+```typescript
+function generateMetadataElements(metadata: Metadata): ReactElement[]
+```
+
+---
+
+### mergeMetadata(parent, child)
+
+Merge two metadata objects. Child values override parent. Supports title templates: if parent has `{ template: "%s | Site" }` and child has `title: "Page"`, the result is `"Page | Site"`.
+
+```typescript
+function mergeMetadata(parent: Metadata, child: Metadata): Metadata
+```
+
+---
+
+### ErrorBoundary
+
+React error boundary component with reset functionality.
+
+```typescript
+class ErrorBoundary extends Component<ErrorBoundaryProps> {}
+
+interface ErrorBoundaryProps {
+  fallback: ReactElement | ((error: Error, reset: () => void) => ReactElement);
+  children?: ReactNode;
+  onError?: (error: Error, errorInfo: ErrorInfo) => void;
+}
+```
+
+**Usage:**
+
+```typescript
+import { ErrorBoundary } from "@zauso-ai/capstan-react";
+
+<ErrorBoundary fallback={(error, reset) => (
+  <div>
+    <p>Something went wrong: {error.message}</p>
+    <button onClick={reset}>Try again</button>
+  </div>
+)}>
+  <MyComponent />
+</ErrorBoundary>
+```
+
+---
+
+### NotFound
+
+Pre-built 404 component for use with error boundaries or route handlers.
+
+```typescript
+function NotFound(): ReactElement
 ```
 
 ---

@@ -12,7 +12,7 @@ One `defineAPI()` call. Four protocol surfaces. Humans and AI agents, served sim
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Tests](https://img.shields.io/badge/tests-1301%20passing-brightgreen?logo=bun&logoColor=white)](https://bun.sh)
+[![Tests](https://img.shields.io/badge/tests-1404%20passing-brightgreen?logo=bun&logoColor=white)](https://bun.sh)
 [![Version](https://img.shields.io/badge/version-1.0.0--beta.7-orange)](https://github.com/barry3406/capstan)
 [![ESM](https://img.shields.io/badge/ESM-only-blue)](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Modules)
 
@@ -110,6 +110,10 @@ Think of it as **Next.js if it were designed from day one for a world where half
 - **CSS pipeline** — Lightning CSS processing built-in, Tailwind v4 auto-detection, zero-config
 - **WebSocket support** — `defineWebSocket()` for real-time endpoints, `WebSocketRoom` for pub/sub broadcast
 - **AI toolkit (`@zauso-ai/capstan-ai`)** — standalone package: `createAI()` factory, `think<T>(prompt, { schema })` for structured reasoning, `generate(prompt)` for text, streaming variants, `remember()`/`recall()` memory with hybrid search, `memory.about(type, id)` scoped memory, `agent.run()` self-orchestrating loop with tool use
+- **Image & Font optimization** — responsive srcset, preload, lazy loading, blur-up placeholder, `defineFont()` with CSS variable support
+- **Metadata API** — `defineMetadata()` for SEO, OpenGraph, Twitter Cards with title templates and `mergeMetadata()`
+- **Error boundaries with reset** — `<ErrorBoundary fallback={...}>` with retry, `<NotFound>` 404 component
+- **Cache layer with ISR** — `cacheSet`/`cacheGet` with TTL + tags, `cached()` stale-while-revalidate decorator, `cacheInvalidateTag()` bulk invalidation
 - **Interactive CLI** — colored output, grouped help, fuzzy command matching, `@clack/prompts` interactive scaffolder with auto-install
 
 ---
@@ -470,7 +474,7 @@ Capstan ships 10 runtime packages:
 | `@zauso-ai/capstan-auth` | JWT sessions, API key auth, OAuth providers (Google, GitHub), DPoP (RFC 9449), SPIFFE/mTLS, token-aware rate limiting (`"human"` / `"agent"` / `"anonymous"`) |
 | `@zauso-ai/capstan-agent` | `CapabilityRegistry`, MCP server (stdio + Streamable HTTP), MCP client, A2A adapter (SSE), OpenAPI generator, LangChain integration |
 | `@zauso-ai/capstan-ai` | Standalone AI toolkit: `createAI`, `think`/`generate` (structured + streaming), `remember`/`recall` memory with hybrid search, `memory.about()` scoped memory, `agent.run()` self-orchestrating loop |
-| `@zauso-ai/capstan-react` | SSR with loaders, layouts, `Outlet`, selective hydration (`full` / `visible` / `none`), RSC foundations |
+| `@zauso-ai/capstan-react` | SSR with loaders, layouts, `Outlet`, selective hydration (`full` / `visible` / `none`), RSC foundations, `Image`, `defineFont`, `defineMetadata`, `ErrorBoundary` |
 | `@zauso-ai/capstan-dev` | Dev server with file watching, hot route reload, MCP/A2A endpoints |
 | `@zauso-ai/capstan-cli` | CLI: `dev`, `build`, `start`, `verify`, `add`, `mcp`, `db:*` |
 | `create-capstan-app` | Project scaffolder (`--template blank`, `--template tickets`) |
@@ -504,7 +508,7 @@ git clone https://github.com/barry3406/capstan.git
 cd capstan
 npm install
 npm run build        # Build 9 runtime packages
-npm run test:new     # Bun tests (1301 tests, ~18s)
+npm run test:new     # Bun tests (1404 tests, ~18s)
 ```
 
 ### Conventions

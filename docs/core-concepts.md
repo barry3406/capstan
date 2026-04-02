@@ -893,3 +893,65 @@ const adapter = createFlyAdapter({
   replayWrites: true,
 });
 ```
+
+## Cache Layer & ISR
+
+Capstan includes a built-in cache layer with TTL, tag-based invalidation, and stale-while-revalidate (ISR) support. The cache is used for server-side data caching and incremental static regeneration patterns.
+
+### Basic Usage
+
+```typescript
+import { cacheSet, cacheGet, cacheInvalidateTag } from "@zauso-ai/capstan-core";
+
+// Cache data with TTL (in seconds) and tags
+await cacheSet("user:123", userData, {
+  ttl: 300,           // Expires after 5 minutes
+  tags: ["users"],    // Tag for bulk invalidation
+});
+
+// Retrieve cached data
+const data = await cacheGet("user:123");
+
+// Invalidate all entries with a given tag
+await cacheInvalidateTag("users");
+```
+
+### Stale-While-Revalidate with `cached()`
+
+The `cached()` decorator wraps an async function with caching. After the TTL expires, the stale value is returned immediately while a background revalidation runs:
+
+```typescript
+import { cached } from "@zauso-ai/capstan-core";
+
+const getUsers = cached(async () => {
+  return await db.query.users.findMany();
+}, {
+  ttl: 60,            // Serve stale for up to 60s while revalidating
+  tags: ["users"],    // Invalidate with cacheInvalidateTag("users")
+});
+
+// First call fetches from DB, subsequent calls return cached value
+const users = await getUsers();
+```
+
+### ISR (Incremental Static Regeneration)
+
+Use the `revalidate` option in `cacheSet` to enable ISR-style behavior. The cache entry is served stale while being revalidated in the background at the specified interval:
+
+```typescript
+await cacheSet("homepage-data", data, {
+  ttl: 3600,          // Hard expiry after 1 hour
+  revalidate: 60,     // Revalidate every 60 seconds in the background
+  tags: ["pages"],
+});
+```
+
+### Custom Cache Store
+
+By default, the cache uses an in-memory store. For production, swap to a custom `KeyValueStore` implementation (e.g., Redis):
+
+```typescript
+import { setCacheStore } from "@zauso-ai/capstan-core";
+
+setCacheStore(new RedisStore(redis, "cache:"));
+```

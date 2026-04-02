@@ -1235,6 +1235,76 @@ import { ClientOnly, serverOnly } from "@zauso-ai/capstan-react";
 // serverOnly() — guard that throws if imported in client code
 serverOnly(); // place at top of server-only modules
 \`\`\`
+
+## Image & Font Optimization
+
+\`\`\`typescript
+import { Image, defineFont, fontPreloadLink } from "@zauso-ai/capstan-react";
+
+// Optimized image: responsive srcset, lazy loading, blur-up placeholder
+<Image src="/hero.jpg" alt="Hero" width={1200} priority placeholder="blur" />
+
+// Font: returns className + style + CSS variable
+const inter = defineFont({ family: "Inter", src: "/fonts/inter.woff2", display: "swap" });
+// inter.className, inter.style, inter.variable
+
+// Preload link for <head>
+fontPreloadLink({ family: "Inter", src: "/fonts/inter.woff2" })
+\`\`\`
+
+## Metadata (SEO, OpenGraph, Twitter Cards)
+
+\`\`\`typescript
+import { defineMetadata, generateMetadataElements, mergeMetadata } from "@zauso-ai/capstan-react";
+
+const metadata = defineMetadata({
+  title: { default: "My App", template: "%s | My App" },
+  description: "Built with Capstan",
+  openGraph: { title: "My App", image: "/og.png" },
+  twitter: { card: "summary_large_image" },
+});
+
+// In your layout <head>:
+const elements = generateMetadataElements(metadata);
+
+// Merge parent + child metadata (child title "About" → "About | My App"):
+const merged = mergeMetadata(parentMetadata, childMetadata);
+\`\`\`
+
+## Error Boundaries
+
+\`\`\`typescript
+import { ErrorBoundary, NotFound } from "@zauso-ai/capstan-react";
+
+// Wrap components to catch render errors with reset support:
+<ErrorBoundary fallback={(error, reset) => (
+  <div>
+    <p>Error: {error.message}</p>
+    <button onClick={reset}>Retry</button>
+  </div>
+)}>
+  <MyComponent />
+</ErrorBoundary>
+
+// Pre-built 404 component:
+<NotFound />
+\`\`\`
+
+## Cache Layer (ISR)
+
+\`\`\`typescript
+import { cacheSet, cacheGet, cacheInvalidateTag, cached } from "@zauso-ai/capstan-core";
+
+// Cache with TTL + tags
+await cacheSet("user:123", userData, { ttl: 300, tags: ["users"] });
+const data = await cacheGet("user:123");
+
+// Stale-while-revalidate decorator
+const getUsers = cached(async () => fetchUsers(), { ttl: 60, tags: ["users"] });
+
+// Bulk invalidation by tag
+await cacheInvalidateTag("users");
+\`\`\`
 `;
 }
 

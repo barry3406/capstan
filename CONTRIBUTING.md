@@ -9,7 +9,7 @@ git clone https://github.com/barry3406/capstan.git
 cd capstan
 npm install
 npm run build        # Build all 9 runtime packages
-npm run test:new     # Run 1301 tests (~18s)
+npm run test:new     # Run 1404 tests (~18s)
 ```
 
 ## Branch Strategy
