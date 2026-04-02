@@ -292,48 +292,50 @@ describe("buildCSS", () => {
 // ---------------------------------------------------------------------------
 
 describe("watchStyles", () => {
+  let activeWatcher: { close: () => void } | null = null;
   beforeEach(async () => { tempDir = await mkdtemp(join(tmpdir(), "css-watch-")); });
-  afterEach(async () => { await rm(tempDir, { recursive: true, force: true }).catch(() => {}); });
+  afterEach(async () => {
+    // Always close watcher before deleting tempDir to avoid handle leak
+    if (activeWatcher) { try { activeWatcher.close(); } catch {} activeWatcher = null; }
+    await rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  });
   it("returns an object with a close() method", async () => {
     await mkdir(join(tempDir, "styles"), { recursive: true });
     await writeFile(join(tempDir, "styles", "main.css"), "body {}");
 
-    const watcher = watchStyles(join(tempDir, "styles"), () => {});
-    expect(watcher).toBeDefined();
-    expect(typeof watcher.close).toBe("function");
-    watcher.close();
+    activeWatcher = watchStyles(join(tempDir, "styles"), () => {});
+    expect(activeWatcher).toBeDefined();
+    expect(typeof activeWatcher.close).toBe("function");
   });
 
   it("close() can be called safely (does not throw)", async () => {
     await mkdir(join(tempDir, "styles"), { recursive: true });
     await writeFile(join(tempDir, "styles", "main.css"), "body {}");
 
-    const watcher = watchStyles(join(tempDir, "styles"), () => {});
-    expect(() => watcher.close()).not.toThrow();
+    activeWatcher = watchStyles(join(tempDir, "styles"), () => {});
+    expect(() => activeWatcher!.close()).not.toThrow();
+    activeWatcher = null;
   });
 
   it("close() can be called multiple times without error", async () => {
     await mkdir(join(tempDir, "styles"), { recursive: true });
 
-    const watcher = watchStyles(join(tempDir, "styles"), () => {});
-    watcher.close();
-    // Second close should not throw
-    expect(() => watcher.close()).not.toThrow();
+    activeWatcher = watchStyles(join(tempDir, "styles"), () => {});
+    activeWatcher.close();
+    expect(() => activeWatcher!.close()).not.toThrow();
+    activeWatcher = null;
   });
 
   it("returns no-op watcher when directory does not exist", () => {
     const bogusDir = join(tempDir, "nonexistent-styles-dir");
     const callback = mock(() => {});
 
-    const watcher = watchStyles(bogusDir, callback);
-    expect(watcher).toBeDefined();
-    expect(typeof watcher.close).toBe("function");
-
-    // close() on the no-op watcher should not throw
-    expect(() => watcher.close()).not.toThrow();
-
-    // Callback should never have been invoked
+    activeWatcher = watchStyles(bogusDir, callback);
+    expect(activeWatcher).toBeDefined();
+    expect(typeof activeWatcher.close).toBe("function");
+    expect(() => activeWatcher!.close()).not.toThrow();
     expect(callback).not.toHaveBeenCalled();
+    activeWatcher = null;
   });
 
   it("triggers callback for .css file changes", async () => {
@@ -346,27 +348,18 @@ describe("watchStyles", () => {
       resolveCallback = resolve;
     });
 
-    const watcher = watchStyles(stylesDir, (changedFile) => {
+    activeWatcher = watchStyles(stylesDir, (changedFile) => {
       resolveCallback(changedFile);
     });
 
-    try {
-      // Modify the CSS file to trigger a watch event
-      await writeFile(join(stylesDir, "main.css"), "body { color: red; }");
+    await writeFile(join(stylesDir, "main.css"), "body { color: red; }");
 
-      // Wait for the debounced callback (100ms debounce + margin)
-      const result = await Promise.race([
-        callbackPromise,
-        new Promise<"timeout">((resolve) =>
-          setTimeout(() => resolve("timeout"), 500),
-        ),
-      ]);
+    const result = await Promise.race([
+      callbackPromise,
+      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 500)),
+    ]);
 
-      // The watcher should have fired for a .css file
-      expect(result).not.toBe("timeout");
-    } finally {
-      watcher.close();
-    }
+    expect(result).not.toBe("timeout");
   });
 
   it("does NOT trigger callback for non-.css files", async () => {
@@ -374,21 +367,15 @@ describe("watchStyles", () => {
     await mkdir(stylesDir, { recursive: true });
 
     const callback = mock(() => {});
-    const watcher = watchStyles(stylesDir, callback);
+    activeWatcher = watchStyles(stylesDir, callback);
 
-    try {
-      // Write a non-CSS file — the watcher should ignore it
-      await writeFile(join(stylesDir, "notes.txt"), "not css");
-      await writeFile(join(stylesDir, "data.json"), "{}");
-      await writeFile(join(stylesDir, "script.js"), "var x = 1;");
+    await writeFile(join(stylesDir, "notes.txt"), "not css");
+    await writeFile(join(stylesDir, "data.json"), "{}");
+    await writeFile(join(stylesDir, "script.js"), "var x = 1;");
 
-      // Wait long enough for debounce (100ms) to fire
-      await new Promise((resolve) => setTimeout(resolve, 300));
+    await new Promise((resolve) => setTimeout(resolve, 300));
 
-      expect(callback).not.toHaveBeenCalled();
-    } finally {
-      watcher.close();
-    }
+    expect(callback).not.toHaveBeenCalled();
   });
 
   it("close() prevents further callbacks (synchronous check)", async () => {
@@ -396,13 +383,10 @@ describe("watchStyles", () => {
     await mkdir(stylesDir, { recursive: true });
     await writeFile(join(stylesDir, "main.css"), "body {}");
 
-    const watcher = watchStyles(stylesDir, () => {});
-
-    // Close should be safe and immediate
-    watcher.close();
-
-    // Calling close again should not throw
-    expect(() => watcher.close()).not.toThrow();
+    activeWatcher = watchStyles(stylesDir, () => {});
+    activeWatcher.close();
+    expect(() => activeWatcher!.close()).not.toThrow();
+    activeWatcher = null;
   });
 });
 
