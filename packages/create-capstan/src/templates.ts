@@ -2,24 +2,26 @@
 // Template strings for generated Capstan projects
 // ---------------------------------------------------------------------------
 
+const CAPSTAN_PACKAGE_RANGE = "^1.0.0-beta.7";
+
 export function packageJson(
   projectName: string,
   template: "blank" | "tickets" = "blank",
 ): string {
   const deps: Record<string, string> = {
-    "@zauso-ai/capstan-cli": "^1.0.0-beta.3",
-    "@zauso-ai/capstan-core": "^1.0.0-beta.3",
-    "@zauso-ai/capstan-dev": "^1.0.0-beta.3",
-    "@zauso-ai/capstan-react": "^1.0.0-beta.3",
-    "@zauso-ai/capstan-router": "^1.0.0-beta.3",
+    "@zauso-ai/capstan-cli": CAPSTAN_PACKAGE_RANGE,
+    "@zauso-ai/capstan-core": CAPSTAN_PACKAGE_RANGE,
+    "@zauso-ai/capstan-dev": CAPSTAN_PACKAGE_RANGE,
+    "@zauso-ai/capstan-react": CAPSTAN_PACKAGE_RANGE,
+    "@zauso-ai/capstan-router": CAPSTAN_PACKAGE_RANGE,
     zod: "^3.23.0",
   };
 
   // Only include capstan-db for templates that actually use it (native dep
   // issues with better-sqlite3 make it a poor default).
   if (template === "tickets") {
-    deps["@zauso-ai/capstan-auth"] = "^1.0.0-beta.3";
-    deps["@zauso-ai/capstan-db"] = "^1.0.0-beta.3";
+    deps["@zauso-ai/capstan-auth"] = CAPSTAN_PACKAGE_RANGE;
+    deps["@zauso-ai/capstan-db"] = CAPSTAN_PACKAGE_RANGE;
   }
 
   return JSON.stringify(
@@ -120,10 +122,11 @@ export default function RootLayout() {
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="theme-color" content="#f4efe6" />
         <title>${title}</title>
         <link rel="stylesheet" href="/styles.css" precedence="default" />
       </head>
-      <body>
+      <body className="capstan-shell">
         <Outlet />
       </body>
     </html>
@@ -132,19 +135,87 @@ export default function RootLayout() {
 `;
 }
 
-export function indexPage(title: string): string {
+export function indexPage(
+  title: string,
+  projectName: string,
+  template: "blank" | "tickets" = "blank",
+): string {
+  const templateTitle = template === "tickets"
+    ? "Tickets reference app"
+    : "Blank launchpad";
+  const templateDescription = template === "tickets"
+    ? "A realistic starting point with CRUD routes, auth, and a model you can copy with confidence."
+    : "A clean Capstan shell with just enough surface area to ship your first route fast.";
+  const templatePointers = template === "tickets"
+    ? `
+          <li><code>app/routes/tickets/index.api.ts</code> shows a read/write route pair.</li>
+          <li><code>app/models/ticket.model.ts</code> is the reference model and migration starting point.</li>
+          <li><code>capstan verify --json</code> is the quickest way to check contracts after edits.</li>
+`
+    : `
+          <li><code>app/routes/api/health.api.ts</code> is the smallest complete <code>defineAPI()</code> example.</li>
+          <li><code>capstan add api hello</code> is the fastest way to grow from one route to many.</li>
+          <li><code>AGENTS.md</code> teaches coding agents the golden path for this app.</li>
+`;
+
   return `export default function HomePage() {
   return (
-    <main>
-      <h1>Welcome to ${title}</h1>
-      <p>Built with Capstan — the AI Agent Native full-stack framework.</p>
-      <nav>
-        <ul>
-          <li><a href="/.well-known/capstan.json">Agent Manifest</a></li>
-          <li><a href="/openapi.json">OpenAPI Spec</a></li>
-          <li><a href="/health">Health Check</a></li>
-        </ul>
-      </nav>
+    <main className="landing-shell">
+      <section className="hero-card">
+        <p className="eyebrow">Capstan starter · ${templateTitle}</p>
+        <h1>Welcome aboard ${title}</h1>
+        <p className="hero-copy">
+          This app already ships with a page, an API route, agent-readable surfaces, deployment scripts,
+          and a project-level <code>AGENTS.md</code> that teaches coding agents how to extend it.
+        </p>
+        <div className="hero-actions">
+          <a className="button button-primary" href="/.well-known/capstan.json">Open agent manifest</a>
+          <a className="button button-secondary" href="/openapi.json">View OpenAPI</a>
+          <a className="button button-secondary" href="/health">Health check</a>
+        </div>
+      </section>
+
+      <section className="panel-grid">
+        <article className="panel panel-highlight">
+          <p className="panel-kicker">Project pulse</p>
+          <h2>${projectName}</h2>
+          <p>${templateDescription}</p>
+          <ul className="resource-list">
+            <li><span>Framework contract</span><a href="/.well-known/capstan.json">/.well-known/capstan.json</a></li>
+            <li><span>HTTP + tool schema</span><a href="/openapi.json">/openapi.json</a></li>
+            <li><span>Runtime status</span><a href="/health">/health</a></li>
+          </ul>
+        </article>
+
+        <article className="panel">
+          <p className="panel-kicker">Edit here first</p>
+          <h2>Good first moves</h2>
+          <ul className="code-list">
+            <li><code>app/routes/index.page.tsx</code> shapes the first impression.</li>
+            <li><code>capstan.config.ts</code> is where app metadata and providers live.</li>
+            <li><code>app/styles/main.css</code> controls the visual voice of the starter.</li>
+            <li><code>AGENTS.md</code> keeps human and coding-agent workflows aligned.</li>
+          </ul>
+        </article>
+
+        <article className="panel">
+          <p className="panel-kicker">Capstan golden path</p>
+          <h2>Use the framework, do not fight it</h2>
+          <div className="command-stack">
+            <code>capstan add api hello</code>
+            <code>capstan add page dashboard</code>
+            <code>capstan verify --json</code>
+            <code>capstan build --target node-standalone</code>
+          </div>
+        </article>
+
+        <article className="panel">
+          <p className="panel-kicker">Template notes</p>
+          <h2>What this starter is trying to teach</h2>
+          <ul className="code-list">
+${templatePointers}          </ul>
+        </article>
+      </section>
     </main>
   );
 }
@@ -327,6 +398,19 @@ primary_region = "iad"
 
 export function mainCss(): string {
   return `/* app/styles/main.css — processed by Lightning CSS or Tailwind */
+:root {
+  --paper: #f4efe6;
+  --paper-strong: #fff9f0;
+  --ink: #1e2433;
+  --muted: #5e6575;
+  --accent: #0f766e;
+  --accent-strong: #0b4f4a;
+  --accent-soft: rgba(15, 118, 110, 0.14);
+  --line: rgba(30, 36, 51, 0.12);
+  --panel: rgba(255, 255, 255, 0.86);
+  --shadow: 0 24px 80px rgba(21, 27, 38, 0.14);
+}
+
 *,
 *::before,
 *::after {
@@ -334,22 +418,239 @@ export function mainCss(): string {
   margin: 0;
 }
 
-body {
-  font-family: system-ui, -apple-system, sans-serif;
-  line-height: 1.6;
-  color: #1a1a2e;
-  background: #f8f9fa;
+html {
+  min-height: 100%;
 }
 
-a { color: #0066cc; text-decoration: none; }
-a:hover { text-decoration: underline; }
+body {
+  min-height: 100vh;
+  font-family: "Avenir Next", "Segoe UI", "Helvetica Neue", sans-serif;
+  line-height: 1.6;
+  color: var(--ink);
+  background:
+    radial-gradient(circle at top left, rgba(254, 240, 138, 0.45), transparent 26rem),
+    radial-gradient(circle at top right, rgba(45, 212, 191, 0.24), transparent 22rem),
+    linear-gradient(180deg, #fbf7f0 0%, var(--paper) 55%, #ede6d8 100%);
+}
+
+.capstan-shell {
+  position: relative;
+}
+
+.capstan-shell::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgba(30, 36, 51, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(30, 36, 51, 0.03) 1px, transparent 1px);
+  background-size: 2rem 2rem;
+  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.35), transparent 70%);
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: none;
+}
 
 code {
-  font-family: ui-monospace, 'Cascadia Code', monospace;
-  background: #e9ecef;
-  padding: 0.15em 0.3em;
-  border-radius: 3px;
+  font-family: "IBM Plex Mono", "SFMono-Regular", ui-monospace, monospace;
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(30, 36, 51, 0.08);
+  padding: 0.16em 0.42em;
+  border-radius: 999px;
   font-size: 0.9em;
+}
+
+.landing-shell {
+  width: min(1120px, calc(100% - 2rem));
+  margin: 0 auto;
+  padding: 4rem 0 5rem;
+}
+
+.hero-card,
+.panel {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 1.75rem;
+  background: var(--panel);
+  backdrop-filter: blur(18px);
+  box-shadow: var(--shadow);
+}
+
+.hero-card {
+  padding: clamp(1.8rem, 4vw, 3.4rem);
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.94), rgba(255, 249, 240, 0.88)),
+    radial-gradient(circle at top right, rgba(15, 118, 110, 0.18), transparent 18rem);
+}
+
+.hero-card::after {
+  content: "";
+  position: absolute;
+  right: -3rem;
+  top: -4rem;
+  width: 12rem;
+  height: 12rem;
+  border-radius: 999px;
+  background: rgba(15, 118, 110, 0.12);
+  filter: blur(8px);
+}
+
+.eyebrow,
+.panel-kicker {
+  font-size: 0.82rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--accent-strong);
+}
+
+.hero-card h1,
+.panel h2 {
+  font-family: "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+  letter-spacing: -0.03em;
+}
+
+.hero-card h1 {
+  max-width: 11ch;
+  margin-top: 0.55rem;
+  font-size: clamp(2.9rem, 8vw, 5.4rem);
+  line-height: 0.95;
+}
+
+.hero-copy {
+  max-width: 48rem;
+  margin-top: 1.15rem;
+  font-size: 1.08rem;
+  color: var(--muted);
+}
+
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.9rem;
+  margin-top: 1.8rem;
+}
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2.9rem;
+  padding: 0 1rem;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font-weight: 600;
+  transition: transform 150ms ease, border-color 150ms ease, background 150ms ease;
+}
+
+.button:hover {
+  transform: translateY(-1px);
+}
+
+.button-primary {
+  color: white;
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-strong) 100%);
+}
+
+.button-secondary {
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.68);
+  border-color: var(--line);
+}
+
+.panel-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.panel {
+  padding: 1.4rem;
+}
+
+.panel-highlight {
+  background:
+    linear-gradient(180deg, rgba(15, 118, 110, 0.1), rgba(255, 255, 255, 0.92)),
+    var(--panel);
+}
+
+.panel h2 {
+  margin-top: 0.35rem;
+  font-size: 1.7rem;
+}
+
+.panel p,
+.panel li,
+.resource-list span {
+  color: var(--muted);
+}
+
+.resource-list,
+.code-list {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 1rem;
+  padding: 0;
+  list-style: none;
+}
+
+.resource-list li {
+  display: grid;
+  gap: 0.1rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid rgba(30, 36, 51, 0.08);
+}
+
+.resource-list li:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.resource-list a {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.command-stack {
+  display: grid;
+  gap: 0.7rem;
+  margin-top: 1rem;
+}
+
+.command-stack code {
+  width: fit-content;
+  max-width: 100%;
+  padding: 0.55rem 0.8rem;
+  border-radius: 1rem;
+  background: var(--paper-strong);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+
+@media (max-width: 760px) {
+  .landing-shell {
+    width: min(100% - 1rem, 40rem);
+    padding: 1rem 0 2rem;
+  }
+
+  .panel-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .hero-actions {
+    flex-direction: column;
+  }
+
+  .button {
+    width: 100%;
+  }
 }
 `;
 }
@@ -358,7 +659,7 @@ code {
 // AGENTS.md
 // ---------------------------------------------------------------------------
 
-export function agentsMd(
+export function legacyAgentsMd(
   projectName: string,
   template: "blank" | "tickets",
 ): string {
@@ -1735,6 +2036,290 @@ To opt out for specific links, add \`data-capstan-external\`:
 \`\`\`
 
 View Transitions (\`document.startViewTransition()\`) are applied automatically when the browser supports them.
+`;
+}
+
+export function agentsMd(
+  projectName: string,
+  template: "blank" | "tickets",
+): string {
+  const templateNotes = template === "tickets"
+    ? `
+## Template Notes
+
+This app was scaffolded from the **tickets** template.
+
+Use these files as the canonical Capstan examples before inventing a new pattern:
+- \`app/models/ticket.model.ts\` — reference data model
+- \`app/routes/tickets/index.api.ts\` — list + create route pair
+- \`app/routes/tickets/[id].api.ts\` — dynamic route params and record fetch
+
+If you need to add another resource, copy the shape of the tickets flow first.
+`
+    : `
+## Template Notes
+
+This app was scaffolded from the **blank** template.
+
+Treat the generated files as the minimum Capstan slice:
+- \`app/routes/index.page.tsx\` — first page route
+- \`app/routes/api/health.api.ts\` — smallest complete \`defineAPI()\` example
+- \`app/policies/index.ts\` — where reusable policies should live
+`;
+
+  return `# AGENTS.md — Capstan Operating Guide
+
+This project was scaffolded by Capstan for **${projectName}**.
+
+Use this file as the default playbook for coding agents. Favor Capstan's explicit
+golden path over custom abstractions unless the task clearly requires it.
+
+## Start Here
+
+Read these files first, in order:
+1. \`capstan.config.ts\`
+2. \`app/routes/\`
+3. \`AGENTS.md\`
+
+Then use this loop:
+1. Run \`capstan dev\`
+2. Make the smallest explicit change
+3. Verify with \`capstan verify --json\`
+4. Finish with \`capstan build\`
+
+## What Capstan Means
+
+Capstan is **file-based, multi-surface, and machine-readable**.
+
+- A route file defines the product surface.
+- A single \`defineAPI()\` becomes **HTTP + MCP + A2A + OpenAPI**.
+- Page loaders run on the server and should call internal APIs through loader \`fetch\`, not by hard-coding localhost HTTP calls.
+- \`app/public/\` is served from the root URL path, so \`app/public/logo.svg\` becomes \`/logo.svg\`.
+- \`dist/deploy-manifest.json\` is the deployment contract after build.
+
+When a user asks for a feature, think in this order:
+1. Which route or page owns the behavior?
+2. Does it need a model?
+3. Does it need a policy?
+4. How will it be verified?
+5. What agent-visible surface changes automatically because of Capstan?
+
+## Project Map
+
+\`\`\`
+app/
+  routes/              # File-based routing and page boundaries
+    *.api.ts           # API handlers created with defineAPI()
+    *.page.tsx         # Pages + optional loader()
+    _layout.tsx        # Shared layout wrapper
+    _middleware.ts     # Route-scoped middleware
+    _loading.tsx       # Route-scoped loading boundary
+    _error.tsx         # Route-scoped error boundary
+    not-found.tsx      # Route-scoped 404 fallback
+    (group)/           # Route group, not part of the URL
+    [id]/              # Dynamic segment
+    [...rest]/         # Catch-all segment
+  models/              # defineModel() files
+  policies/            # definePolicy() files
+  migrations/          # SQL migrations
+  public/              # Static assets, served from /
+capstan.config.ts      # App config, providers, metadata
+\`\`\`
+${templateNotes}
+## Commands Agents Should Reach For
+
+\`\`\`bash
+capstan dev
+capstan build
+capstan start
+capstan verify --json
+capstan add api <name>
+capstan add page <name>
+capstan add model <name>
+capstan add policy <name>
+capstan db:migrate
+capstan db:push
+capstan db:status
+capstan ops:health
+capstan build --target node-standalone
+capstan verify --deployment --target <target>
+\`\`\`
+
+## Golden Paths
+
+### Add an API route
+
+Prefer scaffolding first:
+
+\`\`\`bash
+capstan add api orders
+\`\`\`
+
+Then shape the route around \`defineAPI()\`:
+
+\`\`\`typescript
+import { defineAPI } from "@zauso-ai/capstan-core";
+import { z } from "zod";
+
+export const GET = defineAPI({
+  input: z.object({
+    status: z.string().optional(),
+  }),
+  output: z.object({
+    items: z.array(z.object({ id: z.string(), title: z.string() })),
+  }),
+  description: "List orders",
+  capability: "read",
+  resource: "order",
+  async handler({ input, params, ctx }) {
+    return { items: [] };
+  },
+});
+\`\`\`
+
+Always set:
+- \`input\` and \`output\` when the route has a stable contract
+- \`description\`
+- \`capability\`
+- \`resource\`
+
+Add \`policy\` for write flows or protected reads.
+
+### Add a page route
+
+Prefer scaffolding first:
+
+\`\`\`bash
+capstan add page dashboard
+\`\`\`
+
+When the page needs data, use a loader and in-process fetch:
+
+\`\`\`typescript
+import { useLoaderData } from "@zauso-ai/capstan-react";
+
+export async function loader({ fetch }) {
+  return fetch.get("/api/orders");
+}
+
+export default function DashboardPage() {
+  const data = useLoaderData<typeof loader>();
+  return <pre>{JSON.stringify(data, null, 2)}</pre>;
+}
+\`\`\`
+
+Use directory boundaries instead of ad hoc conditionals:
+- \`_layout.tsx\` for shared UI shell
+- \`_loading.tsx\` for suspense fallback
+- \`_error.tsx\` for scoped error UI
+- \`not-found.tsx\` for scoped 404 behavior
+
+### Add a model
+
+If the feature needs durable data:
+1. Create or scaffold a model in \`app/models/\`
+2. Run \`capstan db:migrate\`
+3. Apply with \`capstan db:push\`
+4. Update the route handler or page loader that consumes the data
+
+Use \`defineModel()\` as the default path. Keep fields explicit and predictable.
+
+### Add a policy
+
+Policies live in \`app/policies/\` and are referenced by key from \`defineAPI()\`.
+
+\`\`\`typescript
+import { definePolicy } from "@zauso-ai/capstan-core";
+
+export const requireAuth = definePolicy({
+  key: "requireAuth",
+  title: "Require Authentication",
+  effect: "deny",
+  async check({ ctx }) {
+    return ctx.auth.isAuthenticated
+      ? { effect: "allow" }
+      : { effect: "deny", reason: "Authentication required" };
+  },
+});
+\`\`\`
+
+## Verification Checklist
+
+Before you call work done, try to cover the narrowest useful set of checks:
+
+### For route or page changes
+
+\`\`\`bash
+capstan dev
+capstan verify --json
+capstan build
+\`\`\`
+
+### For model changes
+
+\`\`\`bash
+capstan db:migrate
+capstan db:status
+capstan db:push
+\`\`\`
+
+### For deployment-sensitive changes
+
+\`\`\`bash
+capstan build --target node-standalone
+capstan verify --deployment --target node-standalone
+\`\`\`
+
+## Common Mistakes
+
+Avoid these mistakes unless there is a strong reason:
+
+- Do not hand-edit \`dist/\`
+- Do not bypass \`capstan add\` if a scaffold command already exists
+- Do not forget \`description\`, \`capability\`, or \`resource\` on \`defineAPI()\`
+- Do not use external HTTP calls from page loaders when loader \`fetch\` can call internal APIs directly
+- Do not put static assets under \`/public/...\` in links; use root paths like \`/logo.svg\`
+- Do not rename route files casually; filenames are the routing contract
+- Do not add write endpoints without thinking through policy and verification
+
+## Capstan File Conventions That Matter
+
+- \`app/routes/orders/index.api.ts\` -> \`/orders\`
+- \`app/routes/orders/[id].api.ts\` -> \`/orders/:id\`
+- \`app/routes/orders/index.page.tsx\` -> page route
+- \`app/routes/(ops)/dashboard.page.tsx\` -> route group omitted from URL
+- \`_layout.tsx\`, \`_middleware.ts\`, \`_loading.tsx\`, \`_error.tsx\`, and \`not-found.tsx\` all inherit by directory scope
+
+## For Coding Agents Working In This App
+
+Optimize for these behaviors:
+
+- Prefer one obvious Capstan-native implementation path
+- Keep machine-readable contracts explicit
+- Keep routing, policy, and deployment behavior deterministic
+- Use the generated examples as reference before introducing a new pattern
+- Explain changes in terms of routes, surfaces, policies, models, and verification
+
+If a user asks for "an API", remember Capstan may also change:
+- agent manifest
+- MCP surface
+- A2A surface
+- OpenAPI output
+
+If a user asks for "a page", remember to check:
+- layout scope
+- loading/error/not-found boundaries
+- loader data flow
+- hydration mode or render mode only if they actually matter
+
+## Good First Files To Edit
+
+- \`app/routes/index.page.tsx\`
+- \`app/routes/api/health.api.ts\`
+- \`app/styles/main.css\`
+- \`capstan.config.ts\`
+
+Keep this file aligned with the project as the app grows.
 `;
 }
 

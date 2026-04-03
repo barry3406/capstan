@@ -1,4 +1,11 @@
 import * as p from "@clack/prompts";
+import { deployOptions, templateOptions, type DeployTarget, type Template } from "./options.js";
+
+interface SelectOption {
+  value: string;
+  label: string;
+  hint?: string;
+}
 
 export async function prompt(
   question: string,
@@ -21,11 +28,13 @@ export async function prompt(
 
 export async function select(
   question: string,
-  options: string[],
+  options: readonly (string | SelectOption)[],
 ): Promise<string> {
   const result = await p.select({
     message: question,
-    options: options.map((o) => ({ value: o, label: o })),
+    options: options.map((option) => typeof option === "string"
+      ? { value: option, label: option }
+      : option),
   });
 
   if (p.isCancel(result)) {
@@ -37,7 +46,7 @@ export async function select(
 }
 
 export async function confirmPrompt(message: string): Promise<boolean> {
-  const result = await p.confirm({ message });
+  const result = await p.confirm({ message, initialValue: true });
 
   if (p.isCancel(result)) {
     p.cancel("Setup cancelled.");
@@ -49,24 +58,25 @@ export async function confirmPrompt(message: string): Promise<boolean> {
 
 export async function runPrompts(): Promise<{
   projectName: string;
-  template: "blank" | "tickets";
-  deploy: "none" | "docker" | "vercel-node" | "vercel-edge" | "cloudflare" | "fly";
+  template: Template;
+  deploy: DeployTarget;
 }> {
-  const projectName = await prompt("Project name", "my-capstan-app");
+  p.note(
+    [
+      "Capstan scaffolds a real app shell, a health route, deployment scripts, and an AGENTS.md guide for coding agents.",
+      "Pick a template, choose whether you want deploy files now, and you can start shipping immediately.",
+    ].join("\n"),
+    "What you'll get",
+  );
 
-  const template = await select("Which template?", ["blank", "tickets"]);
-  const deploy = await select("Deployment target?", [
-    "none",
-    "docker",
-    "vercel-node",
-    "vercel-edge",
-    "cloudflare",
-    "fly",
-  ]);
+  const projectName = await prompt("What should we call your app?", "my-capstan-app");
+
+  const template = await select("What kind of starting point do you want?", templateOptions);
+  const deploy = await select("Do you want deployment files from day one?", deployOptions);
 
   return {
     projectName,
-    template: template as "blank" | "tickets",
-    deploy: deploy as "none" | "docker" | "vercel-node" | "vercel-edge" | "cloudflare" | "fly",
+    template: template as Template,
+    deploy: deploy as DeployTarget,
   };
 }

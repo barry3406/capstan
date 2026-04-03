@@ -188,6 +188,16 @@ describe("Scaffolded project structure", () => {
     expect(await fileExists(join(projectDir, ".gitignore"))).toBe(true);
   });
 
+  it("AGENTS.md exists and includes Capstan onboarding guidance", async () => {
+    const agentsPath = join(projectDir, "AGENTS.md");
+    expect(await fileExists(agentsPath)).toBe(true);
+
+    const content = await readFile(agentsPath, "utf-8");
+    expect(content).toContain("## Golden Paths");
+    expect(content).toContain("capstan verify --json");
+    expect(content).toContain("HTTP + MCP + A2A + OpenAPI");
+  });
+
   it("docker deployment files exist when scaffolded with docker target", async () => {
     expect(await fileExists(join(projectDir, "Dockerfile"))).toBe(true);
     expect(await fileExists(join(projectDir, ".dockerignore"))).toBe(true);

@@ -80,7 +80,7 @@ export async function scaffoldProject(config: {
     { path: "tsconfig.json", content: tsconfig() },
     { path: "capstan.config.ts", content: capstanConfig(projectName, title, template) },
     { path: "app/routes/_layout.tsx", content: rootLayout(title) },
-    { path: "app/routes/index.page.tsx", content: indexPage(title) },
+    { path: "app/routes/index.page.tsx", content: indexPage(title, projectName, template) },
     { path: "app/routes/api/health.api.ts", content: healthApi() },
     { path: "app/policies/index.ts", content: policiesIndex() },
     { path: ".gitignore", content: gitignore() },

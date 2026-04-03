@@ -1,7 +1,15 @@
 #!/usr/bin/env node
 
-import { runPrompts, prompt, select, confirmPrompt } from "./prompts.js";
+import { runPrompts, select, confirmPrompt } from "./prompts.js";
 import { scaffoldProject } from "./scaffold.js";
+import {
+  deployOptions,
+  templateOptions,
+  validDeployTargets,
+  validTemplates,
+  type DeployTarget,
+  type Template,
+} from "./options.js";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
 import * as p from "@clack/prompts";
@@ -10,18 +18,6 @@ import pc from "picocolors";
 // ---------------------------------------------------------------------------
 // CLI argument parsing (no external deps)
 // ---------------------------------------------------------------------------
-
-const VALID_TEMPLATES = ["blank", "tickets"] as const;
-type Template = (typeof VALID_TEMPLATES)[number];
-const VALID_DEPLOY_TARGETS = [
-  "none",
-  "docker",
-  "vercel-node",
-  "vercel-edge",
-  "cloudflare",
-  "fly",
-] as const;
-type DeployTarget = (typeof VALID_DEPLOY_TARGETS)[number];
 
 function printHelp(): void {
   console.log(`
@@ -78,11 +74,11 @@ function parseArgs(argv: string[]): {
     if (arg === "--template" || arg === "-t") {
       const next = argv[i + 1];
       if (next && !next.startsWith("-")) {
-        if (VALID_TEMPLATES.includes(next as Template)) {
+        if (validTemplates.includes(next as Template)) {
           template = next as Template;
         } else {
           console.error(
-            pc.red(`  Error: unknown template "${next}". Valid templates: ${VALID_TEMPLATES.join(", ")}`),
+            pc.red(`  Error: unknown template "${next}". Valid templates: ${validTemplates.join(", ")}`),
           );
           process.exit(1);
         }
@@ -97,11 +93,11 @@ function parseArgs(argv: string[]): {
     if (arg === "--deploy") {
       const next = argv[i + 1];
       if (next && !next.startsWith("-")) {
-        if (VALID_DEPLOY_TARGETS.includes(next as DeployTarget)) {
+        if (validDeployTargets.includes(next as DeployTarget)) {
           deploy = next as DeployTarget;
         } else {
           console.error(
-            pc.red(`  Error: unknown deploy target "${next}". Valid targets: ${VALID_DEPLOY_TARGETS.join(", ")}`),
+            pc.red(`  Error: unknown deploy target "${next}". Valid targets: ${validDeployTargets.join(", ")}`),
           );
           process.exit(1);
         }
@@ -149,7 +145,7 @@ async function main() {
     process.exit(0);
   }
 
-  p.intro(pc.bold("Create Capstan App"));
+  p.intro(`${pc.bold("Create Capstan App")} ${pc.dim("· operable by default, pleasant from minute one")}`);
 
   let projectName: string;
   let template: Template;
@@ -163,9 +159,9 @@ async function main() {
   } else if (argName) {
     // Have name, still need template
     projectName = argName;
-    const chosen = await select("Which template?", [...VALID_TEMPLATES]);
+    const chosen = await select("What kind of starting point do you want?", templateOptions);
     template = chosen as Template;
-    deploy = argDeploy ?? (await select("Deployment target?", [...VALID_DEPLOY_TARGETS]) as DeployTarget);
+    deploy = argDeploy ?? (await select("Do you want deployment files from day one?", deployOptions) as DeployTarget);
   } else {
     // Fully interactive
     const answers = await runPrompts();
@@ -194,6 +190,7 @@ async function main() {
   const isBun = typeof (globalThis as any).Bun !== "undefined";
   const installCmd = isBun ? "bun install" : "npm install";
   const runCmd = isBun ? "bun run" : "npx";
+  const devCmd = `${runCmd} capstan dev`;
 
   if (shouldInstall) {
     const s = p.spinner();
@@ -208,11 +205,35 @@ async function main() {
   }
 
   console.log("");
+  const firstFiles = template === "tickets"
+    ? [
+        "app/routes/index.page.tsx",
+        "app/routes/tickets/index.api.ts",
+        "app/models/ticket.model.ts",
+        "AGENTS.md",
+      ]
+    : [
+        "app/routes/index.page.tsx",
+        "app/routes/api/health.api.ts",
+        "app/policies/index.ts",
+        "AGENTS.md",
+      ];
   p.note(
     [
+      "Try it",
       `cd ${projectName}`,
       ...(shouldInstall ? [] : [installCmd]),
-      `${runCmd} capstan dev`,
+      devCmd,
+      "",
+      "Open these",
+      "http://localhost:3000/",
+      "http://localhost:3000/.well-known/capstan.json",
+      "http://localhost:3000/openapi.json",
+      "",
+      "Edit these first",
+      ...firstFiles,
+      "",
+      "Ship path",
       `${runCmd} capstan build --target node-standalone`,
       ...(deploy === "docker" ? ["docker build -t " + projectName + " ."] : []),
       ...(deploy === "vercel-node" ? ["vercel"] : []),
@@ -220,10 +241,10 @@ async function main() {
       ...(deploy === "cloudflare" ? ["wrangler deploy"] : []),
       ...(deploy === "fly" ? ["fly deploy"] : []),
     ].join("\n"),
-    "Next steps",
+    "Your first five minutes",
   );
 
-  p.outro(pc.green("Your app is ready!"));
+  p.outro(pc.green(`"${projectName}" is ready. Build something agents can operate.`));
 }
 
 main().catch(console.error);
