@@ -12,8 +12,8 @@ const workspaceBuildOrder = [
   { name: "@zauso-ai/capstan-cron", dir: "packages/cron" },
   { name: "@zauso-ai/capstan-agent", dir: "packages/agent" },
   { name: "@zauso-ai/capstan-react", dir: "packages/react" },
-  { name: "@zauso-ai/capstan-dev", dir: "packages/dev" },
   { name: "@zauso-ai/capstan-ops", dir: "packages/ops" },
+  { name: "@zauso-ai/capstan-dev", dir: "packages/dev" },
   { name: "@zauso-ai/capstan-cli", dir: "packages/cli" },
   { name: "create-capstan-app", dir: "packages/create-capstan" },
 ];
