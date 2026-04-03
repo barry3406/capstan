@@ -18,6 +18,18 @@ Capstan keeps its committed performance waterline in this directory.
 - `summary.ts` — CI-friendly Markdown summaries for perf reports
 - `run.ts` — CLI entry point used by local scripts and CI
 
+## Budget Profiles
+
+Budgets are machine-readable contracts, and some scenarios can define
+runtime-specific overrides for constrained environments such as the
+`ubuntu-latest` 4-vCPU CI runner.
+
+- Keep the default budget as the primary contract.
+- Only add overrides when a scenario is deterministic but hardware-class drift
+  would otherwise cause persistent false failures.
+- Scope overrides narrowly with explicit runtime matchers such as platform,
+  architecture, CPU count, or Node major version.
+
 ## Working Rules
 
 - Keep scenarios synthetic and deterministic.

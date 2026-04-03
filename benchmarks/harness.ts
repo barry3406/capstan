@@ -23,7 +23,32 @@ export interface BenchmarkBudget {
   maxP95Ms: number;
 }
 
-export type BenchmarkBudgetMap = Record<string, BenchmarkBudget>;
+export interface BenchmarkRuntimeInfo {
+  node: string;
+  platform: string;
+  arch: string;
+  cpuCount: number;
+  gcExposed: boolean;
+}
+
+export interface BenchmarkBudgetMatcher {
+  platform?: string;
+  arch?: string;
+  minCpuCount?: number;
+  maxCpuCount?: number;
+  minNodeMajor?: number;
+  maxNodeMajor?: number;
+}
+
+export interface BenchmarkBudgetOverride extends BenchmarkBudget {
+  when: BenchmarkBudgetMatcher;
+}
+
+export interface BenchmarkBudgetDefinition extends BenchmarkBudget {
+  overrides?: readonly BenchmarkBudgetOverride[];
+}
+
+export type BenchmarkBudgetMap = Record<string, BenchmarkBudgetDefinition>;
 
 export interface BenchmarkBaseline {
   avgMs: number;
@@ -80,13 +105,7 @@ export interface BenchmarkGroupResult {
 export interface BenchmarkReport {
   version: 1;
   createdAt: string;
-  runtime: {
-    node: string;
-    platform: string;
-    arch: string;
-    cpuCount: number;
-    gcExposed: boolean;
-  };
+  runtime: BenchmarkRuntimeInfo;
   strictBudgets: boolean;
   results: BenchmarkResult[];
   groups: BenchmarkGroupResult[];
@@ -98,6 +117,7 @@ export interface BenchmarkSuiteOptions {
   budgets?: BenchmarkBudgetMap;
   baseline?: BenchmarkBaselineMap;
   strictBudgets?: boolean;
+  runtime?: Partial<BenchmarkRuntimeInfo>;
 }
 
 function toFixed(value: number, digits = 3): string {
@@ -140,6 +160,84 @@ function standardDeviation(values: readonly number[], mean: number): number {
 function maybeCollectGarbage(): void {
   const runtime = globalThis as typeof globalThis & { gc?: () => void };
   runtime.gc?.();
+}
+
+function getNodeMajor(version: string): number | null {
+  const match = /^v?(\d+)/.exec(version.trim());
+  if (!match) {
+    return null;
+  }
+
+  const major = Number.parseInt(match[1]!, 10);
+  return Number.isFinite(major) ? major : null;
+}
+
+export function matchesBenchmarkRuntime(
+  runtime: BenchmarkRuntimeInfo,
+  matcher: BenchmarkBudgetMatcher,
+): boolean {
+  if (matcher.platform !== undefined && matcher.platform !== runtime.platform) {
+    return false;
+  }
+
+  if (matcher.arch !== undefined && matcher.arch !== runtime.arch) {
+    return false;
+  }
+
+  if (matcher.minCpuCount !== undefined && runtime.cpuCount < matcher.minCpuCount) {
+    return false;
+  }
+
+  if (matcher.maxCpuCount !== undefined && runtime.cpuCount > matcher.maxCpuCount) {
+    return false;
+  }
+
+  if (matcher.minNodeMajor !== undefined || matcher.maxNodeMajor !== undefined) {
+    const nodeMajor = getNodeMajor(runtime.node);
+    if (nodeMajor === null) {
+      return false;
+    }
+    if (matcher.minNodeMajor !== undefined && nodeMajor < matcher.minNodeMajor) {
+      return false;
+    }
+    if (matcher.maxNodeMajor !== undefined && nodeMajor > matcher.maxNodeMajor) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+export function resolveBenchmarkBudget(
+  definition: BenchmarkBudgetDefinition,
+  runtime: BenchmarkRuntimeInfo,
+): BenchmarkBudget {
+  for (const override of definition.overrides ?? []) {
+    if (matchesBenchmarkRuntime(runtime, override.when)) {
+      return {
+        maxAvgMs: override.maxAvgMs,
+        maxP95Ms: override.maxP95Ms,
+      };
+    }
+  }
+
+  return {
+    maxAvgMs: definition.maxAvgMs,
+    maxP95Ms: definition.maxP95Ms,
+  };
+}
+
+function createBenchmarkRuntime(
+  override: Partial<BenchmarkRuntimeInfo> | undefined,
+): BenchmarkRuntimeInfo {
+  return {
+    node: override?.node ?? process.version,
+    platform: override?.platform ?? process.platform,
+    arch: override?.arch ?? process.arch,
+    cpuCount: override?.cpuCount ?? cpus().length,
+    gcExposed: override?.gcExposed
+      ?? typeof (globalThis as typeof globalThis & { gc?: () => void }).gc === "function",
+  };
 }
 
 async function measureScenarioSample<State>(
@@ -224,12 +322,16 @@ export function evaluateBudget(
 
 async function runScenario<State>(
   scenario: BenchmarkScenario<State>,
-  budget: BenchmarkBudget | undefined,
+  budgetDefinition: BenchmarkBudgetDefinition | undefined,
   baseline: BenchmarkBaseline | undefined,
   strictBudgets: boolean,
+  runtime: BenchmarkRuntimeInfo,
 ): Promise<BenchmarkResult> {
   let state: State | undefined;
   let result: BenchmarkResult;
+  const budget = budgetDefinition
+    ? resolveBenchmarkBudget(budgetDefinition, runtime)
+    : undefined;
 
   try {
     state = scenario.setup
@@ -371,6 +473,7 @@ export async function runBenchmarkSuite(
   options: BenchmarkSuiteOptions,
 ): Promise<BenchmarkReport> {
   const strictBudgets = options.strictBudgets ?? false;
+  const runtime = createBenchmarkRuntime(options.runtime);
   const results: BenchmarkResult[] = [];
 
   for (const scenario of options.scenarios) {
@@ -380,6 +483,7 @@ export async function runBenchmarkSuite(
         options.budgets?.[scenario.id],
         options.baseline?.[scenario.id],
         strictBudgets,
+        runtime,
       ),
     );
   }
@@ -387,13 +491,7 @@ export async function runBenchmarkSuite(
   return {
     version: 1,
     createdAt: new Date().toISOString(),
-    runtime: {
-      node: process.version,
-      platform: process.platform,
-      arch: process.arch,
-      cpuCount: cpus().length,
-      gcExposed: typeof (globalThis as typeof globalThis & { gc?: () => void }).gc === "function",
-    },
+    runtime,
     strictBudgets,
     groups: buildGroupResults(results),
     failed: results.some((result) => result.status === "fail"),

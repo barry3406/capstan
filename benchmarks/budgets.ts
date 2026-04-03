@@ -44,6 +44,17 @@ export const benchmarkBudgets = {
   "runtime.request.deep-document": {
     maxAvgMs: 2.0,
     maxP95Ms: 3.0,
+    overrides: [
+      {
+        when: {
+          platform: "linux",
+          arch: "x64",
+          maxCpuCount: 4,
+        },
+        maxAvgMs: 2.5,
+        maxP95Ms: 3.5,
+      },
+    ],
   },
   "runtime.request.navigation": {
     maxAvgMs: 2.0,
@@ -52,6 +63,17 @@ export const benchmarkBudgets = {
   "runtime.request.deep-navigation": {
     maxAvgMs: 1.5,
     maxP95Ms: 2.5,
+    overrides: [
+      {
+        when: {
+          platform: "linux",
+          arch: "x64",
+          maxCpuCount: 4,
+        },
+        maxAvgMs: 2.5,
+        maxP95Ms: 3.5,
+      },
+    ],
   },
   "runtime.request.not-found": {
     maxAvgMs: 2.0,

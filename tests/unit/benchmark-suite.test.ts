@@ -10,6 +10,8 @@ import {
 import {
   evaluateBudget,
   formatBenchmarkTable,
+  matchesBenchmarkRuntime,
+  resolveBenchmarkBudget,
   runBenchmarkSuite,
   summarizeSamples,
 } from "../../benchmarks/harness.js";
@@ -50,6 +52,138 @@ describe("benchmark harness", () => {
       "avg 6.000ms exceeded budget 4.500ms",
       "p95 9.600ms exceeded budget 8.500ms",
     ]);
+  });
+
+  it("matches runtime budget overrides against explicit runtime selectors", () => {
+    expect(
+      matchesBenchmarkRuntime(
+        {
+          node: "v22.22.2",
+          platform: "linux",
+          arch: "x64",
+          cpuCount: 4,
+          gcExposed: true,
+        },
+        {
+          platform: "linux",
+          arch: "x64",
+          maxCpuCount: 4,
+          minNodeMajor: 22,
+        },
+      ),
+    ).toBe(true);
+
+    expect(
+      matchesBenchmarkRuntime(
+        {
+          node: "v22.22.2",
+          platform: "linux",
+          arch: "x64",
+          cpuCount: 8,
+          gcExposed: true,
+        },
+        {
+          platform: "linux",
+          arch: "x64",
+          maxCpuCount: 4,
+        },
+      ),
+    ).toBe(false);
+  });
+
+  it("resolves runtime-specific budget overrides before evaluating scenarios", async () => {
+    const definition = {
+      maxAvgMs: -1,
+      maxP95Ms: -1,
+      overrides: [
+        {
+          when: {
+            platform: "linux",
+            arch: "x64",
+            maxCpuCount: 4,
+          },
+          maxAvgMs: 100,
+          maxP95Ms: 100,
+        },
+      ],
+    } as const;
+
+    expect(
+      resolveBenchmarkBudget(definition, {
+        node: "v22.22.2",
+        platform: "linux",
+        arch: "x64",
+        cpuCount: 4,
+        gcExposed: true,
+      }),
+    ).toEqual({
+      maxAvgMs: 100,
+      maxP95Ms: 100,
+    });
+
+    const constrainedRunnerReport = await runBenchmarkSuite({
+      scenarios: [
+        {
+          id: "runtime-aware-budget",
+          description: "uses a constrained CI budget override",
+          group: "test",
+          iterations: 1,
+          samples: 1,
+          warmupSamples: 0,
+          run: () => undefined,
+        },
+      ],
+      budgets: {
+        "runtime-aware-budget": definition,
+      },
+      strictBudgets: true,
+      runtime: {
+        node: "v22.22.2",
+        platform: "linux",
+        arch: "x64",
+        cpuCount: 4,
+        gcExposed: true,
+      },
+    });
+
+    expect(constrainedRunnerReport.failed).toBe(false);
+    expect(constrainedRunnerReport.results[0]?.status).toBe("pass");
+    expect(constrainedRunnerReport.results[0]?.budget).toEqual({
+      maxAvgMs: 100,
+      maxP95Ms: 100,
+    });
+
+    const fasterRunnerReport = await runBenchmarkSuite({
+      scenarios: [
+        {
+          id: "runtime-aware-budget",
+          description: "keeps the default budget when no override matches",
+          group: "test",
+          iterations: 1,
+          samples: 1,
+          warmupSamples: 0,
+          run: () => undefined,
+        },
+      ],
+      budgets: {
+        "runtime-aware-budget": definition,
+      },
+      strictBudgets: true,
+      runtime: {
+        node: "v22.22.2",
+        platform: "darwin",
+        arch: "arm64",
+        cpuCount: 8,
+        gcExposed: true,
+      },
+    });
+
+    expect(fasterRunnerReport.failed).toBe(true);
+    expect(fasterRunnerReport.results[0]?.status).toBe("fail");
+    expect(fasterRunnerReport.results[0]?.budget).toEqual({
+      maxAvgMs: -1,
+      maxP95Ms: -1,
+    });
   });
 
   it("marks missing budgets and explicit budget failures in suite reports", async () => {
