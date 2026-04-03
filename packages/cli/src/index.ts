@@ -81,7 +81,7 @@ async function main(): Promise<void> {
       await runDev(args);
       return;
     case "build":
-      await runBuild();
+      await runBuild(args);
       return;
     case "start":
       await runStart(args);
@@ -255,7 +255,7 @@ async function runDev(args: string[]): Promise<void> {
   }
 }
 
-async function runBuild(): Promise<void> {
+async function runBuild(args: string[]): Promise<void> {
   const { execFile } = await import("node:child_process");
   const { promisify } = await import("node:util");
   const exec = promisify(execFile);
@@ -264,6 +264,7 @@ async function runBuild(): Promise<void> {
   const { scanRoutes } = await import("@zauso-ai/capstan-router");
   const { generateAgentManifest, generateOpenApiSpec } = await import("@zauso-ai/capstan-agent");
 
+  const isStatic = args.includes("--static");
   const cwd = process.cwd();
   const distDir = join(cwd, "dist");
 
@@ -358,6 +359,35 @@ async function runBuild(): Promise<void> {
     console.log(pc.dim("[capstan]") + pc.green(" Copied app/public/ to dist/public/"));
   } catch {
     // No public directory — skip.
+  }
+
+  // Step 5.5: Pre-render SSG pages (if --static flag is set)
+  if (isStatic) {
+    console.log(pc.dim("[capstan]") + " Pre-rendering SSG pages...");
+    try {
+      const { buildStaticPages } = await import("@zauso-ai/capstan-dev");
+      const ssgResult = await buildStaticPages({
+        rootDir: cwd,
+        outputDir: join(distDir, "static"),
+        manifest: rewrittenManifest,
+      });
+      if (ssgResult.pages > 0) {
+        console.log(
+          pc.dim("[capstan]") +
+          pc.green(` Pre-rendered ${ssgResult.pages} SSG page${ssgResult.pages > 1 ? "s" : ""}`),
+        );
+      } else {
+        console.log(pc.dim("[capstan]") + pc.yellow(" No SSG pages found (no pages export renderMode = \"ssg\")"));
+      }
+      for (const err of ssgResult.errors) {
+        console.log(pc.dim("[capstan]") + pc.red(` SSG error: ${err}`));
+      }
+    } catch (err) {
+      console.log(
+        pc.dim("[capstan]") +
+        pc.red(` SSG pre-rendering failed: ${err instanceof Error ? err.message : err}`),
+      );
+    }
   }
 
   // Step 6: Generate the production server entry file
@@ -696,6 +726,34 @@ async function main() {
         }
       });
     }
+  }
+
+  // Serve pre-rendered SSG pages from dist/static/ (fast path)
+  const ssgManifestPath = join(distDir, "static", "_ssg_manifest.json");
+  let ssgPaths = new Set();
+  try {
+    if (existsSync(ssgManifestPath)) {
+      const ssgData = JSON.parse(readFileSync(ssgManifestPath, "utf-8"));
+      if (Array.isArray(ssgData.paths)) ssgPaths = new Set(ssgData.paths);
+    }
+  } catch { /* no SSG manifest — skip */ }
+
+  if (ssgPaths.size > 0) {
+    for (const ssgPath of ssgPaths) {
+      app.get(ssgPath, async (c) => {
+        const segments = ssgPath.replace(/^\\/+|\\/+$/g, "");
+        const filePath = segments === ""
+          ? join(distDir, "static", "index.html")
+          : join(distDir, "static", segments, "index.html");
+        try {
+          const html = readFileSync(filePath, "utf-8");
+          return c.html(html, 200);
+        } catch {
+          return c.notFound();
+        }
+      });
+    }
+    console.log(pc.dim("[capstan]") + " Serving " + ssgPaths.size + " SSG page(s) from static files");
   }
 
   // Register page routes from the manifest
@@ -1697,7 +1755,7 @@ function printHelp(): void {
 
   group("Development", [
     ["dev",   "Start dev server with live reload"],
-    ["build", "Build for production"],
+    ["build [--static]", "Build for production (--static pre-renders SSG pages)"],
     ["start", "Start production server"],
   ]);
 

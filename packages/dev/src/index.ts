@@ -13,4 +13,6 @@ export { createFlyAdapter } from "./adapter-fly.js";
 export type { FlyConfig } from "./adapter-fly.js";
 export { createCloudflareHandler, generateWranglerConfig } from "./adapter-cloudflare.js";
 export { createViteConfig, createViteDevMiddleware, buildClient } from "./vite.js";
+export { buildStaticPages } from "./build.js";
+export type { BuildStaticOptions, BuildStaticResult } from "./build.js";
 export type { CapstanViteConfig } from "./vite.js";

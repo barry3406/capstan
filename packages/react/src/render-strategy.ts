@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import type {
   RenderMode,
   RenderPageOptions,
@@ -154,27 +156,55 @@ export class ISRStrategy implements RenderStrategy {
 }
 
 /**
- * SSG — stub for Phase 3.
- * Falls back to SSR at runtime; the real implementation will serve
- * pre-rendered files from the build output directory.
+ * Map a URL path to the corresponding pre-rendered file on disk.
+ *   "/"      → "<staticDir>/index.html"
+ *   "/about" → "<staticDir>/about/index.html"
+ */
+export function urlToFilePath(url: string, staticDir: string): string {
+  // Strip query string / hash
+  const pathname = url.split("?")[0]!.split("#")[0]!;
+  const segments = pathname.replace(/^\/+|\/+$/g, "");
+  if (segments === "") return join(staticDir, "index.html");
+  return join(staticDir, segments, "index.html");
+}
+
+/**
+ * SSG — serves pre-rendered HTML files from the build output directory.
+ * Falls back to SSR at runtime when the static file doesn't exist
+ * (e.g., pages not covered by `generateStaticParams`).
  */
 export class SSGStrategy implements RenderStrategy {
   private ssr = new SSRStrategy();
+  private staticDir: string;
+
+  constructor(staticDir?: string) {
+    this.staticDir = staticDir ?? join(process.cwd(), "dist", "static");
+  }
 
   async render(ctx: RenderStrategyContext): Promise<RenderStrategyResult> {
-    return this.ssr.render(ctx);
+    const filePath = urlToFilePath(ctx.url, this.staticDir);
+    try {
+      const html = await readFile(filePath, "utf-8");
+      return { html, loaderData: null, statusCode: 200, cacheStatus: "HIT" };
+    } catch {
+      // File not found — fall back to SSR
+      return { ...await this.ssr.render(ctx), cacheStatus: "MISS" };
+    }
   }
 }
 
 /**
  * Create the appropriate render strategy for a given mode.
  */
-export function createStrategy(mode: RenderMode): RenderStrategy {
+export function createStrategy(
+  mode: RenderMode,
+  opts?: { staticDir?: string },
+): RenderStrategy {
   switch (mode) {
     case "isr":
       return new ISRStrategy();
     case "ssg":
-      return new SSGStrategy();
+      return new SSGStrategy(opts?.staticDir);
     case "ssr":
     case "streaming":
     default:

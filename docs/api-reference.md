@@ -2276,21 +2276,63 @@ class ISRStrategy implements RenderStrategy {}
 
 ### SSGStrategy
 
-Static Site Generation stub (falls back to SSR). Full implementation in Phase 3.
+Static Site Generation — serves pre-rendered HTML from the filesystem, falls back to SSR on cache miss.
 
 ```typescript
-class SSGStrategy implements RenderStrategy {}
+class SSGStrategy implements RenderStrategy {
+  constructor(staticDir?: string)  // default: join(cwd(), "dist", "static")
+  render(ctx: RenderStrategyContext): Promise<RenderStrategyResult>
+}
 ```
+
+- **HIT**: Pre-rendered file found at `dist/static/{path}/index.html` — returns instantly
+- **MISS**: File not found — delegates to `SSRStrategy.render()` for on-demand rendering
 
 ---
 
-### createStrategy(mode)
+### urlToFilePath(url, staticDir)
+
+Maps a URL path to its pre-rendered HTML file path.
+
+```typescript
+function urlToFilePath(url: string, staticDir: string): string
+```
+
+| URL | File path |
+|-----|-----------|
+| `/` | `{staticDir}/index.html` |
+| `/about` | `{staticDir}/about/index.html` |
+| `/blog/123` | `{staticDir}/blog/123/index.html` |
+
+Strips query strings and hash fragments before mapping.
+
+---
+
+### generateStaticParams
+
+Page-level export for SSG pages with dynamic route parameters. Returns the list of param sets to pre-render at build time.
+
+```typescript
+// Export from a .page.tsx file with renderMode = "ssg"
+export const renderMode = "ssg";
+export async function generateStaticParams(): Promise<Array<Record<string, string>>> {
+  return [{ id: "1" }, { id: "2" }, { id: "3" }];
+}
+```
+
+Required when an SSG page has dynamic params (e.g. `[id].page.tsx`). Static SSG pages (no params) don't need it.
+
+---
+
+### createStrategy(mode, opts?)
 
 Factory function to create a render strategy instance.
 
 ```typescript
-function createStrategy(mode: RenderMode): RenderStrategy
+function createStrategy(mode: RenderMode, opts?: { staticDir?: string }): RenderStrategy
 ```
+
+When `mode` is `"ssg"`, pass `opts.staticDir` to override the default static file directory.
 
 ---
 
@@ -2565,6 +2607,32 @@ Run a production Vite build for client-side code. Silently skips if Vite is not 
 ```typescript
 function buildClient(config: CapstanViteConfig): Promise<void>
 ```
+
+---
+
+### buildStaticPages(options)
+
+Pre-render SSG pages at build time. For each page route with `renderMode === "ssg"`: static routes render once, dynamic routes call `generateStaticParams()` and render for each param set.
+
+```typescript
+function buildStaticPages(options: BuildStaticOptions): Promise<BuildStaticResult>
+
+interface BuildStaticOptions {
+  rootDir: string;       // Project root directory
+  outputDir: string;     // Output dir for pre-rendered files (e.g. dist/static)
+  manifest: RouteManifest; // From scanRoutes() — file paths point to compiled .js
+}
+
+interface BuildStaticResult {
+  pages: number;         // Successfully pre-rendered page count
+  paths: string[];       // Pre-rendered URL paths (e.g. ["/about", "/blog/1"])
+  errors: string[];      // Errors encountered during rendering
+}
+```
+
+Output files: `{outputDir}/{path}/index.html` for each page, plus `_ssg_manifest.json` listing all pre-rendered paths.
+
+Called automatically by `capstan build --static`.
 
 ---
 

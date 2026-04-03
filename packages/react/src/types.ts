@@ -40,6 +40,8 @@ export interface PageModule {
   revalidate?: number;
   /** Cache tags for ISR invalidation */
   cacheTags?: string[];
+  /** SSG: return param sets to pre-render at build time */
+  generateStaticParams?: () => Promise<Array<Record<string, string>>>;
 }
 
 export interface LayoutModule {

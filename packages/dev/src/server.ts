@@ -542,6 +542,11 @@ async function buildApp(
       continue;
     }
 
+    if (pageModule.renderMode === "ssg") {
+      // eslint-disable-next-line no-console
+      console.log(`[capstan] SSG page ${route.urlPattern} (will be pre-rendered at build)`);
+    }
+
     pageRouteCount++;
 
     app.get(route.urlPattern, async (c) => {

@@ -1048,7 +1048,7 @@ Export `renderMode` from a page to control how it's rendered:
 |------|----------|
 | `"ssr"` | Server-render on every request (default) |
 | `"isr"` | Incremental Static Regeneration — serve cached HTML, revalidate in background |
-| `"ssg"` | Static Site Generation (build-time, Phase 3) |
+| `"ssg"` | Static Site Generation — pre-render at build time via `capstan build --static` |
 | `"streaming"` | Streaming SSR with `renderToReadableStream` |
 
 ### ISR Example
@@ -1087,7 +1087,7 @@ The framework provides three strategy implementations:
 
 - **`SSRStrategy`** — Renders on every request via `renderPage()` or `renderPageStream()`. This is the default.
 - **`ISRStrategy`** — Checks response cache first, uses stale-while-revalidate pattern. Falls back to `SSRStrategy` on cache miss.
-- **`SSGStrategy`** — Static Site Generation stub (Phase 3, currently falls back to SSR).
+- **`SSGStrategy`** — Static Site Generation. Serves pre-rendered HTML from `dist/static/`. Falls back to SSR if the file doesn't exist.
 
 Use `createStrategy(mode)` to instantiate:
 
@@ -1098,6 +1098,43 @@ const strategy = createStrategy("isr");
 const result = await strategy.render({ options, url, revalidate: 60, cacheTags: ["blog"] });
 // result.cacheStatus: "HIT" | "MISS" | "STALE"
 ```
+
+### SSG (Static Site Generation)
+
+Export `renderMode: "ssg"` to pre-render a page at build time. For static routes (no params), the page is rendered once. For dynamic routes, export `generateStaticParams()` to provide the param sets:
+
+```typescript
+// app/routes/blog/[id].page.tsx
+export const renderMode = "ssg";
+
+export async function generateStaticParams() {
+  const posts = await fetchAllPosts();
+  return posts.map(p => ({ id: String(p.id) }));
+  // → pre-renders /blog/1, /blog/2, /blog/3, ...
+}
+
+export async function loader({ params }: LoaderArgs) {
+  return { post: await fetchPost(params.id) };
+}
+
+export default function BlogPost() {
+  const { post } = useLoaderData<{ post: Post }>();
+  return <article><h1>{post.title}</h1><p>{post.body}</p></article>;
+}
+```
+
+Build with `capstan build --static` to pre-render SSG pages to `dist/static/`. The production server serves these files directly (no rendering overhead). Pages without pre-rendered files fall back to SSR automatically.
+
+### Hybrid Output
+
+SSR, ISR, and SSG pages can coexist in the same application:
+
+| Page | renderMode | Behavior |
+|------|-----------|----------|
+| `/` | (default) | Server-rendered on every request |
+| `/blog` | `"isr"` | Cached, revalidated every 60s |
+| `/blog/:id` | `"ssg"` | Pre-rendered at build time |
+| `/dashboard` | `"ssr"` | Always fresh server render |
 
 ## Client-Side Navigation
 

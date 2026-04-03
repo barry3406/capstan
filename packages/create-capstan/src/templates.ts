@@ -452,6 +452,41 @@ export default function BlogPage() {
 
 ISR behavior: fresh cache returns immediately, stale cache returns + revalidates in background, miss renders and caches. \`cacheInvalidateTag("blog")\` evicts both data cache and page cache entries.
 
+### Static Site Generation (SSG)
+
+Pages with \`renderMode = "ssg"\` are pre-rendered at build time to static HTML:
+
+\`\`\`typescript
+// app/routes/about.page.tsx — static route, no params
+export const renderMode = "ssg";
+export default function About() {
+  return <h1>About Us</h1>;
+}
+\`\`\`
+
+Dynamic SSG pages must export \`generateStaticParams()\` to define which param combinations to pre-render:
+
+\`\`\`typescript
+// app/routes/blog/[id].page.tsx
+export const renderMode = "ssg";
+
+export async function generateStaticParams() {
+  const posts = await db.select().from(postsTable);
+  return posts.map(p => ({ id: String(p.id) }));
+}
+
+export async function loader({ params }: LoaderArgs) {
+  return { post: await db.select().from(postsTable).where(eq(postsTable.id, Number(params.id))).get() };
+}
+
+export default function BlogPost() {
+  const { post } = useLoaderData<{ post: Post }>();
+  return <article><h1>{post.title}</h1><p>{post.body}</p></article>;
+}
+\`\`\`
+
+Build: \`capstan build --static\` pre-renders all SSG pages to \`dist/static/\`. The production server serves them as static files (instant, no rendering), falling back to SSR for non-SSG pages. You can mix SSR, ISR, and SSG pages in the same app.
+
 ### Loading & Error Boundaries
 
 \`_loading.tsx\` and \`_error.tsx\` are file conventions like \`_layout.tsx\`. They scope to all pages in the same directory and subdirectories, with the nearest file winning.
