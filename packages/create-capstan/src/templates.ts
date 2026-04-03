@@ -1682,7 +1682,7 @@ Options: \`model\`, \`temperature\`, \`maxTokens\`, \`systemPrompt\`, \`response
 Standalone AI agent toolkit — works independently OR with Capstan. Install separately:
 
 \`\`\`bash
-npm install @zauso-ai/capstan-ai
+npm install @zauso-ai/capstan-ai@beta
 \`\`\`
 
 ### Standalone Usage (no Capstan required)

@@ -3179,17 +3179,17 @@ Project scaffolder CLI.
 
 ```bash
 # Interactive mode
-npx create-capstan-app
+npx create-capstan-app@beta
 
 # With project name (prompts for template)
-npx create-capstan-app my-app
+npx create-capstan-app@beta my-app
 
 # Fully non-interactive
-npx create-capstan-app my-app --template blank
-npx create-capstan-app my-app --template tickets
+npx create-capstan-app@beta my-app --template blank
+npx create-capstan-app@beta my-app --template tickets
 
 # Help
-npx create-capstan-app --help
+npx create-capstan-app@beta --help
 ```
 
 ### Templates

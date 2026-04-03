@@ -13,7 +13,7 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Tests](https://img.shields.io/badge/tests-full%20suite%20passing-brightgreen?logo=bun&logoColor=white)](https://bun.sh)
-[![Version](https://img.shields.io/badge/version-1.0.0--beta.7-orange)](https://github.com/barry3406/capstan)
+[![Version](https://img.shields.io/badge/version-1.0.0--beta.8-orange)](https://github.com/barry3406/capstan)
 [![ESM](https://img.shields.io/badge/ESM-only-blue)](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Modules)
 
 [快速開始](#-快速開始) · [為什麼選擇 Capstan？](#-為什麼選擇-capstan) · [架構](#-架構) · [文件](#-文件) · [參與貢獻](#-參與貢獻)
@@ -157,11 +157,11 @@
 
 ```bash
 # 1. 建立新專案
-bunx create-capstan-app my-app
+bunx create-capstan-app@beta my-app
 cd my-app
 
 # 或從範本開始
-bunx create-capstan-app my-app --template tickets
+bunx create-capstan-app@beta my-app --template tickets
 
 # 2. 啟動開發伺服器（SSE 即時重新載入）
 bun run dev
@@ -176,7 +176,7 @@ bun run dev
 bunx capstan verify --json
 ```
 
-> **Node.js 同樣可用：** 將上面的 `bunx` 替換為 `npx`，`bun run` 替換為 `npx` 即可。
+> **Node.js 同樣可用：** 將上面的 `bunx create-capstan-app@beta` 替換為 `npx create-capstan-app@beta`，再把 `bun run` 替換為 `npx` 即可。
 
 ### 快速建立功能鷹架
 

@@ -14,11 +14,13 @@ Optional, depending on your database provider:
 ## Quick Start
 
 ```bash
-npx create-capstan-app my-app --template blank
+npx create-capstan-app@beta my-app --template blank
 cd my-app
 npm install
 npx capstan dev
 ```
+
+Capstan is currently published on npm's `beta` tag, so use `create-capstan-app@beta` when bootstrapping a fresh project from npm.
 
 The `create-capstan-app` scaffolder supports two templates:
 

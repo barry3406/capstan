@@ -31,12 +31,12 @@ ${pc.bold("Options:")}
   ${pc.cyan("--help, -h")}             Show this help message
 
 ${pc.bold("Examples:")}
-  npx create-capstan-app
-  npx create-capstan-app my-app
-  npx create-capstan-app my-app --template tickets
-  npx create-capstan-app my-app --template tickets --deploy docker
-  npx create-capstan-app my-app --template tickets --deploy vercel-node
-  npx create-capstan-app my-app --template tickets --install
+  npx create-capstan-app@beta
+  npx create-capstan-app@beta my-app
+  npx create-capstan-app@beta my-app --template tickets
+  npx create-capstan-app@beta my-app --template tickets --deploy docker
+  npx create-capstan-app@beta my-app --template tickets --deploy vercel-node
+  npx create-capstan-app@beta my-app --template tickets --install
 `);
 }
 

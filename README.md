@@ -13,7 +13,7 @@ One `defineAPI()` call. Four protocol surfaces. Humans and AI agents, served sim
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Tests](https://img.shields.io/badge/tests-full%20suite%20passing-brightgreen?logo=bun&logoColor=white)](https://bun.sh)
-[![Version](https://img.shields.io/badge/version-1.0.0--beta.7-orange)](https://github.com/barry3406/capstan)
+[![Version](https://img.shields.io/badge/version-1.0.0--beta.8-orange)](https://github.com/barry3406/capstan)
 [![ESM](https://img.shields.io/badge/ESM-only-blue)](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Modules)
 
 [Quick Start](#-quick-start) · [Why Capstan?](#-why-capstan) · [Architecture](#-architecture) · [Docs](#-documentation) · [Contributing](#-contributing)
@@ -131,11 +131,11 @@ Think of it as a full-stack framework built for a world where humans, coding age
 
 ```bash
 # 1. Create a new project
-bunx create-capstan-app my-app
+bunx create-capstan-app@beta my-app
 cd my-app
 
 # Or start from a template
-bunx create-capstan-app my-app --template tickets
+bunx create-capstan-app@beta my-app --template tickets
 
 # 2. Start the dev server (live reload via SSE)
 bun run dev
@@ -150,7 +150,7 @@ bun run dev
 bunx capstan verify --json
 ```
 
-> **Node.js also works:** replace `bunx` with `npx` and `bun run` with `npx` above.
+> **Node.js also works:** replace `bunx create-capstan-app@beta` with `npx create-capstan-app@beta`, and replace `bun run` with `npx`.
 
 ### Scaffold features instantly
 

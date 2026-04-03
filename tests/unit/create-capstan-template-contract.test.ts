@@ -132,4 +132,16 @@ describe("create-capstan scaffold contract", () => {
     expect(guide).toContain("## Golden Paths");
     expect(guide).toContain("## Common Mistakes");
   });
+
+  it("keeps npm-facing scaffold commands on the beta channel", async () => {
+    const cliSource = await readFile(join(process.cwd(), "packages/create-capstan/src/index.ts"), "utf-8");
+    const gettingStarted = await readFile(join(process.cwd(), "docs/getting-started.md"), "utf-8");
+    const apiReference = await readFile(join(process.cwd(), "docs/api-reference.md"), "utf-8");
+    const templatesSource = await readFile(join(process.cwd(), "packages/create-capstan/src/templates.ts"), "utf-8");
+
+    expect(cliSource).toContain("npx create-capstan-app@beta my-app");
+    expect(gettingStarted).toContain("npx create-capstan-app@beta my-app --template blank");
+    expect(apiReference).toContain("npx create-capstan-app@beta my-app --template tickets");
+    expect(templatesSource).toContain("npm install @zauso-ai/capstan-ai@beta");
+  });
 });

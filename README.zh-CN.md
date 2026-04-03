@@ -13,7 +13,7 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Tests](https://img.shields.io/badge/tests-full%20suite%20passing-brightgreen?logo=bun&logoColor=white)](https://bun.sh)
-[![Version](https://img.shields.io/badge/version-1.0.0--beta.7-orange)](https://github.com/barry3406/capstan)
+[![Version](https://img.shields.io/badge/version-1.0.0--beta.8-orange)](https://github.com/barry3406/capstan)
 [![ESM](https://img.shields.io/badge/ESM-only-blue)](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Modules)
 
 [快速上手](#-快速上手) · [为什么选择 Capstan？](#-为什么选择-capstan) · [架构](#-架构) · [文档](#-文档) · [参与贡献](#-参与贡献)
@@ -82,7 +82,7 @@
 
 ```bash
 # 1. 创建新项目（支持模板选择）
-bunx create-capstan-app my-app --template tickets
+bunx create-capstan-app@beta my-app --template tickets
 cd my-app
 
 # 2. 启动开发服务器
@@ -98,7 +98,7 @@ bun run dev
 bunx capstan verify --json
 ```
 
-> **Node.js 同样可用：** 将上面的 `bunx` 替换为 `npx`，`bun run` 替换为 `npx` 即可。
+> **Node.js 同样可用：** 将上面的 `bunx create-capstan-app@beta` 替换为 `npx create-capstan-app@beta`，再把 `bun run` 替换为 `npx` 即可。
 
 ### 快速生成功能模块
 
