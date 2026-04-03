@@ -20,6 +20,7 @@ let scaffoldedDeployProjectDir: string;
 let standaloneServer: ChildProcessWithoutNullStreams | null = null;
 
 const standalonePort = 38000 + Math.floor(Math.random() * 10000);
+const PROCESS_SHUTDOWN_GRACE_MS = 4_000;
 
 setDefaultTimeout(120_000);
 
@@ -261,7 +262,7 @@ afterAll(async () => {
     standaloneServer.kill("SIGTERM");
     await Promise.race([
       once(standaloneServer, "exit"),
-      new Promise((resolve) => setTimeout(resolve, 5_000)),
+      new Promise((resolve) => setTimeout(resolve, PROCESS_SHUTDOWN_GRACE_MS)),
     ]);
     if (standaloneServer.exitCode === null && standaloneServer.signalCode === null) {
       standaloneServer.kill("SIGKILL");

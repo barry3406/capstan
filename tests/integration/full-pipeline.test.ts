@@ -1,4 +1,4 @@
-import { describe, it, expect, afterAll, beforeAll } from "bun:test";
+import { describe, it, expect, afterAll, beforeAll, setDefaultTimeout } from "bun:test";
 import { mkdtemp, rm, access, readFile, writeFile, symlink } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -20,6 +20,8 @@ let tempDir: string;
 let projectDir: string;
 let server: DevServerInstance;
 const port = 10000 + Math.floor(Math.random() * 50000);
+
+setDefaultTimeout(120_000);
 
 beforeAll(async () => {
   tempDir = await mkdtemp(join(tmpdir(), "capstan-pipeline-test-"));

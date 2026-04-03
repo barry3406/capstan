@@ -15,6 +15,7 @@ let tempDir: string;
 let projectDir: string;
 let productionServer: ChildProcessWithoutNullStreams | null = null;
 const productionPort = 37000 + Math.floor(Math.random() * 20000);
+const PROCESS_SHUTDOWN_GRACE_MS = 4_000;
 
 setDefaultTimeout(120_000);
 
@@ -154,7 +155,7 @@ async function stopProductionServer(): Promise<void> {
     productionServer.kill("SIGTERM");
     await Promise.race([
       once(productionServer, "exit"),
-      new Promise((resolve) => setTimeout(resolve, 5_000)),
+      new Promise((resolve) => setTimeout(resolve, PROCESS_SHUTDOWN_GRACE_MS)),
     ]);
 
     if (productionServer.exitCode === null && productionServer.signalCode === null) {

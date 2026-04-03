@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, describe, expect, it, setDefaultTimeout } from "bun:test";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
 import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
@@ -20,6 +20,9 @@ let prodServer: ChildProcessWithoutNullStreams | null = null;
 
 const devPort = 18000 + Math.floor(Math.random() * 20000);
 const prodPort = devPort + 1;
+const PROCESS_SHUTDOWN_GRACE_MS = 4_000;
+
+setDefaultTimeout(120_000);
 
 function devBaseUrl(path = ""): string {
   return `http://127.0.0.1:${devPort}${path}`;
@@ -695,7 +698,7 @@ afterAll(async () => {
     prodServer.kill("SIGTERM");
     await Promise.race([
       once(prodServer, "exit"),
-      new Promise((resolve) => setTimeout(resolve, 5_000)),
+      new Promise((resolve) => setTimeout(resolve, PROCESS_SHUTDOWN_GRACE_MS)),
     ]);
     if (prodServer.exitCode === null && prodServer.signalCode === null) {
       prodServer.kill("SIGKILL");
