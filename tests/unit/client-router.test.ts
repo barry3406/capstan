@@ -69,6 +69,106 @@ beforeEach(() => {
   document.title = "";
 });
 
+type MockHeadNode = {
+  tagName: string;
+  attrs: Record<string, string>;
+  setAttribute: (name: string, value: string) => void;
+  getAttribute: (name: string) => string | null;
+  remove: () => void;
+};
+
+function installHeadMock(): {
+  nodes: MockHeadNode[];
+  restore: () => void;
+  find: (tagName: string, attrs: Record<string, string>) => MockHeadNode | undefined;
+} {
+  const nodes: MockHeadNode[] = [];
+
+  const matches = (node: MockHeadNode, selector: string): boolean => {
+    const tagMatch = selector.match(/^[a-z]+/i);
+    if (tagMatch && node.tagName !== tagMatch[0]!.toLowerCase()) {
+      return false;
+    }
+
+    for (const attrMatch of selector.matchAll(/\[([^=\]]+)="([^"]*)"\]/g)) {
+      const attrName = attrMatch[1]!;
+      const attrValue = attrMatch[2]!;
+      if (node.getAttribute(attrName) !== attrValue) {
+        return false;
+      }
+    }
+
+    return true;
+  };
+
+  const createNode = (tagName: string): MockHeadNode => {
+    const attrs: Record<string, string> = {};
+    return {
+      tagName: tagName.toLowerCase(),
+      attrs,
+      setAttribute(name: string, value: string) {
+        attrs[name] = value;
+      },
+      getAttribute(name: string) {
+        return attrs[name] ?? null;
+      },
+      remove() {
+        const idx = nodes.indexOf(this);
+        if (idx >= 0) nodes.splice(idx, 1);
+      },
+    };
+  };
+
+  const head = {
+    appendChild(node: MockHeadNode) {
+      nodes.push(node);
+      return node;
+    },
+    querySelector(selector: string) {
+      return nodes.find((node) => matches(node, selector)) ?? null;
+    },
+    querySelectorAll(selector: string) {
+      return nodes.filter((node) => matches(node, selector));
+    },
+  };
+
+  const originalHead = (document as Record<string, unknown>)["head"];
+  const originalCreateElement = (document as Record<string, unknown>)["createElement"];
+
+  Object.defineProperty(document, "head", {
+    value: head,
+    writable: true,
+    configurable: true,
+  });
+  Object.defineProperty(document, "createElement", {
+    value: (tagName: string) => createNode(tagName),
+    writable: true,
+    configurable: true,
+  });
+
+  return {
+    nodes,
+    find(tagName: string, attrs: Record<string, string>) {
+      return nodes.find((node) => {
+        if (node.tagName !== tagName.toLowerCase()) return false;
+        return Object.entries(attrs).every(([name, value]) => node.getAttribute(name) === value);
+      });
+    },
+    restore() {
+      Object.defineProperty(document, "head", {
+        value: originalHead,
+        writable: true,
+        configurable: true,
+      });
+      Object.defineProperty(document, "createElement", {
+        value: originalCreateElement,
+        writable: true,
+        configurable: true,
+      });
+    },
+  };
+}
+
 afterAll(() => {
   // Restore real fetch + remove browser globals so later tests are unaffected
   (globalThis as Record<string, unknown>)["fetch"] = originalFetch;
@@ -236,6 +336,117 @@ describe("CapstanRouter", () => {
 
     expect(document.title).toBe("About Us");
     router.destroy();
+  });
+
+  test("navigate synchronizes title, meta, and link head tags", async () => {
+    const head = installHeadMock();
+
+    mockFetchResponses.push({
+      url: "/about",
+      payload: {
+        url: "/about",
+        layoutKey: "/",
+        loaderData: null,
+        componentType: "server",
+        metadata: {
+          title: "About Us",
+          description: "About page",
+          canonical: "https://example.com/about",
+          icons: { icon: "/favicon-about.ico" },
+          alternates: { en: "https://example.com/en/about" },
+        },
+      },
+    });
+    mockFetchResponses.push({
+      url: "/posts/1",
+      payload: {
+        url: "/posts/1",
+        layoutKey: "/",
+        loaderData: null,
+        componentType: "client",
+        metadata: {
+          title: "Post One",
+          description: "Post page",
+        },
+      },
+    });
+    mockFetchResponses.push({
+      url: "/",
+      payload: {
+        url: "/",
+        layoutKey: "/",
+        loaderData: null,
+        componentType: "server",
+      },
+    });
+
+    const router = new CapstanRouter(manifest);
+    try {
+      await router.navigate("/about");
+
+      expect(document.title).toBe("About Us");
+      expect(head.find("meta", { name: "description", content: "About page" })).toBeDefined();
+      expect(head.find("link", { rel: "canonical", href: "https://example.com/about" })).toBeDefined();
+      expect(head.find("link", { rel: "icon", href: "/favicon-about.ico" })).toBeDefined();
+      expect(head.find("link", { rel: "alternate", hreflang: "en", href: "https://example.com/en/about" })).toBeDefined();
+
+      await router.navigate("/posts/1");
+
+      expect(document.title).toBe("Post One");
+      expect(head.find("meta", { name: "description", content: "Post page" })).toBeDefined();
+      expect(head.find("link", { rel: "canonical", href: "https://example.com/about" })).toBeUndefined();
+      expect(head.find("link", { rel: "icon", href: "/favicon-about.ico" })).toBeUndefined();
+      expect(head.find("link", { rel: "alternate", hreflang: "en", href: "https://example.com/en/about" })).toBeUndefined();
+
+      await router.navigate("/");
+
+      expect(document.title).toBe("Post One");
+    } finally {
+      head.restore();
+      router.destroy();
+    }
+  });
+
+  test("navigate falls back on invalid navigation payload", async () => {
+    const origLocation = window.location;
+    let locationChanged = false;
+    Object.defineProperty(window, "location", {
+      value: {
+        ...origLocation,
+        get href() { return "/"; },
+        set href(_: string) { locationChanged = true; },
+        pathname: "/",
+      },
+      writable: true,
+      configurable: true,
+    });
+
+    (globalThis as Record<string, unknown>)["fetch"] = async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        layoutKey: "/",
+        componentType: "server",
+        loaderData: null,
+      }),
+    });
+
+    const router = new CapstanRouter(manifest);
+    try {
+      await router.navigate("/about");
+
+      expect(locationChanged).toBe(true);
+      expect(router.state.status).toBe("error");
+      expect(router.state.error?.message).toContain("Invalid navigation payload");
+    } finally {
+      Object.defineProperty(window, "location", {
+        value: origLocation,
+        writable: true,
+        configurable: true,
+      });
+      router.destroy();
+      mockFetchForNav();
+    }
   });
 
   test("destroy cleans up listeners", () => {
@@ -419,6 +630,49 @@ describe("CapstanRouter", () => {
 
     (globalThis as Record<string, unknown>)["fetch"] = origFetch;
     router.destroy();
+  });
+
+  test("prefetch ignores malformed payloads and does not poison cache", async () => {
+    const origFetch = globalThis.fetch;
+    let fetchCount = 0;
+    (globalThis as Record<string, unknown>)["fetch"] = async () => {
+      fetchCount++;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          layoutKey: "/",
+          componentType: "server",
+          loaderData: null,
+        }),
+      };
+    };
+
+    const router = new CapstanRouter(manifest);
+    try {
+      await router.prefetch("/about");
+      expect(fetchCount).toBe(1);
+
+      (globalThis as Record<string, unknown>)["fetch"] = async () => {
+        fetchCount++;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            url: "/about",
+            layoutKey: "/",
+            loaderData: null,
+            componentType: "server",
+          }),
+        };
+      };
+
+      await router.navigate("/about");
+      expect(fetchCount).toBe(2);
+    } finally {
+      (globalThis as Record<string, unknown>)["fetch"] = origFetch;
+      router.destroy();
+    }
   });
 
   // ------- noCache option -------

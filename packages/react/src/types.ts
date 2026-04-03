@@ -1,5 +1,107 @@
 import type { ReactNode, ReactElement } from "react";
 
+export interface MetadataTitleObject {
+  default?: string;
+  template?: string;
+  absolute?: string;
+}
+
+export type MetadataTitle = string | MetadataTitleObject;
+
+export interface MetadataRobotsObject {
+  index?: boolean;
+  follow?: boolean;
+  noarchive?: boolean;
+  nosnippet?: boolean;
+  noimageindex?: boolean;
+  notranslate?: boolean;
+  unavailableAfter?: string;
+  maxImagePreview?: "none" | "standard" | "large";
+  maxSnippet?: number;
+  maxVideoPreview?: number;
+}
+
+export interface MetadataOpenGraph {
+  title?: string;
+  description?: string;
+  type?: string;
+  url?: string;
+  image?: string;
+  siteName?: string;
+}
+
+export interface MetadataTwitter {
+  card?: "summary" | "summary_large_image";
+  title?: string;
+  description?: string;
+  image?: string;
+}
+
+export interface MetadataLinkDescriptor {
+  url: string;
+  type?: string;
+  sizes?: string;
+  media?: string;
+  color?: string;
+  title?: string;
+}
+
+export type MetadataLinkInput = string | MetadataLinkDescriptor;
+
+export interface MetadataIcons {
+  icon?: MetadataLinkInput | MetadataLinkInput[];
+  apple?: MetadataLinkInput | MetadataLinkInput[];
+  shortcut?: MetadataLinkInput | MetadataLinkInput[];
+  other?: Array<MetadataLinkDescriptor & { rel: string }>;
+}
+
+export interface MetadataAlternatesObject {
+  languages?: Record<string, string>;
+  media?: Record<string, string>;
+  types?: Record<string, string>;
+}
+
+export type MetadataAlternates = Record<string, string> | MetadataAlternatesObject;
+
+export interface Metadata {
+  title?: MetadataTitle;
+  description?: string;
+  keywords?: string[];
+  robots?: string | MetadataRobotsObject;
+  openGraph?: MetadataOpenGraph;
+  twitter?: MetadataTwitter;
+  icons?: MetadataIcons;
+  canonical?: string;
+  alternates?: MetadataAlternates;
+}
+
+export interface ResolvedMetadataLinkDescriptor extends MetadataLinkDescriptor {}
+
+export interface ResolvedMetadataIcons {
+  icon: ResolvedMetadataLinkDescriptor[];
+  apple: ResolvedMetadataLinkDescriptor[];
+  shortcut: ResolvedMetadataLinkDescriptor[];
+  other: Array<ResolvedMetadataLinkDescriptor & { rel: string }>;
+}
+
+export interface ResolvedMetadataAlternates {
+  languages: Record<string, string>;
+  media: Record<string, string>;
+  types: Record<string, string>;
+}
+
+export interface ResolvedMetadata {
+  title?: string;
+  description?: string;
+  keywords?: string[];
+  robots?: string;
+  openGraph?: MetadataOpenGraph;
+  twitter?: MetadataTwitter;
+  icons?: ResolvedMetadataIcons;
+  canonical?: string;
+  alternates?: ResolvedMetadataAlternates;
+}
+
 export interface LoaderArgs {
   params: Record<string, string>;
   request: Request;
@@ -30,6 +132,7 @@ export type RenderMode = "ssr" | "ssg" | "isr" | "streaming";
 export interface PageModule {
   default: (props: Record<string, unknown>) => ReactElement;
   loader?: LoaderFunction;
+  metadata?: Metadata;
   /** Page-level hydration strategy export */
   hydration?: HydrationMode;
   /** Whether the component is a server or client component */
@@ -46,6 +149,7 @@ export interface PageModule {
 
 export interface LayoutModule {
   default: (props: { children?: ReactNode }) => ReactElement;
+  metadata?: Metadata;
 }
 
 export interface RenderPageOptions {

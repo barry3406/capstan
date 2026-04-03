@@ -8,8 +8,8 @@ Thanks for your interest in Capstan! Here's how to get started.
 git clone https://github.com/barry3406/capstan.git
 cd capstan
 npm install
-npm run build        # Build all 9 runtime packages
-npm run test:new     # Run 1404 tests (~18s)
+npm run build        # Build all workspace packages
+npm test             # Run the full repository test suite
 ```
 
 ## Branch Strategy
@@ -37,7 +37,7 @@ Use [Conventional Commits](https://www.conventionalcommits.org/):
 ## Testing
 
 - Write tests with `bun:test` for new code
-- Run `npm run test:new` before submitting
+- Run `npm test` (or `npm run test:new`) before submitting
 - Edge cases and error paths required, not just happy paths
 
 ## Documentation Sync
@@ -50,7 +50,7 @@ When changing user-facing framework behavior, update ALL of the following in the
 
 ## Pull Request Process
 
-1. Ensure CI passes (`npm run build && npm run test:new`)
+1. Ensure CI passes (`npm run build && npm test`)
 2. Update docs if applicable
 3. Describe what, why, and how in the PR description
 4. Link related issues

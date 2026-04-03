@@ -31,7 +31,15 @@ export function packageJson(
       scripts: {
         dev: "capstan dev",
         build: "capstan build",
+        "build:standalone": "capstan build --target node-standalone",
+        "build:docker": "capstan build --target docker",
+        "build:vercel-node": "capstan build --target vercel-node",
+        "build:vercel-edge": "capstan build --target vercel-edge",
+        "build:cloudflare": "capstan build --target cloudflare",
+        "build:fly": "capstan build --target fly",
         start: "capstan start",
+        "start:standalone": "capstan start --from dist/standalone",
+        "deploy:init": "capstan deploy:init",
       },
       dependencies: deps,
       devDependencies: {
@@ -191,6 +199,132 @@ dist/
 `;
 }
 
+export function dockerfile(): string {
+  return `FROM node:20-alpine AS builder
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
+
+COPY . .
+RUN npx capstan build --target node-standalone
+
+FROM node:20-alpine AS runner
+
+WORKDIR /app
+
+COPY --from=builder /app/dist/standalone/package.json ./package.json
+RUN npm install --omit=dev
+
+COPY --from=builder /app/dist/standalone/dist ./dist
+
+EXPOSE 3000
+
+ENV NODE_ENV=production
+ENV PORT=3000
+ENV CAPSTAN_HOST=0.0.0.0
+
+CMD ["node", "dist/_capstan_server.js"]
+`;
+}
+
+export function flyDockerfile(): string {
+  return `FROM node:20-alpine AS builder
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
+
+COPY . .
+RUN npx capstan build --target fly
+
+FROM node:20-alpine AS runner
+
+WORKDIR /app
+
+COPY --from=builder /app/dist/standalone/package.json ./package.json
+RUN npm install --omit=dev
+
+COPY --from=builder /app/dist/standalone/dist ./dist
+
+EXPOSE 3000
+
+ENV NODE_ENV=production
+ENV PORT=3000
+ENV CAPSTAN_HOST=0.0.0.0
+
+CMD ["node", "dist/_capstan_server.js"]
+`;
+}
+
+export function dockerignore(): string {
+  return `node_modules/
+dist/
+.git/
+.DS_Store
+npm-debug.log*
+`;
+}
+
+export function envExample(): string {
+  return `PORT=3000
+CAPSTAN_HOST=0.0.0.0
+# CAPSTAN_PORT=3000
+# CAPSTAN_CORS_ORIGIN=https://example.com
+# CAPSTAN_MAX_BODY_SIZE=1048576
+NODE_ENV=production
+# DATABASE_URL=
+# SESSION_SECRET=
+`;
+}
+
+export function vercelConfig(target: "vercel-node" | "vercel-edge"): string {
+  return `${JSON.stringify(
+    {
+      version: 2,
+      buildCommand: `npx capstan build --target ${target}`,
+      outputDirectory: "dist/standalone",
+      functions: {
+        "dist/standalone/api/index.js": target === "vercel-edge"
+          ? { runtime: "edge" }
+          : { runtime: "nodejs20.x" },
+      },
+      routes: [
+        {
+          src: "/(.*)",
+          dest: "/dist/standalone/api/index",
+        },
+      ],
+    },
+    null,
+    2,
+  )}\n`;
+}
+
+export function wranglerConfig(appName: string): string {
+  return `name = "${appName}"
+main = "dist/standalone/worker.js"
+compatibility_date = "2026-03-01"
+compatibility_flags = ["nodejs_compat"]
+`;
+}
+
+export function flyToml(appName: string): string {
+  return `app = "${appName}"
+primary_region = "iad"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]
+`;
+}
+
 export function mainCss(): string {
   return `/* app/styles/main.css — processed by Lightning CSS or Tailwind */
 *,
@@ -259,6 +393,8 @@ app/
     _middleware.ts     — Middleware: runs before all sibling and child routes
     _loading.tsx       — Suspense fallback for sibling/child pages
     _error.tsx         — Error boundary for sibling/child pages
+    not-found.tsx      — Scoped 404 boundary for unknown routes in scope
+    (group)/           — Route group: affects inheritance, not the URL
     [param]/           — Dynamic segment: value available via ctx/params
     [...catchAll]/     — Catch-all segment: matches any remaining path
   models/              — Data model definitions (defineModel)
@@ -273,7 +409,7 @@ ${ticketsNote}
 \`\`\`bash
 capstan dev                 # Dev server with live reload (default port 3000)
 capstan dev --port 4000     # Custom port
-capstan build               # Production build (tsc + manifest + server entry)
+capstan build               # Production build (tsc + manifests + deploy contract + server entry)
 capstan start               # Run production server
 capstan verify --json       # AI TDD: structured diagnostics for auto-fix
 capstan add model <name>    # Scaffold a model
@@ -521,6 +657,19 @@ export default function ErrorFallback({ error, reset }: { error: Error; reset: (
   );
 }
 \`\`\`
+
+### Not Found Boundaries
+
+\`not-found.tsx\` and \`not-found.page.tsx\` provide scoped 404 fallbacks. When a \`GET\` or \`HEAD\` request misses every page route, Capstan renders the nearest \`not-found\` file whose directory scope contains the URL.
+
+\`\`\`
+app/routes/
+  not-found.tsx           # Root fallback
+  docs/
+    not-found.tsx         # Used for /docs/*
+\`\`\`
+
+Route groups like \`(marketing)\` stay out of the URL, but their layouts, middleware, loading boundaries, error boundaries, and \`not-found\` files still participate in inheritance.
 
 ### Client-Side Navigation
 
@@ -1023,9 +1172,25 @@ The 8-step verification cascade:
 ## Production Deployment
 
 \`\`\`bash
-capstan build     # Compiles TS, generates route manifest + production server
-capstan start     # Runs the production server (reads PORT env var)
+capstan build                         # Compiles TS, generates route manifest + deploy-manifest + production server
+capstan build --target node-standalone
+capstan build --target docker
+capstan build --target vercel-node
+capstan build --target vercel-edge
+capstan build --target cloudflare
+capstan build --target fly
+capstan deploy:init --target docker  # Generates target-specific deployment files at project root
+capstan start                        # Runs the production server from dist/
+capstan start --from dist/standalone # Runs the standalone bundle
+capstan verify --deployment --target vercel-edge
 \`\`\`
+
+Build outputs:
+- \`dist/_capstan_server.js\` — production entrypoint
+- \`dist/deploy-manifest.json\` — machine-readable deployment contract
+- \`dist/public/\` — static assets copied from \`app/public/\`, served at \`/\`
+- \`dist/standalone/\` — self-contained deployment directory emitted by explicit deployment targets
+- \`dist/standalone/runtime/\` — portable runtime bundle for \`vercel-edge\` and \`cloudflare\`
 
 Environment variables:
 - \`PORT\` or \`CAPSTAN_PORT\` — server port (default 3000)
@@ -1040,6 +1205,8 @@ Environment variables:
 - Page files: \`*.page.tsx\` — export \`default\` React component + optional \`loader\`
 - Layout files: \`_layout.tsx\` — export \`default\`, must render \`<Outlet />\`
 - Middleware files: \`_middleware.ts\` — export \`default\` from \`defineMiddleware()\`
+- Not-found files: \`not-found.tsx\` or \`not-found.page.tsx\` — export a scoped 404 component
+- Route groups: directories like \`(marketing)\` are URL-transparent but still affect layout/middleware/loading/error/not-found inheritance
 - Model files: \`*.model.ts\` in \`app/models/\`
 - Policy files: in \`app/policies/index.ts\`
 - All API handlers MUST use \`defineAPI()\` with Zod input/output schemas
@@ -1267,6 +1434,50 @@ const result = await ai.agent.run({
 // result.success, result.result, result.iterations, result.callStack
 \`\`\`
 
+### Agent Harness Mode
+
+\`\`\`typescript
+import { createHarness } from "@zauso-ai/capstan-ai";
+
+const harness = await createHarness({
+  llm: openaiProvider({ apiKey: process.env.OPENAI_API_KEY! }),
+  sandbox: {
+    browser: { engine: "camoufox", platform: "jd", accountId: "price-monitor-01" },
+    fs: { rootDir: "./workspace" },
+  },
+  verify: { enabled: true },
+});
+
+const result = await harness.run({
+  goal: "Open the storefront, inspect prices, and save a report to workspace/report.md",
+});
+
+await harness.destroy();
+\`\`\`
+
+### Scheduled Agent Runs
+
+\`\`\`typescript
+import { createCronRunner, createAgentCron } from "@zauso-ai/capstan-cron";
+
+const runner = createCronRunner();
+
+runner.add(createAgentCron({
+  cron: "0 */2 * * *",
+  name: "price-monitor",
+  goal: "Refresh the pricing report",
+  llm: openaiProvider({ apiKey: process.env.OPENAI_API_KEY! }),
+  harnessConfig: {
+    sandbox: {
+      browser: { engine: "camoufox", platform: "jd", accountId: "price-monitor-01" },
+      fs: { rootDir: "./workspace" },
+    },
+  },
+}));
+
+runner.start();
+\`\`\`
+
 ### Using in Capstan Handlers
 
 \`\`\`typescript
@@ -1378,19 +1589,19 @@ fontPreloadLink({ family: "Inter", src: "/fonts/inter.woff2" })
 ## Metadata (SEO, OpenGraph, Twitter Cards)
 
 \`\`\`typescript
-import { defineMetadata, generateMetadataElements, mergeMetadata } from "@zauso-ai/capstan-react";
+import { defineMetadata, mergeMetadata } from "@zauso-ai/capstan-react";
 
-const metadata = defineMetadata({
+export const metadata = defineMetadata({
   title: { default: "My App", template: "%s | My App" },
   description: "Built with Capstan",
   openGraph: { title: "My App", image: "/og.png" },
   twitter: { card: "summary_large_image" },
 });
 
-// In your layout <head>:
-const elements = generateMetadataElements(metadata);
+// Export from a page or layout and Capstan injects the resolved tags into
+// <head> during SSR. Client-side navigations keep the managed tags in sync.
 
-// Merge parent + child metadata (child title "About" → "About | My App"):
+// Merge parent + child metadata manually when you need custom composition:
 const merged = mergeMetadata(parentMetadata, childMetadata);
 \`\`\`
 

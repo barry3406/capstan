@@ -805,7 +805,7 @@ interface LLMProvider {
 
 ## @zauso-ai/capstan-ai
 
-Standalone AI toolkit. Works independently or with the Capstan framework.
+Standalone AI toolkit. Works independently or with the Capstan framework, including browser/filesystem harness mode.
 
 ### createAI(config)
 
@@ -860,6 +860,133 @@ const result = await ai.think("Classify this ticket", {
 // Text generation
 const summary = await ai.generate("Summarize this document...");
 ```
+
+---
+
+### createHarness(config)
+
+Durable harness runtime for long-running agents. Adds browser/filesystem sandboxes, verification hooks, persisted runs/events/artifacts/checkpoints, and runtime lifecycle control on top of `runAgentLoop()`.
+
+```typescript
+function createHarness(config: HarnessConfig): Promise<Harness>
+
+interface HarnessConfig {
+  llm: LLMProvider;
+  sandbox?: {
+    browser?: boolean | BrowserSandboxConfig;
+    fs?: boolean | FsSandboxConfig;
+  };
+  verify?: {
+    enabled?: boolean;
+    maxRetries?: number;
+    verifier?: HarnessVerifierFn;
+  };
+  observe?: {
+    logger?: HarnessLogger;
+    onEvent?: (event: HarnessEvent) => void;
+  };
+  context?: {
+    enabled?: boolean;
+    maxPromptTokens?: number;
+    reserveOutputTokens?: number;
+    maxMemories?: number;
+    maxArtifacts?: number;
+    maxRecentMessages?: number;
+    maxRecentToolResults?: number;
+    microcompactToolResultChars?: number;
+    sessionCompactThreshold?: number;
+    defaultScopes?: MemoryScope[];
+    autoPromoteObservations?: boolean;
+    autoPromoteSummaries?: boolean;
+  };
+  runtime?: {
+    rootDir?: string;
+    maxConcurrentRuns?: number;
+    driver?: HarnessSandboxDriver;
+    beforeToolCall?: HarnessToolPolicyFn;
+  };
+}
+
+interface BrowserSandboxConfig {
+  engine?: "playwright" | "camoufox";
+  platform?: string;
+  accountId?: string;
+  guardMode?: "vision" | "hybrid";
+  headless?: boolean;
+  proxy?: string;
+  viewport?: { width: number; height: number };
+}
+
+interface FsSandboxConfig {
+  rootDir: string;
+  allowWrite?: boolean;
+  allowDelete?: boolean;
+  maxFileSize?: number;
+}
+
+interface Harness {
+  startRun(config: AgentRunConfig): Promise<HarnessRunHandle>;
+  run(config: AgentRunConfig): Promise<HarnessRunResult>;
+  pauseRun(runId: string): Promise<HarnessRunRecord>;
+  cancelRun(runId: string): Promise<HarnessRunRecord>;
+  resumeRun(runId: string, options?: HarnessResumeOptions): Promise<HarnessRunResult>;
+  getRun(runId: string): Promise<HarnessRunRecord | undefined>;
+  listRuns(): Promise<HarnessRunRecord[]>;
+  getEvents(runId?: string): Promise<HarnessRunEventRecord[]>;
+  getArtifacts(runId: string): Promise<HarnessArtifactRecord[]>;
+  getCheckpoint(runId: string): Promise<AgentLoopCheckpoint | undefined>;
+  getSessionMemory(runId: string): Promise<HarnessSessionMemoryRecord | undefined>;
+  getLatestSummary(runId: string): Promise<HarnessSummaryRecord | undefined>;
+  listSummaries(runId?: string): Promise<HarnessSummaryRecord[]>;
+  rememberMemory(input: HarnessMemoryInput): Promise<HarnessMemoryRecord>;
+  recallMemory(query: HarnessMemoryQuery): Promise<HarnessMemoryMatch[]>;
+  assembleContext(runId: string, options?: HarnessContextAssembleOptions): Promise<HarnessContextPackage>;
+  replayRun(runId: string): Promise<HarnessReplayReport>;
+  getPaths(): HarnessRuntimePaths;
+  destroy(): Promise<void>;
+}
+```
+
+**Usage:**
+
+```typescript
+import { createHarness } from "@zauso-ai/capstan-ai";
+
+const harness = await createHarness({
+  llm: openaiProvider({ apiKey: process.env.OPENAI_API_KEY! }),
+  sandbox: {
+    browser: { engine: "camoufox", platform: "jd", accountId: "price-monitor-01" },
+    fs: { rootDir: "./workspace" },
+  },
+  runtime: {
+    rootDir: process.cwd(),
+    maxConcurrentRuns: 2,
+  },
+  verify: { enabled: true },
+});
+
+const started = await harness.startRun({
+  goal: "Research the storefront and save notes to workspace/report.md",
+});
+
+const result = await started.result;
+const checkpoint = await harness.getCheckpoint(started.runId);
+
+await harness.destroy();
+```
+
+`engine: "playwright"` is the lightweight default. `engine: "camoufox"` enables the kernel adapter with stealth engines, persistent profiles, and platform guards.
+
+`runtime.driver` defaults to `LocalHarnessSandboxDriver`, which creates an isolated sandbox directory per run under `.capstan/harness/sandboxes/<runId>/`. The runtime store persists:
+- `runs/` — current run records
+- `events/` + `events.ndjson` — per-run and global lifecycle event logs
+- `artifacts/` — screenshots and other persisted tool outputs
+- `checkpoints/` — resumable loop checkpoints
+- `session-memory/` — structured run-scoped working memory
+- `summaries/` — compacted summaries for pause/resume and long histories
+- `memory/` — long-term runtime memory entries used during context assembly
+
+Use `openHarnessRuntime(rootDir?)` when you need an independent control plane that can inspect paused/completed runs without a live harness instance.
 
 ---
 
@@ -1106,7 +1233,100 @@ interface MemoryBackend {
 
 ---
 
-### Types
+## @zauso-ai/capstan-cron
+
+Recurring job scheduler for Capstan AI workflows. Works with Bun-native cron when available and falls back to a simple interval runner elsewhere.
+
+### defineCron(config)
+
+Declarative helper that returns the cron config unchanged.
+
+```typescript
+function defineCron(config: CronJobConfig): CronJobConfig
+```
+
+### createCronRunner()
+
+Interval-based scheduler for simple cron expressions.
+
+```typescript
+function createCronRunner(): CronRunner
+
+interface CronJobConfig {
+  name: string;
+  pattern: string;
+  handler: () => Promise<void>;
+  timezone?: string;
+  maxConcurrent?: number;
+  onError?: (err: Error) => void;
+  enabled?: boolean;
+}
+
+interface CronRunner {
+  add(config: CronJobConfig): string;
+  remove(id: string): boolean;
+  start(): void;
+  stop(): void;
+  getJobs(): CronJobInfo[];
+}
+```
+
+`createCronRunner()` is intentionally lightweight. It approximates the supported cron patterns as intervals, so use it for simple `*/N` minute/hour schedules rather than timezone-sensitive calendar rules.
+
+### createBunCronRunner()
+
+Use Bun's native cron implementation when running on Bun:
+
+```typescript
+function createBunCronRunner(): CronRunner
+```
+
+When `Bun.cron` is unavailable, this falls back to `createCronRunner()`.
+
+### createAgentCron(config)
+
+Create a cron job that bootstraps `createHarness()` and runs an agent loop on each tick.
+
+```typescript
+function createAgentCron(config: AgentCronConfig): CronJobConfig
+
+interface AgentCronConfig {
+  cron: string;
+  name: string;
+  goal: string | (() => string);
+  llm: unknown;
+  harnessConfig?: Record<string, unknown>;
+  onResult?: (result: unknown) => void;
+  onError?: (err: Error) => void;
+}
+```
+
+**Usage:**
+
+```typescript
+import { createCronRunner, createAgentCron } from "@zauso-ai/capstan-cron";
+
+const runner = createCronRunner();
+
+runner.add(createAgentCron({
+  cron: "0 */2 * * *",
+  name: "price-monitor",
+  goal: "Check the storefront and refresh workspace/report.md",
+  llm: openaiProvider({ apiKey: process.env.OPENAI_API_KEY! }),
+  harnessConfig: {
+    sandbox: {
+      browser: { engine: "camoufox", platform: "jd", accountId: "price-monitor-01" },
+      fs: { rootDir: "./workspace" },
+    },
+  },
+}));
+
+runner.start();
+```
+
+---
+
+## Shared Types
 
 ```typescript
 type HttpMethod = "GET" | "POST" | "PUT" | "DELETE" | "PATCH";
@@ -2509,12 +2729,24 @@ function withViewTransition(fn: () => void | Promise<void>): Promise<void>
 type RouterStatus = "idle" | "loading" | "error";
 type PrefetchStrategy = "none" | "hover" | "viewport";
 
+interface ClientMetadata {
+  title?: string;
+  description?: string;
+  keywords?: string[];
+  robots?: string | { index?: boolean; follow?: boolean };
+  canonical?: string;
+  openGraph?: Record<string, unknown>;
+  twitter?: Record<string, unknown>;
+  icons?: Record<string, unknown>;
+  alternates?: Record<string, string>;
+}
+
 interface NavigationPayload {
   url: string;
   layoutKey: string;
   html?: string;
   loaderData: unknown;
-  metadata?: { title?: string; description?: string };
+  metadata?: ClientMetadata;
   componentType: "server" | "client";
 }
 
@@ -2539,7 +2771,7 @@ interface NavigateEventDetail {
   url: string;
   loaderData: unknown;
   params: Record<string, string>;
-  metadata?: { title?: string; description?: string };
+  metadata?: ClientMetadata;
 }
 ```
 

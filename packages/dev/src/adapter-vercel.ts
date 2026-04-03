@@ -44,6 +44,33 @@ export function createVercelNodeHandler(app: { fetch: (req: Request) => Promise<
  * Generate a `vercel.json`-compatible configuration object for deploying
  * a Capstan application on Vercel.
  */
-export function generateVercelConfig(): Record<string, unknown> {
-  return { buildCommand: "npx capstan build", outputDirectory: "dist" };
+export function generateVercelConfig(options?: {
+  runtime?: "nodejs" | "edge";
+  entry?: string;
+  buildCommand?: string;
+  outputDirectory?: string;
+}): Record<string, unknown> {
+  const runtime = options?.runtime ?? "nodejs";
+  const entry = options?.entry ?? "api/index.js";
+
+  return {
+    version: 2,
+    buildCommand: options?.buildCommand ?? "npx capstan build",
+    outputDirectory: options?.outputDirectory ?? "dist",
+    functions: {
+      [entry]: runtime === "edge"
+        ? {
+            runtime: "edge",
+          }
+        : {
+            runtime: "nodejs20.x",
+          },
+    },
+    routes: [
+      {
+        src: "/(.*)",
+        dest: `/${entry.replace(/\.js$/, "")}`,
+      },
+    ],
+  };
 }

@@ -5,85 +5,122 @@
 Capstan's 0-1 implementation is TypeScript-first.
 
 This is an execution choice, not a long-term dogma. The goal is to maximize
-speed, agent legibility, and cohesion while the source-of-truth model and the
-developer loop are still taking shape.
+agent legibility, shared tooling, and iteration speed while the application
+contract and the product loop are still converging.
 
 ## Why TypeScript First
 
-- Claude Code is highly effective in TypeScript-first repositories
-- one language keeps the early loop fast and low-friction
-- Node has the best default path for code generation and web projection
-- it keeps the graph, compiler, CLI, and initial surfaces in one ecosystem
+- coding agents are highly effective in TypeScript-first repositories
+- one language keeps runtime, scaffolding, verification, and docs close
+- the current web and tooling stack is fastest to evolve in TypeScript
+- early package boundaries stay easier to change while the kernel model settles
+
+## Current Architectural Shape
+
+Capstan's conceptual architecture has five kernels plus one source of truth.
+Those kernels do not have to map one-to-one to package names.
+
+### Source Of Truth
+
+The working application vocabulary is:
+
+`Domain + Resource + Capability + Task + Policy + Artifact + View`
+
+Today that vocabulary is materialized through framework definitions, generated
+contracts, manifests, and scaffolded application output. A tighter unified
+contract is still an active priority.
+
+### Contract Layer
+
+Primary packages today:
+
+- `@zauso-ai/capstan-core`
+- `@zauso-ai/capstan-router`
+- `@zauso-ai/capstan-db`
+- `@zauso-ai/capstan-auth`
+
+Responsibilities:
+
+- define capabilities, policies, routes, models, and runtime contracts
+- keep human and agent projections grounded in shared semantics
+- expose enough structure for verification, scaffolding, and release tooling
+
+### Harness Layer
+
+Primary packages today:
+
+- `@zauso-ai/capstan-ai`
+- `@zauso-ai/capstan-cron`
+
+Responsibilities:
+
+- run agent work, including durable or recurring execution
+- coordinate browser, shell, filesystem, memory, and tool use
+- support checkpoints, approvals, interventions, artifacts, and replay
+
+### Surface Layer
+
+Primary packages today:
+
+- `@zauso-ai/capstan-agent`
+- `@zauso-ai/capstan-react`
+- `@zauso-ai/capstan-dev`
+- `@zauso-ai/capstan-cli`
+
+Responsibilities:
+
+- expose shared machine surfaces such as HTTP, MCP, A2A, and OpenAPI
+- provide the human application shell and operator-facing surfaces
+- support local development, runtime inspection, and operational commands
+
+### Feedback And Release Layer
+
+Primary packages today:
+
+- `@zauso-ai/capstan-core`
+- `@zauso-ai/capstan-cli`
+- generated app assertions and contracts
+
+Responsibilities:
+
+- verify type, contract, runtime, and generated-surface behavior
+- produce structured diagnostics and repair-oriented output
+- build deployable output and keep release inputs explicit
+
+### Scaffolding Layer
+
+Primary package today:
+
+- `create-capstan-app`
+
+Responsibilities:
+
+- establish the default project structure
+- generate agent-readable guides and starter workflows
+- keep new applications aligned with the framework's current contract
 
 ## Long-Term Boundary
 
 Capstan should eventually distinguish between:
 
-- `framework layer`: graph definitions, projections, code generation, policies,
-  and human surfaces
-- `host layer`: harness runtime, task engine, process control, durable
-  execution, and system integrations
+- `framework layer`: contract definition, projections, verification, release
+  contracts, and developer tooling
+- `host layer`: durable execution, process control, sandboxing, and system
+  integrations
 
 The framework layer can remain TypeScript-friendly.
-The host layer may later move to a native runtime such as Rust if that becomes
-the best path for stability and distribution.
-
-## 0-1 Modules
-
-### `packages/app-graph`
-
-The first source-of-truth package.
-
-Responsibilities:
-
-- define the minimal `App Graph`
-- validate graph shape and references
-- provide shared types used by future compiler and surface packages
-
-### `packages/compiler`
-
-The first projection engine.
-
-Responsibilities:
-
-- turn an `App Graph` into a deterministic project skeleton
-- generate stable folders for resources, capabilities, tasks, policies,
-  artifacts, and views
-- create the first AI-facing control plane entry points for generated apps
-
-### `packages/cli`
-
-The first operator entry point.
-
-Responsibilities:
-
-- inspect and validate graphs
-- expose stable commands for humans and coding agents
-- become the first shell of the Capstan harness
-
-## Deferred Modules
-
-These are expected later, but are not required for the first milestone:
-
-- `surface-web`
-- `surface-agent`
-- `feedback`
-- `release`
-- `harness-host`
-
-## 0-1 Tooling
-
-- Node.js
-- TypeScript
-- npm workspaces
-- plain `tsc` for compilation
-- `tsx` for local TypeScript execution
+The host layer may later move to a lower-level runtime such as Rust if that
+becomes the best path for stability, portability, or distribution.
 
 ## Working Rule
 
-When a new module is introduced, it must answer:
+When a new package or boundary is proposed, it must answer:
 
-1. Is this part of the source of truth?
-2. Is this a projection from the graph?
-3. Is this part of the harness host?
+1. Does this tighten the shared application contract?
+2. Does this reduce entropy in execution, verification, recovery, or
+   supervision?
+3. Could this remain a module inside an existing package instead of becoming a
+   new package?
 4. Can a coding agent discover and operate it with minimal ambiguity?
+
+Package proliferation is not a strategy. Clearer contracts are.

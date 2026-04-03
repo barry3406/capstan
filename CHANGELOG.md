@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.0.0-beta.7] - 2026-04-03
+
+### Added
+- Durable harness runtime in `@zauso-ai/capstan-ai` with persisted runs, events, artifacts, checkpoints, and control-plane inspection
+- Harness context kernel with session memory, summaries, long-term runtime memory, and artifact-aware context assembly
+- `@zauso-ai/capstan-cron` recurring execution package with `defineCron()`, `createCronRunner()`, `createBunCronRunner()`, and `createAgentCron()`
+- Standalone deployment targets and deployment verification for Docker, Vercel Node, Vercel Edge, Cloudflare, and Fly
+
+### Changed
+- Root test entrypoints now enumerate the full repository test suite via `scripts/run-bun-tests.mjs`
+- Root documentation now reflects the current 11-package workspace and harness runtime architecture
+
 ## [1.0.0-beta.6] - 2026-03-30
 
 ### Added

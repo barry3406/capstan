@@ -8,6 +8,8 @@ import type {
 import { NavigationCache } from "./cache.js";
 import type { ClientRouteManifest } from "./manifest.js";
 import { matchRoute, findSharedLayout } from "./manifest.js";
+import { normalizeNavigationPayload } from "./payload.js";
+import { syncDocumentHead } from "./head.js";
 import {
   saveScrollPosition,
   restoreScrollPosition,
@@ -134,13 +136,13 @@ export class CapstanRouter {
    * No-op if already cached.
    */
   async prefetch(url: string): Promise<void> {
-    if (this.cache.has(url)) return;
+    if (this.cache.peek(url)) return;
     try {
       const res = await fetch(url, {
         headers: { [NAV_HEADER]: "1", Accept: "application/json" },
       });
       if (!res.ok) return;
-      const payload = (await res.json()) as NavigationPayload;
+      const payload = normalizeNavigationPayload(url, await res.json());
       this.cache.set(url, payload);
     } catch {
       // Prefetch failures are non-critical — silently ignore
@@ -190,7 +192,7 @@ export class CapstanRouter {
       throw new Error(`Navigation fetch failed: ${res.status} ${res.statusText}`);
     }
 
-    const payload = (await res.json()) as NavigationPayload;
+    const payload = normalizeNavigationPayload(url, await res.json());
     this.cache.set(url, payload);
     return payload;
   }
@@ -207,10 +209,7 @@ export class CapstanRouter {
     const targetRoute = match?.route;
     const params = match?.params ?? {};
 
-    // Update page title
-    if (payload.metadata?.title) {
-      document.title = payload.metadata.title;
-    }
+    syncDocumentHead(payload.metadata);
 
     // Find the deepest shared layout between current and target
     const layoutKey = targetRoute

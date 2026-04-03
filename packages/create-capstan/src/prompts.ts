@@ -50,13 +50,23 @@ export async function confirmPrompt(message: string): Promise<boolean> {
 export async function runPrompts(): Promise<{
   projectName: string;
   template: "blank" | "tickets";
+  deploy: "none" | "docker" | "vercel-node" | "vercel-edge" | "cloudflare" | "fly";
 }> {
   const projectName = await prompt("Project name", "my-capstan-app");
 
   const template = await select("Which template?", ["blank", "tickets"]);
+  const deploy = await select("Deployment target?", [
+    "none",
+    "docker",
+    "vercel-node",
+    "vercel-edge",
+    "cloudflare",
+    "fly",
+  ]);
 
   return {
     projectName,
     template: template as "blank" | "tickets",
+    deploy: deploy as "none" | "docker" | "vercel-node" | "vercel-edge" | "cloudflare" | "fly",
   };
 }

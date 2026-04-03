@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import {
+  planMigration,
   generateMigration,
   applyMigration,
   getMigrationStatus,
@@ -115,11 +116,17 @@ describe("generateMigration", () => {
     expect(alterStmt!).toContain("body");
   });
 
-  it("drops tables that no longer exist", () => {
+  it("reports removed tables and only drops them when destructive changes are enabled", () => {
     const v1 = makeModel("OldModel", { name: field.string() });
     const sql = generateMigration([v1], []);
-    expect(sql.length).toBeGreaterThan(0);
-    expect(sql.some((s) => s.includes("DROP TABLE"))).toBe(true);
+    expect(sql).toEqual([]);
+
+    const plan = planMigration([v1], []);
+    expect(plan.issues).toHaveLength(1);
+    expect(plan.issues[0]?.code).toBe("DROP_TABLE");
+
+    const destructiveSql = generateMigration([v1], [], { allowDestructive: true });
+    expect(destructiveSql.some((statement) => statement.includes("DROP TABLE"))).toBe(true);
   });
 
   it("returns empty array when models are identical", () => {

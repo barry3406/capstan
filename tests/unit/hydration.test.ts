@@ -216,6 +216,24 @@ describe("renderPage hydration modes", () => {
     const result = await renderPage(makeRenderOptions());
     expect(result.statusCode).toBe(200);
   });
+
+  it("re-renders with the server error fallback when page rendering throws", async () => {
+    const result = await renderPage(
+      makeRenderOptions({
+        pageModule: makePageModule({
+          default: () => {
+            throw new Error("server boom");
+          },
+        }),
+        errorComponent: ({ error }) =>
+          createElement("div", { "data-error": "root" }, `root error: ${error.message}`),
+      }),
+    );
+
+    expect(result.html).toContain('data-error="root"');
+    expect(result.html).toContain("root error: server boom");
+    expect(result.html).not.toContain("Switched to client rendering");
+  });
 });
 
 // ---------------------------------------------------------------------------

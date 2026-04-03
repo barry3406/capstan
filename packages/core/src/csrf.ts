@@ -1,4 +1,3 @@
-import { randomBytes } from "node:crypto";
 import type { Context, Next } from "hono";
 
 // ---------------------------------------------------------------------------
@@ -12,7 +11,15 @@ const STATE_CHANGING_METHODS = new Set(["POST", "PUT", "DELETE", "PATCH"]);
 /**
  * Generate a cryptographically random CSRF token (32 hex characters).
  */
-function generateCsrfToken(): string {
+async function generateCsrfToken(): Promise<string> {
+  const runtimeCrypto = globalThis.crypto;
+  if (runtimeCrypto && typeof runtimeCrypto.getRandomValues === "function") {
+    const bytes = new Uint8Array(16);
+    runtimeCrypto.getRandomValues(bytes);
+    return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  }
+
+  const { randomBytes } = await import("node:crypto");
   return randomBytes(16).toString("hex");
 }
 
@@ -82,7 +89,7 @@ export function csrfProtection() {
       await next();
     } else {
       // --- Issue a fresh token on safe requests ---
-      const token = generateCsrfToken();
+      const token = await generateCsrfToken();
 
       await next();
 

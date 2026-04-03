@@ -12,7 +12,7 @@ One `defineAPI()` call. Four protocol surfaces. Humans and AI agents, served sim
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Tests](https://img.shields.io/badge/tests-1404%20passing-brightgreen?logo=bun&logoColor=white)](https://bun.sh)
+[![Tests](https://img.shields.io/badge/tests-full%20suite%20passing-brightgreen?logo=bun&logoColor=white)](https://bun.sh)
 [![Version](https://img.shields.io/badge/version-1.0.0--beta.7-orange)](https://github.com/barry3406/capstan)
 [![ESM](https://img.shields.io/badge/ESM-only-blue)](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Modules)
 
@@ -24,11 +24,11 @@ One `defineAPI()` call. Four protocol surfaces. Humans and AI agents, served sim
 
 ## What is Capstan?
 
-**Capstan** is a Bun-native full-stack TypeScript framework where every API you write is automatically accessible to both humans (via REST) and AI agents (via MCP, A2A, and OpenAPI) — with zero extra code. It combines file-based routing, Zod-validated endpoints, Drizzle ORM models (SQLite, PostgreSQL, or MySQL), and a built-in verification system that AI coding agents use as a self-correcting TDD loop.
+**Capstan** is a Bun-native full-stack TypeScript framework for building applications that are agent-operable by default. The same `defineAPI()` contract can drive human-facing HTTP endpoints, AI-facing MCP/A2A/OpenAPI surfaces, operator workflows, and structured verification with zero adapter glue. It combines file-based routing, Zod-validated endpoints, Drizzle ORM models, built-in policy and approval primitives, and a verification loop that coding agents can use to converge on repairs.
 
-Production-ready: `capstan build` compiles your app, `capstan start` serves it — with CSRF protection, configurable CORS, request body limits, and structured JSON logging out of the box. Bun is the primary runtime; Node.js is also supported.
+Production-ready: `capstan build` compiles your app, `capstan start` serves it, and the framework ships with deployable build outputs, structured manifests, CSRF protection, configurable CORS, request body limits, and JSON logging out of the box. Bun is the primary runtime; Node.js is also supported.
 
-Think of it as **Next.js if it were designed from day one for a world where half your consumers are LLMs**.
+Think of it as a full-stack framework built for a world where humans, coding agents, and operator tooling all need to consume the same application contract.
 
 ## How It Works
 
@@ -82,11 +82,18 @@ Think of it as **Next.js if it were designed from day one for a world where half
 | **Production** | `next build` / `next start` | Uvicorn | `capstan build` / `capstan start` |
 | **Full stack** | React SSR + API | API only | React SSR + API + Agent protocols |
 
-**The key insight:** every API you build is already an AI tool. No wrappers, no adapters, no second codebase.
+**The key insight:** the application contract is shared. The same capability definition can drive APIs, agent protocols, supervision flows, verification, and release.
 
 ### Feature Highlights
 
-- **Multi-protocol from one definition** — HTTP, MCP (stdio + Streamable HTTP), A2A, OpenAPI from a single `defineAPI()` call
+- **Shared application contract** — `defineAPI()` produces HTTP, MCP, A2A, OpenAPI, and capability metadata from one definition
+- **Policy and approval primitives** — `definePolicy()` and approval workflows keep human supervision in the same execution model as agent actions
+- **Structured verification loop** — `capstan verify --json` emits repair-oriented diagnostics for coding agents instead of ad hoc test output
+- **Durable agent runtime** — `createHarness()` provides persisted runs, checkpoints, artifacts, event streams, browser sandboxes, and filesystem sandboxes
+- **Operator-facing foundations** — generated control-plane and human-surface building blocks keep supervision tied to the same runtime contracts
+- **Multi-protocol discovery and execution** — built-in manifests, MCP, A2A, and OpenAPI make capabilities legible to external agents
+- **AI toolkit (`@zauso-ai/capstan-ai`)** — `createAI()`, `think()`, `generate()`, memory, and agent loops for standalone or in-framework use
+- **Scheduled agent work (`@zauso-ai/capstan-cron`)** — cron-oriented runtime for recurring or continuous agent jobs
 - **MCP Client** — consume external MCP servers from within your handlers via `connectMCP()`
 - **Vector fields & RAG primitives** — `field.vector()`, `defineEmbedding`, and hybrid search built into the ORM
 - **LangChain integration** — use Capstan APIs as LangChain tools, or call LangChain chains from handlers
@@ -94,11 +101,9 @@ Think of it as **Next.js if it were designed from day one for a world where half
 - **React Server Components foundations** — streaming SSR with async component support, `ClientOnly`, `serverOnly()` guard
 - **DPoP (RFC 9449) & SPIFFE/mTLS** — proof-of-possession tokens and workload identity for service-to-service auth
 - **Token-aware rate limiting** — separate rate-limit buckets for human sessions vs agent API keys
-- **Bun-native** — primary runtime is Bun with `Bun.serve()` and `Bun.spawn()`; Node.js also fully supported
-- **Turborepo parallel builds** — monorepo packages build in dependency order with caching
 - **OpenTelemetry cross-protocol tracing** — traces span HTTP, MCP, and A2A calls automatically
-- **MCP test harness** — test your MCP tools in isolation with `capstan test:mcp`
 - **Cross-protocol contract testing** — verifier step 8 checks that HTTP, MCP, A2A, and OpenAPI all agree
+- **Deployable build outputs** — `capstan build` emits explicit output contracts for Node/Docker-style deployment flows
 - **Plugin system** — `definePlugin()` to add routes, policies, and middleware; load via `plugins: []` in config
 - **Pluggable state stores** — `KeyValueStore<T>` interface with `MemoryStore` default; swap to Redis or any external backend via `setApprovalStore()`, `setRateLimitStore()`, `setDpopReplayStore()`
 - **EU AI Act compliance** — `defineCompliance()` with risk level, audit logging, and transparency; automatic `GET /capstan/audit` endpoint
@@ -109,9 +114,8 @@ Think of it as **Next.js if it were designed from day one for a world where half
 - **Deployment adapters** — Cloudflare Workers (`createCloudflareHandler`), Vercel (Edge + Node.js), Fly.io (write replay)
 - **CSS pipeline** — Lightning CSS processing built-in, Tailwind v4 auto-detection, zero-config
 - **WebSocket support** — `defineWebSocket()` for real-time endpoints, `WebSocketRoom` for pub/sub broadcast
-- **AI toolkit (`@zauso-ai/capstan-ai`)** — standalone package: `createAI()` factory, `think<T>(prompt, { schema })` for structured reasoning, `generate(prompt)` for text, streaming variants, `remember()`/`recall()` memory with hybrid search, `memory.about(type, id)` scoped memory, `agent.run()` self-orchestrating loop with tool use
 - **Image & Font optimization** — responsive srcset, preload, lazy loading, blur-up placeholder, `defineFont()` with CSS variable support
-- **Metadata API** — `defineMetadata()` for SEO, OpenGraph, Twitter Cards with title templates and `mergeMetadata()`
+- **Metadata API** — `defineMetadata()` for SEO, OpenGraph, Twitter Cards, automatic `<head>` injection, and client-side head sync during SPA navigation
 - **Error boundaries with reset** — `<ErrorBoundary fallback={...}>` with retry, `<NotFound>` 404 component; `_error.tsx` file convention for directory-scoped error boundaries
 - **Loading UI** — `_loading.tsx` file convention for Suspense fallbacks, scoped by directory like layouts
 - **Cache layer with ISR** — `cacheSet`/`cacheGet` with TTL + tags, `cached()` stale-while-revalidate decorator, `cacheInvalidateTag()` bulk invalidation
@@ -400,7 +404,7 @@ When you run `capstan dev`, these endpoints are auto-generated:
 | `POST /.well-known/a2a` | A2A | JSON-RPC handler with SSE streaming |
 | `GET /openapi.json` | OpenAPI 3.1 | Full API specification |
 | `GET /capstan/approvals` | Capstan | Authenticated approval queue |
-| `POST /mcp` | MCP (Streamable HTTP) | Remote MCP tool access for any client |
+| `POST /.well-known/mcp` | MCP (Streamable HTTP) | Remote MCP tool access for any client |
 | `bunx capstan mcp` | MCP (stdio) | For Claude Desktop / Cursor |
 
 ### Connect to Claude Desktop
@@ -428,7 +432,9 @@ capstan.config.ts           ← App configuration (DB, auth, agent settings)
 app/
   routes/
     index.page.tsx          ← React pages (SSR with loaders)
+    not-found.tsx           ← Scoped 404 boundary for missing routes
     index.api.ts            ← API handlers (export GET, POST, PUT, DELETE)
+    (marketing)/            ← Route group (transparent in the URL)
     tickets/
       index.api.ts          ← File-based routing: /tickets
       [id].api.ts           ← Dynamic segments: /tickets/:id
@@ -457,29 +463,53 @@ app/
 # Build for production
 bunx capstan build
 
+# Build a standalone deployment bundle
+bunx capstan build --target node-standalone
+
+# Build a Docker-ready deployment bundle
+bunx capstan build --target docker
+
+# Build Vercel / Cloudflare / Fly targets
+bunx capstan build --target vercel-node
+bunx capstan build --target vercel-edge
+bunx capstan build --target cloudflare
+bunx capstan build --target fly
+
+# Generate root deployment files for a target
+bunx capstan deploy:init --target vercel-edge
+
 # Start the production server
 bunx capstan start
+
+# Start from the standalone bundle
+bunx capstan start --from dist/standalone
+
+# Verify the built deployment bundle before shipping
+bunx capstan verify --deployment --target vercel-edge
 ```
 
 `capstan build` compiles your routes, models, and configuration into an optimized production bundle. `capstan start` launches the server with security defaults enabled — using `Bun.serve()` on Bun or `node:http` on Node.js. Configure the listen port, CORS origins, and database provider in `capstan.config.ts`.
+
+Build output is explicit and machine-readable: `dist/_capstan_server.js` is the production entrypoint, `dist/deploy-manifest.json` describes the deployment contract, and static assets copied from `app/public/` are served from the root URL path in production just like they are in development. Any explicit deployment target emits `dist/standalone/` with a runtime `package.json`; target-specific files are added on top of that bundle, such as `api/index.js` + `vercel.json` for Vercel, `worker.js` + `wrangler.toml` for Cloudflare, and `fly.toml` + Docker assets for Fly.io. `capstan verify --deployment --target <target>` validates those target contracts before release.
 
 ---
 
 ## 📦 Packages
 
-Capstan ships 10 runtime packages:
+Capstan ships 11 workspace packages:
 
 | Package | Description |
 |---------|-------------|
 | `@zauso-ai/capstan-core` | Hono server, `defineAPI`, `defineMiddleware`, `definePolicy`, approval workflow, 8-step verifier |
-| `@zauso-ai/capstan-router` | File-based routing (`.page.tsx`, `.api.ts`, `_layout.tsx`, `_middleware.ts`) |
+| `@zauso-ai/capstan-router` | File-based routing (`.page.tsx`, `.api.ts`, `_layout.tsx`, `_middleware.ts`, `not-found.tsx`, route groups) |
 | `@zauso-ai/capstan-db` | Drizzle ORM, `defineModel`, field/relation helpers, migrations, auto CRUD, vector fields, `defineEmbedding`, hybrid search (SQLite, PostgreSQL, MySQL) |
 | `@zauso-ai/capstan-auth` | JWT sessions, API key auth, OAuth providers (Google, GitHub), DPoP (RFC 9449), SPIFFE/mTLS, token-aware rate limiting (`"human"` / `"agent"` / `"anonymous"`) |
 | `@zauso-ai/capstan-agent` | `CapabilityRegistry`, MCP server (stdio + Streamable HTTP), MCP client, A2A adapter (SSE), OpenAPI generator, LangChain integration |
-| `@zauso-ai/capstan-ai` | Standalone AI toolkit: `createAI`, `think`/`generate` (structured + streaming), `remember`/`recall` memory with hybrid search, `memory.about()` scoped memory, `agent.run()` self-orchestrating loop |
-| `@zauso-ai/capstan-react` | SSR with loaders, layouts, `Outlet`, selective hydration, ISR render strategies, `<Link>` SPA router with prefetch & View Transitions, `Image`, `defineFont`, `defineMetadata`, `ErrorBoundary` |
+| `@zauso-ai/capstan-ai` | Standalone AI toolkit: `createAI`, `think`/`generate` (structured + streaming), scoped memory primitives, `agent.run()`, and durable `createHarness()` runtime with context assembly, control-plane inspection, and browser/fs sandboxes |
+| `@zauso-ai/capstan-cron` | Recurring job scheduler: `defineCron`, `createCronRunner`, `createBunCronRunner`, `createAgentCron` |
+| `@zauso-ai/capstan-react` | SSR with loaders, layouts, scoped `not-found` boundaries, automatic metadata/head management, selective hydration, ISR render strategies, `<Link>` SPA router with prefetch & View Transitions, `Image`, `defineFont`, `defineMetadata`, `ErrorBoundary` |
 | `@zauso-ai/capstan-dev` | Dev server with file watching, hot route reload, MCP/A2A endpoints |
-| `@zauso-ai/capstan-cli` | CLI: `dev`, `build`, `start`, `verify`, `add`, `mcp`, `db:*` |
+| `@zauso-ai/capstan-cli` | CLI: `dev`, `build`, `start`, `deploy:init`, `verify`, `add`, `mcp`, `db:*` |
 | `create-capstan-app` | Project scaffolder (`--template blank`, `--template tickets`) |
 
 
@@ -494,7 +524,7 @@ Detailed guides live in the [`docs/`](docs/) directory:
 - [Architecture](docs/architecture/) — System design, multi-protocol registry, route scanning
 - [Authentication](docs/authentication.md) — JWT sessions, API keys, auth types
 - [Database](docs/database.md) — SQLite, PostgreSQL, MySQL setup and migrations
-- [Deployment](docs/deployment.md) — `capstan build`, `capstan start`, production configuration
+- [Deployment](docs/deployment.md) — `capstan build`, platform targets, `deploy:init`, `verify --deployment`
 - [Testing Strategy](docs/testing-strategy.md) — Unit, integration, and verifier testing
 - [API Reference](docs/api-reference.md) — Full API surface documentation
 - [Comparison](docs/comparison.md) — Capstan vs Next.js, FastAPI, and others
@@ -510,8 +540,8 @@ Capstan is in active beta (`v1.0.0-beta.7`). Contributions are welcome!
 git clone https://github.com/barry3406/capstan.git
 cd capstan
 npm install
-npm run build        # Build 9 runtime packages
-npm run test:new     # Bun tests (1404 tests, ~18s)
+npm run build        # Build all workspace packages
+npm test             # Run the full repository test suite
 ```
 
 ### Conventions

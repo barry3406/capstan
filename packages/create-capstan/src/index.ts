@@ -13,6 +13,15 @@ import pc from "picocolors";
 
 const VALID_TEMPLATES = ["blank", "tickets"] as const;
 type Template = (typeof VALID_TEMPLATES)[number];
+const VALID_DEPLOY_TARGETS = [
+  "none",
+  "docker",
+  "vercel-node",
+  "vercel-edge",
+  "cloudflare",
+  "fly",
+] as const;
+type DeployTarget = (typeof VALID_DEPLOY_TARGETS)[number];
 
 function printHelp(): void {
   console.log(`
@@ -20,6 +29,7 @@ ${pc.bold("Usage:")} create-capstan-app [project-name] [options]
 
 ${pc.bold("Options:")}
   ${pc.cyan("--template, -t")} <name>   Template to use (blank, tickets)
+  ${pc.cyan("--deploy")} <target>       Deployment files to generate (none, docker, vercel-node, vercel-edge, cloudflare, fly)
   ${pc.cyan("--install")}              Auto-install dependencies after scaffolding
   ${pc.cyan("--no-install")}           Skip dependency install prompt
   ${pc.cyan("--help, -h")}             Show this help message
@@ -28,6 +38,8 @@ ${pc.bold("Examples:")}
   npx create-capstan-app
   npx create-capstan-app my-app
   npx create-capstan-app my-app --template tickets
+  npx create-capstan-app my-app --template tickets --deploy docker
+  npx create-capstan-app my-app --template tickets --deploy vercel-node
   npx create-capstan-app my-app --template tickets --install
 `);
 }
@@ -35,11 +47,13 @@ ${pc.bold("Examples:")}
 function parseArgs(argv: string[]): {
   projectName: string | undefined;
   template: Template | undefined;
+  deploy: DeployTarget | undefined;
   help: boolean;
   install: boolean | undefined;
 } {
   let projectName: string | undefined;
   let template: Template | undefined;
+  let deploy: DeployTarget | undefined;
   let help = false;
   let install: boolean | undefined;
 
@@ -80,6 +94,25 @@ function parseArgs(argv: string[]): {
       continue;
     }
 
+    if (arg === "--deploy") {
+      const next = argv[i + 1];
+      if (next && !next.startsWith("-")) {
+        if (VALID_DEPLOY_TARGETS.includes(next as DeployTarget)) {
+          deploy = next as DeployTarget;
+        } else {
+          console.error(
+            pc.red(`  Error: unknown deploy target "${next}". Valid targets: ${VALID_DEPLOY_TARGETS.join(", ")}`),
+          );
+          process.exit(1);
+        }
+        i++;
+      } else {
+        console.error(pc.red("  Error: --deploy requires a value"));
+        process.exit(1);
+      }
+      continue;
+    }
+
     // Unknown flag
     if (arg.startsWith("-")) {
       console.error(pc.red(`  Error: unknown option "${arg}"`));
@@ -93,7 +126,7 @@ function parseArgs(argv: string[]): {
     }
   }
 
-  return { projectName, template, help, install };
+  return { projectName, template, deploy, help, install };
 }
 
 // ---------------------------------------------------------------------------
@@ -101,7 +134,13 @@ function parseArgs(argv: string[]): {
 // ---------------------------------------------------------------------------
 
 async function main() {
-  const { projectName: argName, template: argTemplate, help, install: argInstall } = parseArgs(
+  const {
+    projectName: argName,
+    template: argTemplate,
+    deploy: argDeploy,
+    help,
+    install: argInstall,
+  } = parseArgs(
     process.argv.slice(2),
   );
 
@@ -114,26 +153,35 @@ async function main() {
 
   let projectName: string;
   let template: Template;
+  let deploy: DeployTarget;
 
   if (argName && argTemplate) {
     // Fully non-interactive
     projectName = argName;
     template = argTemplate;
+    deploy = argDeploy ?? "none";
   } else if (argName) {
     // Have name, still need template
     projectName = argName;
     const chosen = await select("Which template?", [...VALID_TEMPLATES]);
     template = chosen as Template;
+    deploy = argDeploy ?? (await select("Deployment target?", [...VALID_DEPLOY_TARGETS]) as DeployTarget);
   } else {
     // Fully interactive
     const answers = await runPrompts();
     projectName = answers.projectName;
     template = answers.template;
+    deploy = argDeploy ?? answers.deploy;
   }
 
   const outputDir = join(process.cwd(), projectName);
 
-  await scaffoldProject({ projectName, template, outputDir });
+  await scaffoldProject({
+    projectName,
+    template,
+    outputDir,
+    ...(deploy !== "none" ? { deployTarget: deploy } : {}),
+  });
 
   // Auto-install option
   let shouldInstall = argInstall;
@@ -165,6 +213,12 @@ async function main() {
       `cd ${projectName}`,
       ...(shouldInstall ? [] : [installCmd]),
       `${runCmd} capstan dev`,
+      `${runCmd} capstan build --target node-standalone`,
+      ...(deploy === "docker" ? ["docker build -t " + projectName + " ."] : []),
+      ...(deploy === "vercel-node" ? ["vercel"] : []),
+      ...(deploy === "vercel-edge" ? ["vercel"] : []),
+      ...(deploy === "cloudflare" ? ["wrangler deploy"] : []),
+      ...(deploy === "fly" ? ["fly deploy"] : []),
     ].join("\n"),
     "Next steps",
   );

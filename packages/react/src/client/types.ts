@@ -10,6 +10,36 @@
 // ---------------------------------------------------------------------------
 
 /**
+ * Metadata carried by client navigations.
+ *
+ * This mirrors the page metadata shape used by the server-side metadata
+ * utilities, but keeps the client bundle self-contained.
+ */
+export interface ClientMetadata {
+  title?: string | { default: string; template?: string };
+  description?: string;
+  keywords?: string[];
+  robots?: string | { index?: boolean; follow?: boolean };
+  openGraph?: {
+    title?: string;
+    description?: string;
+    type?: string;
+    url?: string;
+    image?: string;
+    siteName?: string;
+  };
+  twitter?: {
+    card?: "summary" | "summary_large_image";
+    title?: string;
+    description?: string;
+    image?: string;
+  };
+  icons?: { icon?: string; apple?: string };
+  canonical?: string;
+  alternates?: Record<string, string>;
+}
+
+/**
  * Payload returned when the server receives a request with the
  * `X-Capstan-Nav: 1` header.  Contains everything the client needs
  * to update the page without a full reload.
@@ -23,8 +53,8 @@ export interface NavigationPayload {
   html?: string;
   /** Loader data for the target page. */
   loaderData: unknown;
-  /** Page metadata (title, description, etc.). */
-  metadata?: { title?: string; description?: string };
+  /** Page metadata (title, description, links, etc.). */
+  metadata?: ClientMetadata;
   /** Whether the page is a server or client component. */
   componentType: "server" | "client";
 }
@@ -87,5 +117,5 @@ export interface NavigateEventDetail {
   url: string;
   loaderData: unknown;
   params: Record<string, string>;
-  metadata?: { title?: string; description?: string };
+  metadata?: ClientMetadata;
 }

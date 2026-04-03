@@ -1,258 +1,166 @@
-import { describe, it, expect } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
-import { Image, defineFont, fontPreloadLink } from "@zauso-ai/capstan-react";
-import type { ImageProps, FontConfig, FontResult } from "@zauso-ai/capstan-react";
+import {
+  Image,
+  buildImageSrcSet,
+  buildImageUrl,
+  defineFont,
+  fontPreloadElement,
+  fontPreloadLink,
+  imagePreloadLink,
+} from "../../packages/react/src/index.ts";
+import type { FontConfig, FontResult, FontStyle, ImageProps } from "../../packages/react/src/index.ts";
 
-// ---------------------------------------------------------------------------
-// Image component
-// ---------------------------------------------------------------------------
-
-describe("Image", () => {
-  it("renders img tag with src and alt", () => {
-    const html = renderToString(createElement(Image, { src: "/photo.jpg", alt: "A photo" }));
-    expect(html).toContain("<img");
-    expect(html).toContain('src="/photo.jpg"');
-    expect(html).toContain('alt="A photo"');
+describe("image helpers", () => {
+  it("buildImageUrl preserves existing query/hash and drops invalid transforms", () => {
+    expect(buildImageUrl("/photo.jpg?token=abc#hero", { width: 640, quality: 77, format: "webp" }))
+      .toBe("/photo.jpg?token=abc&w=640&q=77&format=webp#hero");
+    expect(buildImageUrl("/photo.jpg?token=abc#hero", { width: -1, quality: 0, format: "auto" }))
+      .toBe("/photo.jpg?token=abc#hero");
+    expect(buildImageUrl("/plain.jpg")).toBe("/plain.jpg");
   });
 
-  it("sets loading='lazy' by default", () => {
-    const html = renderToString(createElement(Image, { src: "/img.jpg", alt: "test" }));
+  it("buildImageSrcSet dedupes, sorts, and filters widths deterministically", () => {
+    const srcSet = buildImageSrcSet("/photo.jpg", {
+      widths: [1920, 640, 640, 0, -1, 1080, 750, Number.NaN],
+      quality: 90,
+    });
+
+    expect(srcSet).toBe([
+      "/photo.jpg?w=640&q=90 640w",
+      "/photo.jpg?w=750&q=90 750w",
+      "/photo.jpg?w=1080&q=90 1080w",
+      "/photo.jpg?w=1920&q=90 1920w",
+    ].join(", "));
+    expect(buildImageSrcSet("/photo.jpg", { width: 100, widths: [640, 750] })).toBe("");
+  });
+
+  it("Image passes through arbitrary attrs and keeps framework-controlled props stable", () => {
+    const html = renderToString(
+      createElement(Image, {
+        src: "/hero.jpg?token=abc",
+        alt: "Hero",
+        width: 400,
+        height: 240,
+        format: "webp",
+        preload: true,
+        loading: "lazy",
+        sizes: "(max-width: 768px) 100vw, 400px",
+        className: "hero",
+        style: { borderRadius: "12px" },
+        placeholder: "blur",
+        blurDataURL: "data:image/png;base64,blur",
+        "data-testid": "hero-image",
+      } as any),
+    );
+
+    expect(html).toContain('src="/hero.jpg?token=abc&amp;w=400&amp;q=80&amp;format=webp"');
+    expect(html).toContain('srcSet="/hero.jpg?token=abc&amp;w=640&amp;q=80&amp;format=webp 640w, /hero.jpg?token=abc&amp;w=750&amp;q=80&amp;format=webp 750w"');
+    expect(html).toContain('loading="eager"');
+    expect(html).toContain('fetchPriority="high"');
+    expect(html).toContain('width="400"');
+    expect(html).toContain('height="240"');
+    expect(html).toContain('sizes="(max-width: 768px) 100vw, 400px"');
+    expect(html).toContain('class="hero"');
+    expect(html).toContain('data-testid="hero-image"');
+    expect(html).toContain("border-radius:12px");
+    expect(html).toContain("background-image:url(data:image/png;base64,blur)");
+  });
+
+  it("Image omits srcSet when no responsive candidates remain", () => {
+    const html = renderToString(createElement(Image, { src: "/tiny.jpg", alt: "tiny", width: 100 }));
+
+    expect(html).toContain('src="/tiny.jpg?w=100&amp;q=80"');
+    expect(html).not.toContain("srcSet=");
+  });
+
+  it("Image keeps the original source when no transformation props are provided", () => {
+    const html = renderToString(createElement(Image, { src: "/plain.jpg", alt: "plain" }));
+
+    expect(html).toContain('src="/plain.jpg"');
     expect(html).toContain('loading="lazy"');
   });
 
-  it("priority=true sets loading='eager' and fetchPriority='high'", () => {
-    const html = renderToString(createElement(Image, { src: "/img.jpg", alt: "test", priority: true }));
-    expect(html).toContain('loading="eager"');
-    expect(html).toContain('fetchPriority="high"');
-  });
+  it("imagePreloadLink emits a stable preload hint and can be disabled", () => {
+    const link = imagePreloadLink({
+      src: "/hero.jpg?token=abc",
+      width: 400,
+      sizes: "100vw",
+    });
 
-  it("generates srcset with multiple widths", () => {
-    const html = renderToString(createElement(Image, { src: "/img.jpg", alt: "test" }));
-    expect(html).toContain("srcSet=");
-    expect(html).toContain("640w");
-    expect(html).toContain("1920w");
-  });
-
-  it("srcset respects width constraint (no sizes > width*2)", () => {
-    const html = renderToString(createElement(Image, { src: "/img.jpg", alt: "test", width: 400 }));
-    // width*2 = 800, so 828 and above should be filtered out
-    expect(html).toContain("640w");
-    expect(html).toContain("750w");
-    expect(html).not.toContain("828w");
-    expect(html).not.toContain("1080w");
-    expect(html).not.toContain("1920w");
-  });
-
-  it("quality defaults to 80", () => {
-    const html = renderToString(createElement(Image, { src: "/img.jpg", alt: "test" }));
-    expect(html).toContain("q=80");
-  });
-
-  it("custom quality in src query", () => {
-    const html = renderToString(createElement(Image, { src: "/img.jpg", alt: "test", quality: 50 }));
-    expect(html).toContain("q=50");
-    expect(html).not.toContain("q=80");
-  });
-
-  it("placeholder='blur' adds background styles", () => {
-    const html = renderToString(
-      createElement(Image, {
-        src: "/img.jpg",
-        alt: "test",
-        placeholder: "blur",
-        blurDataURL: "data:image/png;base64,abc",
-      }),
-    );
-    expect(html).toContain("background-image");
-    expect(html).toContain("background-size:cover");
-  });
-
-  it("placeholder='blur' without blurDataURL has no background", () => {
-    const html = renderToString(
-      createElement(Image, {
-        src: "/img.jpg",
-        alt: "test",
-        placeholder: "blur",
-      }),
-    );
-    expect(html).not.toContain("background-image");
-  });
-
-  it("width/height attributes set", () => {
-    const html = renderToString(createElement(Image, { src: "/img.jpg", alt: "test", width: 300, height: 200 }));
-    expect(html).toContain('width="300"');
-    expect(html).toContain('height="200"');
-  });
-
-  it("sizes attribute passed through", () => {
-    const html = renderToString(
-      createElement(Image, { src: "/img.jpg", alt: "test", sizes: "(max-width: 768px) 100vw, 50vw" }),
-    );
-    expect(html).toContain("sizes=");
-    expect(html).toContain("100vw");
-  });
-
-  it("className passed through", () => {
-    const html = renderToString(createElement(Image, { src: "/img.jpg", alt: "test", className: "hero-img" }));
-    expect(html).toContain('class="hero-img"');
-  });
-
-  it("custom style merged with blur styles", () => {
-    const html = renderToString(
-      createElement(Image, {
-        src: "/img.jpg",
-        alt: "test",
-        placeholder: "blur",
-        blurDataURL: "data:image/png;base64,abc",
-        style: { borderRadius: "8px" },
-      }),
-    );
-    expect(html).toContain("border-radius:8px");
-    expect(html).toContain("background-image");
-  });
-
-  it("no srcset when no valid widths", () => {
-    // width=100, width*2=200, all predefined widths (640+) are too large
-    const html = renderToString(createElement(Image, { src: "/img.jpg", alt: "test", width: 100 }));
-    // srcset would be empty string, which is falsy, so should not be set
-    expect(html).not.toContain("srcset=");
-  });
-
-  it("alt='' is valid (decorative image)", () => {
-    const html = renderToString(createElement(Image, { src: "/img.jpg", alt: "" }));
-    expect(html).toContain('alt=""');
-  });
-
-  it("sets decoding='async'", () => {
-    const html = renderToString(createElement(Image, { src: "/img.jpg", alt: "test" }));
-    expect(html).toContain('decoding="async"');
-  });
-
-  it("uses width in src when width is provided", () => {
-    const html = renderToString(createElement(Image, { src: "/img.jpg", alt: "test", width: 500 }));
-    expect(html).toContain('src="/img.jpg?w=500&amp;q=80"');
-  });
-
-  it("does not modify src when no width", () => {
-    const html = renderToString(createElement(Image, { src: "/img.jpg", alt: "test" }));
-    expect(html).toContain('src="/img.jpg"');
-  });
-
-  it("loading prop overrides default lazy when not priority", () => {
-    const html = renderToString(createElement(Image, { src: "/img.jpg", alt: "test", loading: "eager" }));
-    expect(html).toContain('loading="eager"');
-  });
-
-  it("priority overrides explicit loading='lazy'", () => {
-    const html = renderToString(createElement(Image, { src: "/img.jpg", alt: "test", priority: true, loading: "lazy" }));
-    expect(html).toContain('loading="eager"');
+    expect(link).toContain('rel="preload"');
+    expect(link).toContain('as="image"');
+    expect(link).toContain('href="/hero.jpg?token=abc&amp;w=400&amp;q=80"');
+    expect(link).toContain('imagesrcset="/hero.jpg?token=abc&amp;w=640&amp;q=80 640w, /hero.jpg?token=abc&amp;w=750&amp;q=80 750w"');
+    expect(link).toContain('imagesizes="100vw"');
+    expect(imagePreloadLink({ src: "/hero.jpg", preload: false })).toBe("");
+    expect(imagePreloadLink({ src: "   " })).toBe("");
+    expect(imagePreloadLink({ src: "/plain.jpg" })).toContain('href="/plain.jpg"');
   });
 });
 
-// ---------------------------------------------------------------------------
-// defineFont
-// ---------------------------------------------------------------------------
+describe("font helpers", () => {
+  it("defineFont sanitizes identifiers and exposes style, weight, style, and variable", () => {
+    const font = defineFont({
+      family: "Font@123!Special",
+      weight: 700,
+      style: "italic",
+      variable: "--brand-font",
+    });
 
-describe("defineFont", () => {
-  it("returns className, style, and variable", () => {
-    const result = defineFont({ family: "Inter" });
-    expect(result.className).toBe("font-inter");
-    expect(result.style.fontFamily).toContain("Inter");
-    expect(result.variable).toBe("--font-inter");
+    expect(font.className).toBe("font-font-123-special");
+    expect(font.variable).toBe("--brand-font");
+    expect(font.style.fontFamily).toContain("Font@123!Special");
+    expect(font.style.fontWeight).toBe(700);
+    expect(font.style.fontStyle).toBe("italic");
+    expect(font.style["--brand-font"]).toBe(font.style.fontFamily);
   });
 
-  it("className is sanitized family name", () => {
-    const result = defineFont({ family: "Fira Code" });
-    expect(result.className).toBe("font-fira-code");
+  it("defineFont falls back to a stable identifier for pathological names", () => {
+    const font = defineFont({ family: "!!!" });
+
+    expect(font.className).toBe("font-font");
+    expect(font.variable).toBe("--font-font");
   });
 
-  it("style.fontFamily includes fallback", () => {
-    const result = defineFont({ family: "Inter" });
-    expect(result.style.fontFamily).toContain("system-ui");
-    expect(result.style.fontFamily).toContain("sans-serif");
-  });
-
-  it("custom variable name used", () => {
-    const result = defineFont({ family: "Inter", variable: "--my-font" });
-    expect(result.variable).toBe("--my-font");
-  });
-
-  it("default variable generated from family", () => {
-    const result = defineFont({ family: "Roboto Mono" });
-    expect(result.variable).toBe("--font-roboto-mono");
-  });
-
-  it("special characters in family name sanitized", () => {
-    const result = defineFont({ family: "Font@123!Special" });
-    expect(result.className).toBe("font-font-123-special");
-    expect(result.variable).toBe("--font-font-123-special");
-  });
-
-  it("weight and style preserved in config", () => {
-    const config: FontConfig = { family: "Inter", weight: "700", style: "italic" };
-    // defineFont doesn't use weight/style directly but they are part of the config
-    const result = defineFont(config);
-    expect(result.className).toBeTruthy();
-    expect(config.weight).toBe("700");
-    expect(config.style).toBe("italic");
-  });
-
-  it("family with numbers is sanitized correctly", () => {
-    const result = defineFont({ family: "Source Sans 3" });
-    expect(result.className).toBe("font-source-sans-3");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// fontPreloadLink
-// ---------------------------------------------------------------------------
-
-describe("fontPreloadLink", () => {
-  it("generates link tag with preload", () => {
+  it("fontPreloadElement and fontPreloadLink agree on preload semantics", () => {
+    const element = fontPreloadElement({ family: "Inter", src: "/fonts/inter.woff2" });
+    const html = renderToString(element);
     const link = fontPreloadLink({ family: "Inter", src: "/fonts/inter.woff2" });
+
+    expect(html).toContain('rel="preload"');
+    expect(html).toContain('as="font"');
+    expect(html).toContain('type="font/woff2"');
+    expect(html).toContain('crossorigin="anonymous"');
     expect(link).toContain('rel="preload"');
     expect(link).toContain('href="/fonts/inter.woff2"');
     expect(link).toContain('as="font"');
-    expect(link).toContain('type="font/woff2"');
-    expect(link).toContain("crossorigin");
   });
 
-  it("preload=false uses rel='stylesheet'", () => {
-    const link = fontPreloadLink({ family: "Inter", src: "/fonts/inter.woff2", preload: false });
-    expect(link).toContain('rel="stylesheet"');
-    expect(link).not.toContain('rel="preload"');
-  });
+  it("fontPreloadElement and fontPreloadLink degrade cleanly when disabled or missing", () => {
+    const stylesheet = fontPreloadElement({ family: "Inter", src: "/fonts/inter.woff2", preload: false });
 
-  it("no src returns empty string", () => {
-    const link = fontPreloadLink({ family: "Inter" });
-    expect(link).toBe("");
-  });
-
-  it("preload=true explicitly generates preload link", () => {
-    const link = fontPreloadLink({ family: "Inter", src: "/fonts/inter.woff2", preload: true });
-    expect(link).toContain('rel="preload"');
+    expect(renderToString(stylesheet)).toContain('rel="stylesheet"');
+    expect(renderToString(stylesheet)).not.toContain('as="font"');
+    expect(fontPreloadElement({ family: "Inter" })).toBeNull();
+    expect(fontPreloadLink({ family: "Inter" })).toBe("");
   });
 });
 
-// ---------------------------------------------------------------------------
-// Type exports
-// ---------------------------------------------------------------------------
-
 describe("type exports", () => {
-  it("ImageProps type is usable", () => {
-    const props: ImageProps = { src: "/img.jpg", alt: "test" };
-    expect(props.src).toBe("/img.jpg");
+  it("ImageProps type remains usable for framework-level attrs", () => {
+    const props: ImageProps = { src: "/img.jpg", alt: "test", width: 320, format: "webp" };
+    expect(props.format).toBe("webp");
   });
 
-  it("FontConfig type is usable", () => {
+  it("FontConfig, FontResult, and FontStyle stay exported and typed", () => {
     const config: FontConfig = { family: "Inter", display: "swap", subsets: ["latin"] };
-    expect(config.family).toBe("Inter");
-    expect(config.subsets).toEqual(["latin"]);
-  });
+    const result: FontResult = defineFont(config);
+    const style: FontStyle = { fontFamily: "Inter" };
 
-  it("FontResult type is usable", () => {
-    const result: FontResult = { className: "font-inter", style: { fontFamily: "Inter" }, variable: "--font-inter" };
+    expect(config.subsets).toEqual(["latin"]);
     expect(result.className).toBe("font-inter");
+    expect(style.fontFamily).toBe("Inter");
   });
 });

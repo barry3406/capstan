@@ -4,6 +4,14 @@ import path from "node:path";
 
 import type { RouteEntry, RouteManifest, RouteType } from "./types.js";
 
+function isRouteGroupSegment(segment: string): boolean {
+  return /^\([^/]+\)$/.test(segment);
+}
+
+function isNotFoundFile(filename: string): boolean {
+  return filename === "not-found.tsx" || filename === "not-found.page.tsx";
+}
+
 /**
  * Detect whether a page file is a server or client component by checking
  * for a "use client" directive at the top of the file.
@@ -46,6 +54,7 @@ function classifyFile(filename: string): RouteType | null {
   if (filename === "_middleware.ts") return "middleware";
   if (filename === "_loading.tsx") return "loading";
   if (filename === "_error.tsx") return "error";
+  if (isNotFoundFile(filename)) return "not-found";
   if (filename.endsWith(".page.tsx")) return "page";
   if (filename.endsWith(".api.ts")) return "api";
   return null;
@@ -106,6 +115,10 @@ function dirToSegments(relativeDir: string): { segments: string[]; params: strin
   const params: string[] = [];
 
   for (const part of parts) {
+    if (isRouteGroupSegment(part)) {
+      continue;
+    }
+
     const catchAllMatch = part.match(/^\[\.\.\.(\w+)\]$/);
     if (catchAllMatch) {
       segments.push("*");
@@ -268,7 +281,12 @@ export async function scanRoutes(routesDir: string): Promise<RouteManifest> {
     // Build URL pattern
     const dirInfo = dirToSegments(relativeDir);
 
-    if (routeType === "layout" || routeType === "middleware" || routeType === "loading" || routeType === "error") {
+    if (
+      routeType === "layout" ||
+      routeType === "middleware" ||
+      routeType === "loading" ||
+      routeType === "error"
+    ) {
       // Layouts and middlewares don't get their own URL pattern —
       // they are referenced by other routes. But we still include them
       // in the manifest so they can be discovered.
@@ -284,6 +302,45 @@ export async function scanRoutes(routesDir: string): Promise<RouteManifest> {
         params: dirInfo.params,
         isCatchAll: false,
       });
+      continue;
+    }
+
+    if (routeType === "not-found") {
+      const layoutCandidates = collectLayouts(resolvedRoot, relativeDir);
+      const middlewareCandidates = collectMiddlewares(resolvedRoot, relativeDir);
+      const layouts = filterExisting(layoutCandidates, absolutePathSet);
+      const middlewares = filterExisting(middlewareCandidates, absolutePathSet);
+      const nearestLoading = findNearest(resolvedRoot, relativeDir, "_loading.tsx", absolutePathSet);
+      const nearestError = findNearest(resolvedRoot, relativeDir, "_error.tsx", absolutePathSet);
+      const nearestNotFound = findNearest(
+        resolvedRoot,
+        relativeDir,
+        "not-found.tsx",
+        absolutePathSet,
+      ) ?? findNearest(
+        resolvedRoot,
+        relativeDir,
+        "not-found.page.tsx",
+        absolutePathSet,
+      );
+
+      const urlPattern = "/" + dirInfo.segments.join("/");
+      const entry: RouteEntry = {
+        filePath: absoluteFilePath,
+        type: routeType,
+        urlPattern: urlPattern === "/" ? "/" : urlPattern.replace(/\/$/, ""),
+        layouts,
+        middlewares,
+        params: dirInfo.params,
+        isCatchAll: false,
+        componentType: detectComponentType(absoluteFilePath),
+      };
+
+      if (nearestLoading) entry.loading = nearestLoading;
+      if (nearestError) entry.error = nearestError;
+      if (nearestNotFound) entry.notFound = nearestNotFound;
+
+      routes.push(entry);
       continue;
     }
 
@@ -323,8 +380,20 @@ export async function scanRoutes(routesDir: string): Promise<RouteManifest> {
       entry.componentType = detectComponentType(absoluteFilePath);
       const nearestLoading = findNearest(resolvedRoot, relativeDir, "_loading.tsx", absolutePathSet);
       const nearestError = findNearest(resolvedRoot, relativeDir, "_error.tsx", absolutePathSet);
+      const nearestNotFound = findNearest(
+        resolvedRoot,
+        relativeDir,
+        "not-found.tsx",
+        absolutePathSet,
+      ) ?? findNearest(
+        resolvedRoot,
+        relativeDir,
+        "not-found.page.tsx",
+        absolutePathSet,
+      );
       if (nearestLoading) entry.loading = nearestLoading;
       if (nearestError) entry.error = nearestError;
+      if (nearestNotFound) entry.notFound = nearestNotFound;
     }
 
     routes.push(entry);
@@ -338,9 +407,10 @@ export async function scanRoutes(routesDir: string): Promise<RouteManifest> {
     layout: 0,
     loading: 1,
     error: 2,
-    middleware: 3,
-    page: 4,
-    api: 5,
+    "not-found": 3,
+    middleware: 4,
+    page: 5,
+    api: 6,
   };
 
   routes.sort((a, b) => {

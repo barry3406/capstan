@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { createVercelHandler, createVercelNodeHandler, generateVercelConfig } from "../../packages/dev/src/adapter-vercel.js";
-import { createFlyAdapter } from "../../packages/dev/src/adapter-fly.js";
-import { createCloudflareHandler, generateWranglerConfig } from "../../packages/dev/src/adapter-cloudflare.js";
+import { createFlyAdapter, generateFlyToml } from "../../packages/dev/src/adapter-fly.js";
+import { createCloudflareHandler, generateWranglerConfig, generateWranglerConfigWithOptions } from "../../packages/dev/src/adapter-cloudflare.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -126,6 +126,27 @@ describe("Vercel adapter", () => {
     const config = generateVercelConfig();
     expect(config["buildCommand"]).toBe("npx capstan build");
     expect(config["outputDirectory"]).toBe("dist");
+  });
+
+  it("generateVercelConfig supports explicit target runtime entries", () => {
+    const config = generateVercelConfig({
+      runtime: "edge",
+      entry: "dist/standalone/api/index.js",
+      buildCommand: "npx capstan build --target vercel-edge",
+      outputDirectory: "dist/standalone",
+    });
+
+    expect(config["functions"]).toEqual({
+      "dist/standalone/api/index.js": {
+        runtime: "edge",
+      },
+    });
+    expect(config["routes"]).toEqual([
+      {
+        src: "/(.*)",
+        dest: "/dist/standalone/api/index",
+      },
+    ]);
   });
 
   it("Vercel handler propagates 500 status from app", async () => {
@@ -260,6 +281,17 @@ describe("Fly.io adapter", () => {
       await handle.close();
     }
   });
+
+  it("generateFlyToml emits a target-aware deployment contract", () => {
+    const toml = generateFlyToml("fixture-app", {
+      primaryRegion: "nrt",
+      internalPort: 8080,
+    });
+
+    expect(toml).toContain('app = "fixture-app"');
+    expect(toml).toContain('primary_region = "nrt"');
+    expect(toml).toContain("internal_port = 8080");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -334,6 +366,17 @@ describe("Cloudflare Workers adapter", () => {
   it("generateWranglerConfig includes compatibility_date", () => {
     const config = generateWranglerConfig("test");
     expect(config).toContain("compatibility_date");
+  });
+
+  it("generateWranglerConfigWithOptions supports standalone worker outputs", () => {
+    const config = generateWranglerConfigWithOptions("test", {
+      main: "dist/standalone/worker.js",
+      compatibilityDate: "2026-04-03",
+      nodejsCompat: false,
+    });
+    expect(config).toContain('main = "dist/standalone/worker.js"');
+    expect(config).toContain('compatibility_date = "2026-04-03"');
+    expect(config).not.toContain("nodejs_compat");
   });
 
   it("generateWranglerConfig with empty app name still produces valid TOML", () => {

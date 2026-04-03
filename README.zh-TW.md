@@ -12,7 +12,7 @@
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Tests](https://img.shields.io/badge/tests-1404%20passing-brightgreen?logo=bun&logoColor=white)](https://bun.sh)
+[![Tests](https://img.shields.io/badge/tests-full%20suite%20passing-brightgreen?logo=bun&logoColor=white)](https://bun.sh)
 [![Version](https://img.shields.io/badge/version-1.0.0--beta.7-orange)](https://github.com/barry3406/capstan)
 [![ESM](https://img.shields.io/badge/ESM-only-blue)](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Modules)
 
@@ -24,9 +24,11 @@
 
 ## Capstan 是什麼？
 
-**Capstan** 是一個 Bun 原生的全端 TypeScript 框架。你撰寫的每個 API 都能同時被人類（透過 REST）和 AI Agent（透過 MCP、A2A 及 OpenAPI）存取——完全不需要額外的程式碼。它結合了檔案式路由、Zod 驗證端點、Drizzle ORM 模型，以及內建的驗證系統，讓 AI 編碼 Agent 能以自我修正的 TDD 迴圈運作。Bun 是首選執行環境，同時也完整支援 Node.js。
+**Capstan** 是一個 Bun 原生的全端 TypeScript 框架，目標是讓應用程式預設就對 Agent 可操作。同一份 `defineAPI()` 契約，可以同時驅動面向人的 HTTP 介面、面向 AI 的 MCP/A2A/OpenAPI 介面、面向操作員的工作流介面，以及面向編碼 Agent 的結構化驗證，而不需要再補一層轉接膠水。它結合了檔案式路由、Zod 驗證端點、Drizzle ORM 模型、內建策略與核准原語，以及可讓編碼 Agent 收斂修復的驗證閉環。
 
-你可以把它想成：**如果 Next.js 從第一天就為一半消費者是 LLM 的世界而設計，它會是什麼樣子。**
+在正式環境裡，`capstan build` 會產生可部署產物，`capstan start` 會啟動執行時；框架也預設提供 CSRF 防護、可設定 CORS、請求主體限制、結構化日誌與明確的建置清單。Bun 是首選執行環境，同時也完整支援 Node.js。
+
+你可以把它理解成：一個為「人類、編碼 Agent 與營運/監督工具要共享同一份應用契約」而設計的全端框架。
 
 ## 運作原理
 
@@ -73,7 +75,7 @@
 | **全端支援** | React SSR + API | 僅 API | React SSR + API + Agent 協定 |
 | **安全性** | 自行處理 | 自行處理 | DPoP (RFC 9449)、SPIFFE/mTLS、CSRF 防護、可設定 CORS |
 
-**核心理念：** 你建構的每個 API 本身就是一個 AI 工具。不需要包裝器、不需要轉接器、不需要第二套程式碼。
+**核心理念：** 應用契約應該是共享的。同一份 capability 定義，應同時驅動 API、Agent 協定、監督流程、驗證與發布。
 
 ---
 
@@ -90,7 +92,9 @@
 ### 資料與 AI
 - **向量欄位 & RAG 原語** — `defineEmbedding` 搭配混合搜尋（語意 + 關鍵字）
 - **LangChain 整合** — 原生整合 LangChain 生態系
-- **AI 工具包（`@zauso-ai/capstan-ai`）** — 獨立 AI 工具包：`createAI()` 工廠函式（無需 Capstan 框架即可使用）、`think<T>(prompt, { schema })` 結構化推理、`generate(prompt)` 文字生成、串流變體、`remember()`/`recall()` 記憶系統（混合搜尋：向量相似度 + 關鍵字 + 時間衰減）、`memory.about(type, id)` 實體級記憶、`agent.run()` 自編排 Agent 迴圈
+- **AI 工具包（`@zauso-ai/capstan-ai`）** — 獨立 AI 工具包：`createAI()` 工廠函式（無需 Capstan 框架即可使用）、`think<T>(prompt, { schema })` 結構化推理、`generate(prompt)` 文字生成、串流變體、依 scope 隔離的 `remember()`/`recall()` / `assembleContext()` 記憶原語、`memory.about(type, id)` 實體級記憶、`agent.run()` 自編排 Agent 迴圈
+- **Agent Harness 模式** — `createHarness()` 組合瀏覽器沙箱（Playwright 或 Camoufox kernel）、檔案系統沙箱、LLM 自我驗證與可觀測性，適合長時間運行 Agent
+- **定時 Agent 排程（`@zauso-ai/capstan-cron`）** — `defineCron()`、`createCronRunner()`、`createBunCronRunner()`、`createAgentCron()` 用於 7×24 定時任務
 
 ### 前端
 - **React SSR** — 搭配 loader 的伺服器端渲染、版面配置、`Outlet`、hydration
@@ -436,11 +440,34 @@ app/
 # 建置正式版本
 bunx capstan build
 
+# 建置 standalone 部署套件
+bunx capstan build --target node-standalone
+
+# 建置可直接 docker build 的部署套件
+bunx capstan build --target docker
+
+# 建置 Vercel / Cloudflare / Fly 目標
+bunx capstan build --target vercel-node
+bunx capstan build --target vercel-edge
+bunx capstan build --target cloudflare
+bunx capstan build --target fly
+
+# 依目標在專案根目錄產生部署檔案
+bunx capstan deploy:init --target vercel-edge
+
 # 啟動正式伺服器
 bunx capstan start
+
+# 從 standalone 產物啟動
+bunx capstan start --from dist/standalone
+
+# 發布前驗證部署產物
+bunx capstan verify --deployment --target vercel-edge
 ```
 
 `capstan build` 會將你的路由、模型與設定編譯為最佳化的正式版本套件。`capstan start` 啟動伺服器時會預設開啟安全性設定——Bun 上使用 `Bun.serve()`，Node.js 上使用 `node:http`。可在 `capstan.config.ts` 中設定監聽連接埠、CORS 來源與資料庫提供者。
+
+建置輸出現在是顯式且可機器讀取的：`dist/_capstan_server.js` 是正式入口，`dist/deploy-manifest.json` 描述部署契約，而從 `app/public/` 複製出的靜態資源在正式環境也和開發環境一樣直接掛載在根路徑。只要使用顯式部署目標，Capstan 都會產生 `dist/standalone/` 與其執行時期 `package.json`；接著再疊加平台檔案，例如 Vercel 的 `api/index.js` + `vercel.json`、Cloudflare 的 `worker.js` + `wrangler.toml`、Fly.io 的 `fly.toml` 與 Docker 資產。`capstan verify --deployment --target <target>` 會在發布前驗證這些部署契約。
 
 ---
 
@@ -453,7 +480,7 @@ bunx capstan start
 - [架構](docs/architecture/) — 系統設計、多協定 registry、路由掃描
 - [驗證](docs/authentication.md) — JWT 工作階段、API 金鑰、驗證類型
 - [資料庫](docs/database.md) — SQLite、PostgreSQL、MySQL 設定與遷移
-- [部署](docs/deployment.md) — `capstan build`、`capstan start`、正式環境設定
+- [部署](docs/deployment.md) — `capstan build`、平台 target、`deploy:init`、`verify --deployment`
 - [測試策略](docs/testing-strategy.md) — 單元測試、整合測試、驗證器測試
 - [API 參考](docs/api-reference.md) — 完整 API 介面文件
 - [比較](docs/comparison.md) — Capstan 與 Next.js、FastAPI 及其他框架的比較
@@ -463,7 +490,7 @@ bunx capstan start
 
 ## 📦 套件
 
-Capstan 包含 10 個執行時期套件：
+Capstan 目前包含 11 個工作區套件：
 
 | 套件 | 說明 |
 |------|------|
@@ -472,10 +499,11 @@ Capstan 包含 10 個執行時期套件：
 | `@zauso-ai/capstan-db` | Drizzle ORM、`defineModel`、欄位/關聯輔助函式、遷移、自動 CRUD（SQLite、PostgreSQL、MySQL） |
 | `@zauso-ai/capstan-auth` | JWT 工作階段、Agent 用 API 金鑰驗證、OAuth 提供者（Google、GitHub）、權限檢查（`"human"` / `"agent"` / `"anonymous"`） |
 | `@zauso-ai/capstan-agent` | `CapabilityRegistry`、MCP 伺服器（型別化參數）、A2A 轉接器（SSE）、OpenAPI 產生器 |
-| `@zauso-ai/capstan-ai` | 獨立 AI 工具包：`createAI`、`think`/`generate`（結構化 + 串流）、`remember`/`recall` 記憶系統（混合搜尋）、`memory.about()` 實體級記憶、`agent.run()` 自編排迴圈 |
+| `@zauso-ai/capstan-ai` | 獨立 AI 工具包：`createAI`、`think`/`generate`（結構化 + 串流）、scope 化記憶原語、`agent.run()` 自編排迴圈，以及具備上下文裝配、control plane 與瀏覽器/檔案沙箱的 `createHarness()` durable runtime |
+| `@zauso-ai/capstan-cron` | 定時排程套件：`defineCron`、`createCronRunner`、`createBunCronRunner`、`createAgentCron` |
 | `@zauso-ai/capstan-react` | SSR + loader、版面配置、`Outlet`、選擇性水合、ISR 渲染策略、`<Link>` SPA 路由（預取 + View Transitions）、`Image`、`defineFont`、`defineMetadata`、`ErrorBoundary` |
 | `@zauso-ai/capstan-dev` | 開發伺服器，含檔案監看、即時路由重新載入、MCP/A2A 端點 |
-| `@zauso-ai/capstan-cli` | CLI：`dev`、`build`、`start`、`verify`、`add`、`mcp`、`db:*` |
+| `@zauso-ai/capstan-cli` | CLI：`dev`、`build`、`start`、`deploy:init`、`verify`、`add`、`mcp`、`db:*` |
 | `create-capstan-app` | 專案鷹架工具（`--template blank`、`--template tickets`） |
 
 
@@ -489,8 +517,8 @@ Capstan 目前為 `v1.0.0-beta.7`。歡迎參與貢獻！
 git clone https://github.com/barry3406/capstan.git
 cd capstan
 bun install
-bun run build        # 建置 9 個執行時期套件
-bun run test:new     # Bun 測試（1404 項測試，約 18s）
+bun run build        # 建置全部 workspace 套件
+bun run test:new     # 執行完整倉庫測試套件
 ```
 
 ### 開發慣例

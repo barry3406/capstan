@@ -1,5 +1,3 @@
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 import type {
   RenderMode,
   RenderPageOptions,
@@ -31,6 +29,33 @@ interface ResponseCacheFacade {
 }
 
 let _responseCache: ResponseCacheFacade | null = null;
+
+function joinPath(...segments: string[]): string {
+  const normalized = segments
+    .filter((segment) => segment.length > 0)
+    .join("/")
+    .replace(/\/+/g, "/");
+
+  if (normalized === "") {
+    return ".";
+  }
+
+  return normalized.startsWith("/") ? normalized : normalized;
+}
+
+async function readTextFile(filePath: string): Promise<string> {
+  const { readFile } = await import("node:fs/promises");
+  return readFile(filePath, "utf-8");
+}
+
+function getDefaultStaticDir(): string {
+  const cwd =
+    typeof process !== "undefined" && typeof process.cwd === "function"
+      ? process.cwd()
+      : ".";
+
+  return joinPath(cwd, "dist", "static");
+}
 
 async function getResponseCache(): Promise<ResponseCacheFacade | null> {
   if (_responseCache) return _responseCache;
@@ -164,8 +189,8 @@ export function urlToFilePath(url: string, staticDir: string): string {
   // Strip query string / hash
   const pathname = url.split("?")[0]!.split("#")[0]!;
   const segments = pathname.replace(/^\/+|\/+$/g, "");
-  if (segments === "") return join(staticDir, "index.html");
-  return join(staticDir, segments, "index.html");
+  if (segments === "") return joinPath(staticDir, "index.html");
+  return joinPath(staticDir, segments, "index.html");
 }
 
 /**
@@ -178,13 +203,13 @@ export class SSGStrategy implements RenderStrategy {
   private staticDir: string;
 
   constructor(staticDir?: string) {
-    this.staticDir = staticDir ?? join(process.cwd(), "dist", "static");
+    this.staticDir = staticDir ?? getDefaultStaticDir();
   }
 
   async render(ctx: RenderStrategyContext): Promise<RenderStrategyResult> {
     const filePath = urlToFilePath(ctx.url, this.staticDir);
     try {
-      const html = await readFile(filePath, "utf-8");
+      const html = await readTextFile(filePath);
       return { html, loaderData: null, statusCode: 200, cacheStatus: "HIT" };
     } catch {
       // File not found — fall back to SSR

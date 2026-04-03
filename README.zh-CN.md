@@ -12,7 +12,7 @@
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Tests](https://img.shields.io/badge/tests-1404%20passing-brightgreen?logo=bun&logoColor=white)](https://bun.sh)
+[![Tests](https://img.shields.io/badge/tests-full%20suite%20passing-brightgreen?logo=bun&logoColor=white)](https://bun.sh)
 [![Version](https://img.shields.io/badge/version-1.0.0--beta.7-orange)](https://github.com/barry3406/capstan)
 [![ESM](https://img.shields.io/badge/ESM-only-blue)](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Modules)
 
@@ -24,9 +24,11 @@
 
 ## Capstan 是什么？
 
-**Capstan** 是一个 Bun 原生的全栈 TypeScript 框架。你编写的每一个 API，都能同时被人类（通过 REST）和 AI Agent（通过 MCP、A2A、OpenAPI）直接访问——无需任何额外代码。框架集成了基于文件的路由、Zod 数据校验、Drizzle ORM 模型定义，以及内置的验证系统——AI 编程助手可以将其作为自纠错的 TDD 循环使用。Bun 是首选运行时，同时也完整支持 Node.js。
+**Capstan** 是一个 Bun 原生的全栈 TypeScript 框架，目标是让应用默认就对 Agent 可操作。同一份 `defineAPI()` 契约，可以同时驱动面向人的 HTTP 接口、面向 AI 的 MCP/A2A/OpenAPI 接口、面向操作员的工作流界面，以及面向编码 Agent 的结构化验证，而不需要再写一层适配胶水。它结合了文件式路由、Zod 校验端点、Drizzle ORM 模型、内置策略与审批原语，以及可供编码 Agent 收敛修复的验证闭环。
 
-可以这样理解：**如果 Next.js 从第一天就为「一半用户是大语言模型」的世界而设计，它就会是 Capstan 的样子**。
+在生产环境里，`capstan build` 负责生成可部署产物，`capstan start` 负责启动运行时；框架默认还包含 CSRF 防护、可配置 CORS、请求体限制、结构化日志以及显式的构建清单。Bun 是首选运行时，同时也完整支持 Node.js。
+
+可以把它理解成：一个为“人类、编码 Agent 和运维/监督工具要共享同一份应用契约”而设计的全栈框架。
 
 ## 工作原理
 
@@ -72,7 +74,7 @@
 | **生产部署** | `next build` / `next start` | Uvicorn | `capstan build` / `capstan start` |
 | **全栈能力** | React SSR + API | 仅 API | React SSR + API + Agent 协议 |
 
-**核心洞察：** 你构建的每一个 API，天然就是一个 AI 工具。无需包装器，无需适配器，无需维护第二套代码。
+**核心洞察：** 应用契约应该是共享的。同一份 capability 定义，应该同时驱动 API、Agent 协议、监督流、验证和发布。
 
 ---
 
@@ -110,7 +112,7 @@ bunx capstan add policy requireAuth # → app/policies/index.ts
 ### 生产部署
 
 ```bash
-bunx capstan build    # 编译并优化应用
+bunx capstan build    # 编译应用并生成部署产物契约
 bunx capstan start    # 以生产模式启动（Bun 上使用 Bun.serve()）
 ```
 
@@ -362,7 +364,9 @@ Capstan 内置多层安全防护：
 
 - **向量字段 & RAG 原语** — `defineEmbedding` 支持向量存储、混合搜索（关键词 + 语义），开箱即用的检索增强生成能力
 - **LangChain 集成** — 将 Capstan 能力注册表导出为 LangChain 工具，无缝对接 LangChain 工作流
-- **AI 工具包（`@zauso-ai/capstan-ai`）** — 独立 AI 工具包：`createAI()` 工厂函数（无需 Capstan 框架即可使用）、`think<T>(prompt, { schema })` 结构化推理、`generate(prompt)` 文本生成、流式变体、`remember()`/`recall()` 记忆系统（混合搜索：向量相似度 + 关键词 + 时间衰减）、`memory.about(type, id)` 实体级记忆、`agent.run()` 自编排 Agent 循环
+- **AI 工具包（`@zauso-ai/capstan-ai`）** — 独立 AI 工具包：`createAI()` 工厂函数（无需 Capstan 框架即可使用）、`think<T>(prompt, { schema })` 结构化推理、`generate(prompt)` 文本生成、流式变体、按 scope 隔离的 `remember()`/`recall()` / `assembleContext()` 记忆原语、`memory.about(type, id)` 实体级记忆、`agent.run()` 自编排 Agent 循环
+- **Agent Harness 模式** — `createHarness()` 组合浏览器沙箱（Playwright 或 Camoufox kernel）、文件系统沙箱、LLM 自验证与可观测性，用于长时运行 Agent
+- **定时 Agent 调度（`@zauso-ai/capstan-cron`）** — `defineCron()`、`createCronRunner()`、`createBunCronRunner()`、`createAgentCron()` 用于 7×24 定时任务
 
 ### 渲染与前端
 
@@ -457,17 +461,40 @@ app/
 # 构建生产版本
 bunx capstan build
 
+# 构建 standalone 部署包
+bunx capstan build --target node-standalone
+
+# 构建可直接 docker build 的部署包
+bunx capstan build --target docker
+
+# 构建 Vercel / Cloudflare / Fly 目标
+bunx capstan build --target vercel-node
+bunx capstan build --target vercel-edge
+bunx capstan build --target cloudflare
+bunx capstan build --target fly
+
+# 按目标在项目根生成部署文件
+bunx capstan deploy:init --target vercel-edge
+
 # 启动生产服务器
 bunx capstan start
+
+# 从 standalone 产物启动
+bunx capstan start --from dist/standalone
+
+# 发布前校验部署产物
+bunx capstan verify --deployment --target vercel-edge
 ```
 
 `capstan build` 将路由、模型和配置编译为优化的生产包。`capstan start` 启动服务器并默认开启安全防护——Bun 上使用 `Bun.serve()`，Node.js 上使用 `node:http`。在 `capstan.config.ts` 中配置监听端口、CORS 来源和数据库提供者。
+
+构建输出现在是显式且机器可读的：`dist/_capstan_server.js` 是生产入口，`dist/deploy-manifest.json` 描述部署契约，而从 `app/public/` 复制出的静态资源在生产环境中也和开发环境一样直接挂载在根路径。只要使用显式部署目标，Capstan 都会生成 `dist/standalone/` 及其运行时 `package.json`；然后再叠加平台文件，比如 Vercel 的 `api/index.js` + `vercel.json`、Cloudflare 的 `worker.js` + `wrangler.toml`、Fly.io 的 `fly.toml` 和 Docker 资产。`capstan verify --deployment --target <target>` 会在发布前校验这些部署契约。
 
 ---
 
 ## 📦 包一览
 
-### 运行时框架（10 个包）
+### 工作区包（11 个）
 
 | 包名 | 说明 |
 |------|------|
@@ -476,10 +503,11 @@ bunx capstan start
 | `@zauso-ai/capstan-db` | Drizzle ORM、`defineModel`、字段/关联辅助函数、数据迁移、自动 CRUD（SQLite、PostgreSQL、MySQL） |
 | `@zauso-ai/capstan-auth` | JWT 会话、Agent API Key 认证、OAuth 提供者（Google、GitHub）、权限检查（`"human"` / `"agent"` / `"anonymous"`） |
 | `@zauso-ai/capstan-agent` | `CapabilityRegistry`、MCP 服务器（带类型参数）、A2A 适配器（SSE）、OpenAPI 生成器 |
-| `@zauso-ai/capstan-ai` | 独立 AI 工具包：`createAI`、`think`/`generate`（结构化 + 流式）、`remember`/`recall` 记忆系统（混合搜索）、`memory.about()` 实体级记忆、`agent.run()` 自编排循环 |
+| `@zauso-ai/capstan-ai` | 独立 AI 工具包：`createAI`、`think`/`generate`（结构化 + 流式）、scope 化记忆原语、`agent.run()` 自编排循环，以及带上下文装配、control plane 和浏览器/文件沙箱的 `createHarness()` durable runtime |
+| `@zauso-ai/capstan-cron` | 定时调度包：`defineCron`、`createCronRunner`、`createBunCronRunner`、`createAgentCron` |
 | `@zauso-ai/capstan-react` | SSR + loader、布局、`Outlet`、选择性水合、ISR 渲染策略、`<Link>` SPA 路由（预取 + View Transitions）、`Image`、`defineFont`、`defineMetadata`、`ErrorBoundary` |
 | `@zauso-ai/capstan-dev` | 开发服务器，支持文件监听、路由热重载、MCP/A2A 端点 |
-| `@zauso-ai/capstan-cli` | CLI 命令：`dev`、`build`、`start`、`verify`、`add`、`mcp`、`db:*` |
+| `@zauso-ai/capstan-cli` | CLI 命令：`dev`、`build`、`start`、`deploy:init`、`verify`、`add`、`mcp`、`db:*` |
 | `create-capstan-app` | 项目脚手架（`--template blank`、`--template tickets`） |
 
 
@@ -494,7 +522,7 @@ bunx capstan start
 - [架构设计](docs/architecture/) — 系统设计、多协议注册表、路由扫描
 - [认证](docs/authentication.md) — JWT 会话、API Key、认证类型
 - [数据库](docs/database.md) — SQLite、PostgreSQL、MySQL 配置与迁移
-- [部署](docs/deployment.md) — `capstan build`、`capstan start`、生产配置
+- [部署](docs/deployment.md) — `capstan build`、平台 target、`deploy:init`、`verify --deployment`
 - [测试策略](docs/testing-strategy.md) — 单元测试、集成测试、验证器测试
 - [API 参考](docs/api-reference.md) — 完整 API 接口文档
 - [框架对比](docs/comparison.md) — Capstan 与 Next.js、FastAPI 等框架的比较
@@ -510,8 +538,8 @@ Capstan 目前处于 Beta 阶段（`v1.0.0-beta.7`），欢迎贡献！
 git clone https://github.com/barry3406/capstan.git
 cd capstan
 bun install
-bun run build        # 构建 9 个运行时包
-bun run test:new     # Bun 测试（1404 项测试，约 18s）
+bun run build        # 构建全部 workspace 包
+bun run test:new     # 运行完整仓库测试套件
 ```
 
 ### 开发规范

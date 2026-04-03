@@ -1,15 +1,16 @@
 import { describe, it, expect, afterAll, beforeAll } from "bun:test";
-import { mkdtemp, rm, access, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, access, readFile, writeFile, symlink } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createDevServer } from "@zauso-ai/capstan-dev";
 import type { DevServerInstance } from "@zauso-ai/capstan-dev";
 
-// Import scaffoldProject from the create-capstan package's scaffold module.
-// The package name is "create-capstan-app" but it does not re-export
-// scaffoldProject from its main entry point, so we import from the
-// compiled scaffold module directly.
-import { scaffoldProject } from "../../packages/create-capstan/dist/scaffold.js";
+// Import scaffoldProject from source so the integration test always exercises
+// the current scaffold templates rather than a stale build artifact.
+import { scaffoldProject } from "../../packages/create-capstan/src/scaffold.ts";
+
+const repoRoot = process.cwd();
+const rootNodeModules = join(repoRoot, "node_modules");
 
 // ---------------------------------------------------------------------------
 // Setup: scaffold a "tickets" template project and start a dev server
@@ -29,6 +30,7 @@ beforeAll(async () => {
     projectName: "test-tickets-app",
     template: "tickets",
     outputDir: projectDir,
+    deployTarget: "docker",
   });
 
   // The scaffolded route files import from "capstan" which is not
@@ -109,6 +111,8 @@ export default function HomePage() {
     "utf-8",
   );
 
+  await symlink(rootNodeModules, join(projectDir, "node_modules"), "dir");
+
   // Start a dev server pointing to the scaffolded project
   server = await createDevServer({
     rootDir: projectDir,
@@ -156,8 +160,13 @@ describe("Scaffolded project structure", () => {
 
     const content = JSON.parse(await readFile(pkgPath, "utf-8")) as {
       name: string;
+      scripts: Record<string, string>;
     };
     expect(content.name).toBe("test-tickets-app");
+    expect(content.scripts["build:standalone"]).toBe("capstan build --target node-standalone");
+    expect(content.scripts["build:docker"]).toBe("capstan build --target docker");
+    expect(content.scripts["start:standalone"]).toBe("capstan start --from dist/standalone");
+    expect(content.scripts["deploy:init"]).toBe("capstan deploy:init");
   });
 
   it("capstan.config.ts exists and contains defineConfig", async () => {
@@ -175,6 +184,12 @@ describe("Scaffolded project structure", () => {
 
   it(".gitignore exists", async () => {
     expect(await fileExists(join(projectDir, ".gitignore"))).toBe(true);
+  });
+
+  it("docker deployment files exist when scaffolded with docker target", async () => {
+    expect(await fileExists(join(projectDir, "Dockerfile"))).toBe(true);
+    expect(await fileExists(join(projectDir, ".dockerignore"))).toBe(true);
+    expect(await fileExists(join(projectDir, ".env.example"))).toBe(true);
   });
 
   it("root layout exists", async () => {

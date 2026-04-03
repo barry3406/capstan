@@ -185,9 +185,9 @@ describe("generateDrizzleSchema — column mapping", () => {
       expect(schema).toContain('text("id").primaryKey()');
     });
 
-    it("Postgres → text primaryKey", () => {
+    it("Postgres → uuid primaryKey with defaultRandom", () => {
       const schema = generateDrizzleSchema([model], "postgres");
-      expect(schema).toContain('text("id").primaryKey()');
+      expect(schema).toContain('uuid("id").primaryKey().defaultRandom()');
     });
 
     it("MySQL → varchar primaryKey", () => {

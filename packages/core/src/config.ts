@@ -15,5 +15,9 @@ export function defineConfig(config: CapstanConfig): CapstanConfig {
  * Read an environment variable, returning an empty string if it is not set.
  */
 export function env(key: string): string {
+  if (typeof process === "undefined" || !process.env) {
+    return "";
+  }
+
   return process.env[key] ?? "";
 }

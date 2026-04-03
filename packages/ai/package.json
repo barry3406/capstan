@@ -4,8 +4,12 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "exports": { ".": { "import": "./dist/index.js", "types": "./dist/index.d.ts" } },
-  "scripts": { "build": "tsc -p tsconfig.json", "typecheck": "tsc -p tsconfig.json --noEmit", "clean": "rm -rf dist" },
+  "exports": {
+    ".": { "import": "./dist/index.js", "types": "./dist/index.d.ts" },
+    "./kernel": { "import": "./dist/harness/kernel/index.js", "types": "./dist/harness/kernel/index.d.ts" },
+    "./kernel/*": { "import": "./dist/harness/kernel/*/index.js", "types": "./dist/harness/kernel/*/index.d.ts" }
+  },
+  "scripts": { "build": "tsc -p tsconfig.kernel.json && tsc -p tsconfig.json", "typecheck": "tsc -p tsconfig.json --noEmit", "clean": "rm -rf dist" },
   "description": "AI agent toolkit — think, generate, memory, agent loop. Works standalone or with Capstan.",
   "license": "MIT",
   "author": "barry3406",

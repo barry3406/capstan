@@ -1,9 +1,10 @@
-import { readFile } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { scanRoutes } from "@zauso-ai/capstan-router";
+import { matchRoute, scanRoutes } from "@zauso-ai/capstan-router";
 import type { RouteManifest, RouteEntry } from "@zauso-ai/capstan-router";
 import { toJSONSchema } from "zod";
 import {
@@ -11,14 +12,32 @@ import {
   createApproval,
   createRequestLogger,
   csrfProtection,
+  enforcePolicies,
   mountApprovalRoutes,
 } from "@zauso-ai/capstan-core";
-import type { APIDefinition, HttpMethod, CapstanContext, CapstanAuthContext } from "@zauso-ai/capstan-core";
+import type {
+  APIDefinition,
+  HttpMethod,
+  CapstanContext,
+  CapstanAuthContext,
+  PolicyDefinition,
+} from "@zauso-ai/capstan-core";
 
 import { loadApiHandlers, loadLayoutModule, loadPageModule, loadLoadingModule, loadErrorModule, invalidateModuleCache } from "./loader.js";
+import { createPageFetch } from "./page-fetch.js";
+import { runPageRuntime } from "./page-runtime.js";
+import type { PageRuntimeOptions } from "./page-runtime.js";
+import { loadRouteMiddlewares, composeRouteMiddlewares } from "./route-middleware.js";
 import { watchRoutes, watchStyles } from "./watcher.js";
 import { printStartupBanner } from "./printer.js";
-import type { DevServerConfig, DevServerInstance } from "./types.js";
+import type {
+  DevServerConfig,
+  DevServerInstance,
+  RuntimeAssetRecord,
+  RuntimeAppBuild,
+  RuntimeAppConfig,
+  RuntimeRouteRegistryEntry,
+} from "./types.js";
 import type { ServerAdapter } from "./adapter.js";
 import { createNodeAdapter, notifyLiveReloadClients } from "./adapter-node.js";
 import { detectCSSMode, buildCSS, startTailwindWatch } from "./css.js";
@@ -52,6 +71,14 @@ function escapeHtml(str: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+function toCapabilityMode(
+  value: unknown,
+): "read" | "write" | "external" | undefined {
+  return value === "read" || value === "write" || value === "external"
+    ? value
+    : undefined;
 }
 
 /**
@@ -89,6 +116,52 @@ function injectManifest(html: string, manifest: RouteManifest): string {
   return html + script;
 }
 
+async function collectStreamToString(
+  stream: ReadableStream<Uint8Array>,
+): Promise<string> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let html = "";
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    html += decoder.decode(value, { stream: true });
+  }
+
+  html += decoder.decode();
+  return html;
+}
+
+function decoratePageHtml(
+  html: string,
+  manifest: RouteManifest,
+  liveReloadEnabled: boolean,
+): string {
+  const withManifest = injectManifest(html, manifest);
+  return liveReloadEnabled ? injectLiveReload(withManifest) : withManifest;
+}
+
+function shouldRenderNotFoundPage(request: Request): boolean {
+  if (request.headers.get("X-Capstan-Nav") === "1") {
+    return true;
+  }
+
+  if (request.headers.get("sec-fetch-dest") === "document") {
+    return true;
+  }
+
+  if (request.headers.get("sec-fetch-mode") === "navigate") {
+    return true;
+  }
+
+  const accept = request.headers.get("accept") ?? "";
+  return (
+    accept.includes("text/html") ||
+    accept.includes("application/xhtml+xml")
+  );
+}
+
 /**
  * Determine if an exported handler value looks like an APIDefinition
  * produced by `defineAPI()` from @zauso-ai/capstan-core.
@@ -100,29 +173,6 @@ function isAPIDefinition(value: unknown): value is APIDefinition {
     "handler" in value &&
     typeof (value as APIDefinition).handler === "function"
   );
-}
-
-/**
- * Build a minimal `CapstanContext` from a raw `Request` for use outside
- * of the Hono middleware pipeline (e.g. for page loaders).
- */
-function buildStandaloneContext(
-  request: Request,
-  auth?: CapstanAuthContext,
-): CapstanContext {
-  return {
-    auth: auth ?? {
-      isAuthenticated: false,
-      type: "anonymous",
-      permissions: [],
-    },
-    request,
-    env: process.env as Record<string, string | undefined>,
-    // In dev mode we don't have a real Hono context for standalone calls.
-    // The context is cast to satisfy the type; page loaders should not
-    // depend on `honoCtx` directly.
-    honoCtx: {} as CapstanContext["honoCtx"],
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -157,34 +207,326 @@ const MIME_TYPES: Record<string, string> = {
   ".pdf": "application/pdf",
 };
 
+const CAPSTAN_CLIENT_BOOTSTRAP = [
+  `import { bootstrapClient } from "/_capstan/client/entry.js";`,
+  `bootstrapClient();`,
+].join("\n");
+
+let _reactClientDir: string | null = null;
+
+function toFilesystemPath(value: string): string {
+  return value.startsWith("file:") ? fileURLToPath(value) : value;
+}
+
+function resolveRuntimePath(rootDir: string, candidatePath: string): string {
+  return path.isAbsolute(candidatePath)
+    ? candidatePath
+    : path.resolve(rootDir, candidatePath);
+}
+
+function collectReactClientDirCandidates(): string[] {
+  const candidates = new Set<string>();
+  const importMetaResolver = (import.meta as ImportMeta & {
+    resolve?: (specifier: string) => string;
+  }).resolve;
+
+  if (typeof importMetaResolver === "function") {
+    try {
+      candidates.add(
+        path.dirname(
+          toFilesystemPath(importMetaResolver("@zauso-ai/capstan-react/client")),
+        ),
+      );
+    } catch {
+      // Fall through to filesystem-based candidate discovery.
+    }
+  }
+
+  const moduleDir = path.dirname(fileURLToPath(import.meta.url));
+  candidates.add(path.resolve(moduleDir, "..", "..", "react", "dist", "client"));
+  candidates.add(
+    path.resolve(
+      moduleDir,
+      "..",
+      "..",
+      "..",
+      "..",
+      "@zauso-ai",
+      "capstan-react",
+      "dist",
+      "client",
+    ),
+  );
+
+  let currentDir = moduleDir;
+  for (;;) {
+    candidates.add(
+      path.join(
+        currentDir,
+        "node_modules",
+        "@zauso-ai",
+        "capstan-react",
+        "dist",
+        "client",
+      ),
+    );
+
+    const parentDir = path.dirname(currentDir);
+    if (parentDir === currentDir) {
+      break;
+    }
+    currentDir = parentDir;
+  }
+
+  return [...candidates];
+}
+
+async function getReactClientDir(): Promise<string> {
+  if (_reactClientDir !== null) {
+    return _reactClientDir;
+  }
+
+  for (const candidate of collectReactClientDirCandidates()) {
+    try {
+      await access(candidate);
+      _reactClientDir = candidate;
+      return candidate;
+    } catch {
+      // Try the next candidate.
+    }
+  }
+
+  throw new Error("Capstan React client runtime could not be resolved.");
+}
+
+function urlPathToStaticHtmlFile(urlPath: string, staticDir: string): string {
+  const segments = urlPath.replace(/^\/+|\/+$/g, "");
+  return segments === ""
+    ? path.join(staticDir, "index.html")
+    : path.join(staticDir, segments, "index.html");
+}
+
+async function tryReadStaticHtml(
+  urlPath: string,
+  staticDir?: string,
+  assetProvider?: RuntimeAppConfig["assetProvider"],
+): Promise<string | null> {
+  if (assetProvider?.readStaticHtml) {
+    const provided = await assetProvider.readStaticHtml(urlPath);
+    if (provided !== null) {
+      return provided;
+    }
+  }
+
+  if (!staticDir) {
+    return null;
+  }
+
+  try {
+    return await readFile(urlPathToStaticHtmlFile(urlPath, staticDir), "utf-8");
+  } catch {
+    return null;
+  }
+}
+
+async function serveReactClientAsset(assetPath: string): Promise<Response> {
+  return serveReactClientAssetFromConfig(assetPath, {});
+}
+
+async function materializeAsset(
+  asset: RuntimeAssetRecord,
+): Promise<Uint8Array> {
+  if (asset.encoding === "base64") {
+    if (typeof Buffer !== "undefined") {
+      return Uint8Array.from(Buffer.from(asset.body, "base64"));
+    }
+
+    if (typeof atob === "function") {
+      const decoded = atob(asset.body);
+      return Uint8Array.from(decoded, (char) => char.charCodeAt(0));
+    }
+  }
+
+  return new TextEncoder().encode(asset.body);
+}
+
+function cloneBufferSource(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy;
+}
+
+async function serveReactClientAssetFromConfig(
+  assetPath: string,
+  config: Pick<RuntimeAppConfig, "assetProvider" | "clientDir">,
+): Promise<Response> {
+  if (config.assetProvider?.readClientAsset) {
+    const provided = await config.assetProvider.readClientAsset(assetPath);
+    if (provided) {
+      return new Response(cloneBufferSource(await materializeAsset(provided)), {
+        status: 200,
+        headers: {
+          "Content-Type": provided.contentType ?? "application/octet-stream",
+          "Cache-Control": "no-cache",
+        },
+      });
+    }
+  }
+
+  const normalizedPath = assetPath.replace(/^\/+/, "");
+  let clientDir: string;
+  try {
+    clientDir = config.clientDir ?? await getReactClientDir();
+  } catch {
+    return new Response("Capstan React client runtime is unavailable", {
+      status: 503,
+    });
+  }
+  const resolved = path.resolve(clientDir, normalizedPath);
+  const relativePath = path.relative(clientDir, resolved);
+
+  if (
+    relativePath.startsWith("..") ||
+    path.isAbsolute(relativePath)
+  ) {
+    return new Response("Forbidden", { status: 403 });
+  }
+
+  try {
+    const content = await readFile(resolved);
+    const ext = path.extname(resolved).toLowerCase();
+    const contentType = MIME_TYPES[ext] ?? "application/octet-stream";
+
+    return new Response(content, {
+      status: 200,
+      headers: {
+        "Content-Type": contentType,
+        "Cache-Control": "no-cache",
+      },
+    });
+  } catch {
+    return new Response("Not Found", { status: 404 });
+  }
+}
+
+interface PolicyEnforcementArgs {
+  handler: APIDefinition | { policy?: string };
+  input: unknown;
+  ctx: CapstanContext;
+  method: string;
+  path: string;
+  policyRegistry?: ReadonlyMap<string, PolicyDefinition>;
+  unknownPolicyMode?: "approve" | "deny";
+}
+
+async function enforceRoutePolicy(
+  args: PolicyEnforcementArgs,
+): Promise<Response | null> {
+  const policyName = args.handler.policy;
+  if (!policyName) {
+    return null;
+  }
+
+  if (policyName === "requireAuth" && !args.policyRegistry?.has(policyName)) {
+    if (!args.ctx.auth.isAuthenticated) {
+      return new Response(
+        JSON.stringify({ error: "Unauthorized", policy: policyName }),
+        {
+          status: 401,
+          headers: { "content-type": "application/json; charset=utf-8" },
+        },
+      );
+    }
+    return null;
+  }
+
+  const policyDefinition = args.policyRegistry?.get(policyName);
+  if (!policyDefinition) {
+    if ((args.unknownPolicyMode ?? "approve") === "approve") {
+      const reason = `Policy "${policyName}" requires approval`;
+      const approval = await createApproval({
+        method: args.method,
+        path: args.path,
+        input: args.input,
+        policy: policyName,
+        reason,
+      });
+
+      return new Response(
+        JSON.stringify({
+          status: "approval_required",
+          approvalId: approval.id,
+          reason,
+          pollUrl: `/capstan/approvals/${approval.id}`,
+        }),
+        {
+          status: 202,
+          headers: { "content-type": "application/json; charset=utf-8" },
+        },
+      );
+    }
+
+    return new Response(
+      JSON.stringify({
+        error: "Forbidden",
+        reason: `Unknown policy: ${policyName}`,
+        policy: policyName,
+      }),
+      {
+        status: 403,
+        headers: { "content-type": "application/json; charset=utf-8" },
+      },
+    );
+  }
+
+  const result = await enforcePolicies([policyDefinition], args.ctx, args.input);
+
+  if (result.effect === "deny") {
+    return new Response(
+      JSON.stringify({
+        error: "Forbidden",
+        reason: result.reason ?? "Policy denied",
+        policy: policyName,
+      }),
+      {
+        status: 403,
+        headers: { "content-type": "application/json; charset=utf-8" },
+      },
+    );
+  }
+
+  if (result.effect === "approve") {
+    const approval = await createApproval({
+      method: args.method,
+      path: args.path,
+      input: args.input,
+      policy: policyName,
+      reason: result.reason ?? "This action requires approval",
+    });
+
+    return new Response(
+      JSON.stringify({
+        status: "approval_required",
+        approvalId: approval.id,
+        reason: result.reason ?? "This action requires approval",
+        pollUrl: `/capstan/approvals/${approval.id}`,
+      }),
+      {
+        status: 202,
+        headers: { "content-type": "application/json; charset=utf-8" },
+      },
+    );
+  }
+
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Route registration
 // ---------------------------------------------------------------------------
 
 /** Hono env type that declares the capstanAuth variable. */
 type HonoEnv = { Variables: { capstanAuth: CapstanAuthContext } };
-
-// ---------------------------------------------------------------------------
-// Cached framework package imports
-// ---------------------------------------------------------------------------
-// These dynamic imports are cached at module level so they are resolved at
-// most once across rebuilds, avoiding repeated filesystem and module-graph
-// resolution overhead.
-
-let _reactPkg: {
-  renderPage: (opts: {
-    pageModule: { default: unknown; loader?: unknown };
-    layouts: Array<{ default: unknown }>;
-    params: Record<string, string>;
-    request: Request;
-    loaderArgs: {
-      params: Record<string, string>;
-      request: Request;
-      ctx: { auth: CapstanContext["auth"] };
-      fetch: Record<string, unknown>;
-    };
-  }) => Promise<{ html: string; loaderData: unknown; statusCode: number }>;
-} | null = null;
 
 let _agentPkg: {
   generateA2AAgentCard: (
@@ -219,28 +561,18 @@ async function getAgentPkg(): Promise<NonNullable<typeof _agentPkg>> {
  * routes registered. Returns the Hono app plus metadata used by the
  * framework endpoints (manifest, openapi, health).
  */
-async function buildApp(
-  manifest: RouteManifest,
-  config: DevServerConfig,
-): Promise<{
-  app: Hono<HonoEnv>;
-  apiRouteCount: number;
-  pageRouteCount: number;
-  routeRegistry: Array<{
-    method: string;
-    path: string;
-    description?: string;
-    capability?: string;
-    inputSchema?: Record<string, unknown>;
-    outputSchema?: Record<string, unknown>;
-  }>;
-}> {
+export async function buildRuntimeApp(
+  config: RuntimeAppConfig,
+): Promise<RuntimeAppBuild> {
+  const manifest = config.manifest;
 
   const app = new Hono<HonoEnv>();
 
   // Global middleware ---------------------------------------------------------
   app.use("*", createRequestLogger());
-  app.use("*", cors());
+  if (config.corsOptions !== false) {
+    app.use("*", cors(config.corsOptions));
+  }
 
   // --- Auth middleware -------------------------------------------------------
   // If the config includes auth settings, create the auth resolver from
@@ -258,7 +590,11 @@ async function buildApp(
           deps: { findAgentByKeyPrefix?: (prefix: string) => Promise<unknown> },
         ) => (request: Request) => Promise<CapstanAuthContext>;
       };
-      resolveAuth = authPkg.createAuthMiddleware(config.auth, {});
+      resolveAuth = authPkg.createAuthMiddleware(config.auth, {
+        ...(config.findAgentByKeyPrefix
+          ? { findAgentByKeyPrefix: config.findAgentByKeyPrefix }
+          : {}),
+      });
     } catch {
       // @zauso-ai/capstan-auth is not installed or failed to load — continue without it.
       // eslint-disable-next-line no-console
@@ -292,14 +628,7 @@ async function buildApp(
   }
 
   // Route metadata accumulated for the agent manifest / OpenAPI spec.
-  const routeRegistry: Array<{
-    method: string;
-    path: string;
-    description?: string;
-    capability?: string;
-    inputSchema?: Record<string, unknown>;
-    outputSchema?: Record<string, unknown>;
-  }> = [];
+  const routeRegistry: RuntimeRouteRegistryEntry[] = [];
 
   /**
    * Handler registry keyed by "METHOD /path" so approved requests can
@@ -309,6 +638,8 @@ async function buildApp(
     string,
     (input: unknown, ctx: CapstanContext) => Promise<unknown>
   >();
+  const unknownPolicyMode =
+    config.unknownPolicyMode ?? (config.mode === "production" ? "deny" : "approve");
 
   let apiRouteCount = 0;
   let pageRouteCount = 0;
@@ -316,19 +647,25 @@ async function buildApp(
   // Separate API and page routes from the manifest.
   const apiRoutes: RouteEntry[] = [];
   const pageRoutes: RouteEntry[] = [];
+  const notFoundRoutes: RouteEntry[] = [];
 
   for (const route of manifest.routes) {
     if (route.type === "api") apiRoutes.push(route);
     if (route.type === "page") pageRoutes.push(route);
+    if (route.type === "not-found") notFoundRoutes.push(route);
   }
 
   // --- Register API routes --------------------------------------------------
 
   for (const route of apiRoutes) {
     let handlers: Awaited<ReturnType<typeof loadApiHandlers>>;
+    const routeFilePath = resolveRuntimePath(config.rootDir, route.filePath);
+    const resolvedMiddlewares = route.middlewares.map((middlewarePath) =>
+      resolveRuntimePath(config.rootDir, middlewarePath),
+    );
 
     try {
-      handlers = await loadApiHandlers(route.filePath);
+      handlers = await loadApiHandlers(routeFilePath);
     } catch (err) {
       // eslint-disable-next-line no-console
       console.error(
@@ -391,12 +728,18 @@ async function buildApp(
         if (entry.description === undefined && typeof handlers.meta["description"] === "string") {
           entry.description = handlers.meta["description"];
         }
-        if (entry.capability === undefined && typeof handlers.meta["capability"] === "string") {
-          entry.capability = handlers.meta["capability"] as string;
+        if (entry.capability === undefined) {
+          const capability = toCapabilityMode(handlers.meta["capability"]);
+          if (capability) {
+            entry.capability = capability;
+          }
         }
       }
 
       routeRegistry.push(entry);
+
+      const middlewareDefinitionsPromise = loadRouteMiddlewares(resolvedMiddlewares)
+        .then((loaded) => loaded.map((middleware) => middleware.definition));
 
       // Store the handler for approval re-execution.
       if (isAPIDefinition(handler)) {
@@ -418,59 +761,38 @@ async function buildApp(
       app[honoMethod](route.urlPattern, async (c) => {
         const ctx = createContext(c);
 
-        // Parse input from query string (GET) or request body (others).
-        let input: unknown;
-        try {
-          if (method === "GET") {
-            input = Object.fromEntries(new URL(c.req.url).searchParams);
-          } else {
-            const contentType = c.req.header("content-type") ?? "";
-            if (contentType.includes("application/json")) {
-              input = await c.req.json();
+        const executeHandler = async (): Promise<Response> => {
+          // Parse input from query string (GET) or request body (others).
+          let input: unknown;
+          try {
+            if (method === "GET") {
+              input = Object.fromEntries(new URL(c.req.url).searchParams);
             } else {
-              input = {};
-            }
-          }
-        } catch {
-          input = {};
-        }
-
-        try {
-          // --- Policy enforcement -------------------------------------------
-          // If the handler declares a policy, enforce it before executing.
-          if (isAPIDefinition(handler) && handler.policy) {
-            const policyName = handler.policy;
-            // requireAuth is a built-in policy: deny anonymous requests.
-            if (policyName === "requireAuth") {
-              if (!ctx.auth.isAuthenticated) {
-                return c.json(
-                  { error: "Unauthorized", policy: policyName },
-                  401,
-                );
+              const contentType = c.req.header("content-type") ?? "";
+              if (contentType.includes("application/json")) {
+                input = await c.req.json();
+              } else {
+                input = {};
               }
             }
-            // For custom policies that are not "requireAuth", create a
-            // pending approval so a human/supervisor can review the action.
-            // The dev server does not maintain a full policy registry, so
-            // custom policies are treated as requiring approval in dev mode.
-            if (policyName !== "requireAuth") {
-              const reason = `Policy "${policyName}" requires approval`;
-              const approval = await createApproval({
-                method,
-                path: route.urlPattern,
-                input,
-                policy: policyName,
-                reason,
-              });
-              return c.json(
-                {
-                  status: "approval_required",
-                  approvalId: approval.id,
-                  reason,
-                  pollUrl: `/capstan/approvals/${approval.id}`,
-                },
-                202,
-              );
+          } catch {
+            input = {};
+          }
+
+          if (isAPIDefinition(handler)) {
+            const policyResponse = await enforceRoutePolicy({
+              handler,
+              input,
+              ctx,
+              method,
+              path: route.urlPattern,
+              unknownPolicyMode,
+              ...(config.policyRegistry
+                ? { policyRegistry: config.policyRegistry }
+                : {}),
+            });
+            if (policyResponse) {
+              return policyResponse;
             }
           }
 
@@ -491,6 +813,17 @@ async function buildApp(
           }
 
           return c.json({ error: "Invalid handler export" }, 500);
+        };
+
+        try {
+          const middlewareDefinitions = await middlewareDefinitionsPromise;
+          return await composeRouteMiddlewares(
+            middlewareDefinitions,
+            async () => executeHandler(),
+          )({
+            request: c.req.raw,
+            ctx,
+          });
         } catch (err: unknown) {
           // Zod validation errors
           if (
@@ -519,19 +852,47 @@ async function buildApp(
   }
 
   // --- Register page routes -------------------------------------------------
+  interface ExecutePageRouteArgs {
+    request: Request;
+    params: Record<string, string>;
+    ctx: CapstanContext;
+    isNavRequest: boolean;
+    isStaticBuildRequest: boolean;
+    liveReloadEnabled: boolean;
+  }
 
-  for (const route of pageRoutes) {
+  const pageRouteExecutors = new Map<
+    string,
+    (args: ExecutePageRouteArgs) => Promise<Response>
+  >();
+
+  const createPageRouteExecutor = async (
+    route: RouteEntry,
+  ): Promise<((args: ExecutePageRouteArgs) => Promise<Response>) | null> => {
     let pageModule: Awaited<ReturnType<typeof loadPageModule>>;
+    const routeFilePath = resolveRuntimePath(config.rootDir, route.filePath);
+    const resolvedLayouts = route.layouts.map((layoutPath) =>
+      resolveRuntimePath(config.rootDir, layoutPath),
+    );
+    const resolvedMiddlewares = route.middlewares.map((middlewarePath) =>
+      resolveRuntimePath(config.rootDir, middlewarePath),
+    );
+    const resolvedLoading = route.loading
+      ? resolveRuntimePath(config.rootDir, route.loading)
+      : undefined;
+    const resolvedError = route.error
+      ? resolveRuntimePath(config.rootDir, route.error)
+      : undefined;
 
     try {
-      pageModule = await loadPageModule(route.filePath);
+      pageModule = await loadPageModule(routeFilePath);
     } catch (err) {
       // eslint-disable-next-line no-console
       console.error(
         `[capstan] Failed to load page ${route.filePath}:`,
         err instanceof Error ? err.message : err,
       );
-      continue;
+      return null;
     }
 
     if (!pageModule.default) {
@@ -539,235 +900,180 @@ async function buildApp(
       console.warn(
         `[capstan] Page ${route.filePath} has no default export, skipping.`,
       );
-      continue;
+      return null;
     }
 
-    if (pageModule.renderMode === "ssg") {
+    if (route.type === "page" && pageModule.renderMode === "ssg") {
       // eslint-disable-next-line no-console
       console.log(`[capstan] SSG page ${route.urlPattern} (will be pre-rendered at build)`);
     }
 
-    pageRouteCount++;
-
-    app.get(route.urlPattern, async (c) => {
-      // In dev mode we do a simplified server render:
-      // - Run the loader (if any) to get data
-      // - Attempt to render using @zauso-ai/capstan-react's renderPage
-      // - Fall back to a minimal HTML shell with loader data if React
-      //   rendering is unavailable or fails.
-
-      const request = c.req.raw;
-      const params: Record<string, string> = {};
-      for (const name of route.params) {
-        const value = c.req.param(name);
-        if (value !== undefined) {
-          params[name] = value;
+    const loadedLayoutsPromise = Promise.all(
+      resolvedLayouts.map(async (layoutPath) => {
+        const layoutMod = await loadLayoutModule(layoutPath);
+        if (!layoutMod.default) {
+          throw new Error(`Layout ${layoutPath} has no default export.`);
         }
-      }
+        return {
+          default: layoutMod.default as never,
+          ...(layoutMod.metadata !== undefined ? { metadata: layoutMod.metadata } : {}),
+        };
+      }),
+    );
+    const middlewareDefinitionsPromise = loadRouteMiddlewares(resolvedMiddlewares)
+      .then((loaded) => loaded.map((middleware) => middleware.definition));
+    const loadingComponentPromise = resolvedLoading
+      ? loadLoadingModule(resolvedLoading).then((loadingMod) => loadingMod.default)
+      : Promise.resolve(undefined);
+    const errorComponentPromise = resolvedError
+      ? loadErrorModule(resolvedError).then((errorMod) => errorMod.default)
+      : Promise.resolve(undefined);
 
-      // Read auth from Hono context — already resolved by the auth middleware.
-      const pageAuth: CapstanAuthContext | undefined = c.get("capstanAuth");
-
-      const ctx = buildStandaloneContext(request, pageAuth);
-
-      // Build common loaderArgs used by both full render and nav payload
-      const loaderArgs = {
-        params,
-        request,
-        ctx: { auth: ctx.auth },
-        fetch: {
-          get: async () => null,
-          post: async () => null,
-          put: async () => null,
-          delete: async () => null,
-        },
-      };
-
-      // Run loader if present
-      let loaderData: unknown = null;
-      if (typeof pageModule.loader === "function") {
-        try {
-          loaderData = await (
-            pageModule.loader as (args: {
-              params: Record<string, string>;
-              request: Request;
-              ctx: { auth: CapstanContext["auth"] };
-              fetch: Record<string, unknown>;
-            }) => Promise<unknown>
-          )(loaderArgs);
-        } catch (err) {
-          // eslint-disable-next-line no-console
-          console.error(
-            `[capstan] Loader error in ${route.filePath}:`,
-            err instanceof Error ? err.message : err,
+    return async ({
+      request,
+      params,
+      ctx,
+      isNavRequest,
+      isStaticBuildRequest,
+      liveReloadEnabled,
+    }: ExecutePageRouteArgs): Promise<Response> => {
+      const executePageRequest = async (): Promise<Response> => {
+        if (
+          route.type === "page" &&
+          !isNavRequest &&
+          !isStaticBuildRequest &&
+          pageModule.renderMode === "ssg"
+        ) {
+          const staticHtml = await tryReadStaticHtml(
+            new URL(request.url).pathname,
+            config.staticDir,
+            config.assetProvider,
           );
+          if (staticHtml !== null) {
+            return new Response(staticHtml, {
+              status: 200,
+              headers: {
+                "content-type": "text/html; charset=utf-8",
+              },
+            });
+          }
         }
-      }
 
-      // --- Client-side navigation payload (X-Capstan-Nav: 1) ----------------
-      // When the client router requests a navigation payload, return JSON
-      // with the rendered HTML (for server components) or just loaderData
-      // (for client components) instead of a full HTML document.
-      const isNavRequest = c.req.header("X-Capstan-Nav") === "1";
-      if (isNavRequest) {
-        const componentType = route.componentType ?? "server";
-        const layoutKey = route.layouts.length > 0
-          ? route.layouts[route.layouts.length - 1]!
-          : "/";
+        const [loadedLayouts, loadingComponent, errorComponent] = await Promise.all([
+          loadedLayoutsPromise,
+          loadingComponentPromise,
+          errorComponentPromise,
+        ]);
+        const metadataChain = loadedLayouts
+          .map((layout) => layout.metadata)
+          .filter((metadata): metadata is NonNullable<typeof metadata> => metadata !== undefined);
 
-        const navPayload: Record<string, unknown> = {
-          url: route.urlPattern,
-          layoutKey,
-          loaderData,
-          componentType,
-          metadata: typeof pageModule.metadata === "object" ? pageModule.metadata : undefined,
+        const loaderArgs = {
+          params,
+          request,
+          ctx: { auth: ctx.auth },
+          fetch: createPageFetch(request, {
+            fetchImpl: async (internalRequest) => await app.fetch(internalRequest),
+          }),
         };
 
-        // For server components, pre-render partial HTML
-        if (componentType === "server") {
-          try {
-            if (!_reactPkg) {
-              const reactModuleName = "@zauso-ai/capstan-react";
-              _reactPkg = (await import(reactModuleName)) as NonNullable<typeof _reactPkg>;
-            }
-            const renderPartial = ((_reactPkg as Record<string, unknown>)["renderPartialStream"]) as
-              | ((opts: Record<string, unknown>) => Promise<{ html: string }>) | undefined;
-
-            if (renderPartial) {
-              const layoutResults = await Promise.all(
-                route.layouts.map(async (layoutPath) => {
-                  try {
-                    const layoutMod = await loadLayoutModule(layoutPath);
-                    return layoutMod.default ? { default: layoutMod.default } : null;
-                  } catch { return null; }
-                })
-              );
-              const loadedLayouts: Array<{ default: unknown }> = [];
-              for (const l of layoutResults) {
-                if (l !== null) loadedLayouts.push(l);
-              }
-
-              const { html } = await renderPartial({
-                pageModule: { default: pageModule.default, loader: pageModule.loader },
-                layouts: loadedLayouts,
-                params,
-                request,
-                loaderArgs,
-                layoutKeys: route.layouts,
-              });
-              navPayload["html"] = html;
-            }
-          } catch {
-            // Partial render failed — client will get loaderData only
-          }
-        }
-
-        return c.json(navPayload);
-      }
-
-      // --- Full-page SSR render ----------------------------------------------
-      // Attempt full SSR via @zauso-ai/capstan-react. If the package is available
-      // and the page module has a valid React component, render it.
-      // We use a dynamic import so the dev server works even when
-      // @zauso-ai/capstan-react is not installed.
-      try {
-        if (!_reactPkg) {
-          const reactModuleName = "@zauso-ai/capstan-react";
-          _reactPkg = (await import(reactModuleName)) as NonNullable<typeof _reactPkg>;
-        }
-        const reactPkg = _reactPkg;
-
-        // Load layout modules in parallel for this route
-        const layoutResults = await Promise.all(
-          route.layouts.map(async (layoutPath) => {
-            try {
-              const layoutMod = await loadLayoutModule(layoutPath);
-              return layoutMod.default ? { default: layoutMod.default } : null;
-            } catch {
-              return null;
-            }
-          })
-        );
-        const loadedLayouts: Array<{ default: unknown }> = [];
-        for (const l of layoutResults) {
-          if (l !== null) loadedLayouts.push(l);
-        }
-
-        // Load _loading.tsx and _error.tsx if present on this route
-        let loadingComponent: unknown = undefined;
-        let errorComponent: unknown = undefined;
-        if (route.loading) {
-          try {
-            const loadingMod = await loadLoadingModule(route.loading);
-            if (loadingMod.default) loadingComponent = loadingMod.default;
-          } catch (err) {
-            // eslint-disable-next-line no-console
-            console.warn(
-              `[capstan] Failed to load _loading.tsx ${route.loading}:`,
-              err instanceof Error ? err.message : err,
-            );
-          }
-        }
-        if (route.error) {
-          try {
-            const errorMod = await loadErrorModule(route.error);
-            if (errorMod.default) errorComponent = errorMod.default;
-          } catch (err) {
-            // eslint-disable-next-line no-console
-            console.warn(
-              `[capstan] Failed to load _error.tsx ${route.error}:`,
-              err instanceof Error ? err.message : err,
-            );
-          }
-        }
-
-        const renderOpts = {
+        const pageRuntimeOptions = {
           pageModule: {
-            default: pageModule.default,
-            loader: pageModule.loader,
-          },
-          layouts: loadedLayouts,
+            default: pageModule.default as never,
+            loader: pageModule.loader as never,
+            hydration: pageModule.hydration as never,
+            renderMode: pageModule.renderMode as never,
+            revalidate: pageModule.revalidate as never,
+            cacheTags: pageModule.cacheTags as never,
+            componentType: route.componentType ?? "server",
+            ...(pageModule.metadata !== undefined ? { metadata: pageModule.metadata } : {}),
+          } as PageRuntimeOptions["pageModule"],
+          layouts: loadedLayouts as PageRuntimeOptions["layouts"],
           params,
           request,
           loaderArgs,
-          loadingComponent,
-          errorComponent,
+          ...(route.type === "not-found" ? { statusCode: 404 } : {}),
+          ...(metadataChain.length > 0 ? { metadataChain } : {}),
+          componentType: route.componentType ?? "server",
           layoutKeys: route.layouts,
-        };
+          renderMode: (
+            isStaticBuildRequest && pageModule.renderMode === "ssg"
+              ? "ssr"
+              : pageModule.renderMode
+          ) as "ssr" | "ssg" | "isr" | "streaming" | undefined,
+          strategyOptions: {
+            staticDir: config.staticDir ?? path.join(config.rootDir, "dist", "static"),
+          },
+          transport: pageModule.renderMode === "streaming" ? "stream" : "html",
+          ...(pageModule.hydration !== undefined
+            ? { hydration: pageModule.hydration as PageRuntimeOptions["hydration"] }
+            : {}),
+          ...(loadingComponent !== undefined
+            ? { loadingComponent: loadingComponent as PageRuntimeOptions["loadingComponent"] }
+            : {}),
+          ...(errorComponent !== undefined
+            ? { errorComponent: errorComponent as PageRuntimeOptions["errorComponent"] }
+            : {}),
+        } as PageRuntimeOptions;
 
-        // Prefer streaming SSR when available.  We collect the stream to a
-        // string so that `injectLiveReload` can insert the SSE script before
-        // `</body>`.  This keeps live-reload working while still benefiting
-        // from streaming internally (Suspense, reduced memory pressure).
-        if (typeof (reactPkg as Record<string, unknown>)["renderPageStream"] === "function") {
-          const renderStream = (reactPkg as Record<string, unknown>)["renderPageStream"] as (
-            opts: typeof renderOpts,
-          ) => Promise<{ stream: ReadableStream<Uint8Array>; loaderData: unknown; statusCode: number }>;
-          const { stream, statusCode } = await renderStream(renderOpts);
+        const pageResult = await runPageRuntime(pageRuntimeOptions);
 
-          // Collect stream to string for live-reload injection
-          const reader = stream.getReader();
-          const decoder = new TextDecoder();
-          let html = "";
-          for (;;) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            html += decoder.decode(value, { stream: true });
-          }
-          html += decoder.decode();
-
-          return c.html(injectLiveReload(injectManifest(html, manifest)), statusCode as 200);
+        if (pageResult.kind === "navigation") {
+          return new Response(pageResult.body, {
+            status: pageResult.statusCode,
+            headers: pageResult.headers,
+          });
         }
 
-        const result = await reactPkg.renderPage(renderOpts);
+        if (pageResult.transport === "stream") {
+          const html = decoratePageHtml(
+            await collectStreamToString(pageResult.stream),
+            manifest,
+            liveReloadEnabled,
+          );
+          return new Response(html, {
+            status: pageResult.statusCode,
+            headers: pageResult.headers,
+          });
+        }
 
-        return c.html(injectLiveReload(injectManifest(result.html, manifest)), result.statusCode as 200);
-      } catch {
-        // @zauso-ai/capstan-react not available or render failed -- serve a
-        // minimal HTML shell that exposes loader data.
-        const serializedData = JSON.stringify({ loaderData, params })
-          .replace(/</g, "\\u003c")
-          .replace(/>/g, "\\u003e");
+        const html = decoratePageHtml(
+          pageResult.html,
+          manifest,
+          liveReloadEnabled,
+        );
+        return new Response(html, {
+          status: pageResult.statusCode,
+          headers: pageResult.headers,
+        });
+      };
+
+      try {
+        const middlewareDefinitions = await middlewareDefinitionsPromise;
+        return await composeRouteMiddlewares(
+          middlewareDefinitions,
+          async () => executePageRequest(),
+        )({
+          request,
+          ctx,
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Internal Server Error";
+        // eslint-disable-next-line no-console
+        console.error(`[capstan] Error in page ${route.urlPattern}:`, message);
+
+        if (isNavRequest) {
+          return new Response(
+            JSON.stringify({ error: message }),
+            {
+              status: 500,
+              headers: {
+                "content-type": "application/json; charset=utf-8",
+              },
+            },
+          );
+        }
+
         const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -777,20 +1083,79 @@ async function buildApp(
 </head>
 <body>
   <div id="capstan-root">
-    <p>Page: ${escapeHtml(route.urlPattern)}</p>
+    <h1>Page Render Error</h1>
+    <p>${escapeHtml(message)}</p>
   </div>
-  <script>window.__CAPSTAN_DATA__ = ${serializedData}</script>
-${LIVE_RELOAD_SCRIPT}
 </body>
 </html>`;
-        return c.html(html);
+
+        return new Response(
+          decoratePageHtml(html, manifest, liveReloadEnabled),
+          {
+            status: 500,
+            headers: {
+              "content-type": "text/html; charset=utf-8",
+            },
+          },
+        );
       }
+    };
+  };
+
+  for (const route of [...pageRoutes, ...notFoundRoutes]) {
+    const executePageRoute = await createPageRouteExecutor(route);
+    if (!executePageRoute) {
+      continue;
+    }
+
+    pageRouteExecutors.set(route.filePath, executePageRoute);
+
+    if (route.type !== "page") {
+      continue;
+    }
+
+    pageRouteCount++;
+
+    app.get(route.urlPattern, async (c) => {
+      const params: Record<string, string> = {};
+      for (const name of route.params) {
+        const value = c.req.param(name);
+        if (value !== undefined) {
+          params[name] = value;
+        }
+      }
+
+      return executePageRoute({
+        request: c.req.raw,
+        params,
+        ctx: createContext(c),
+        isNavRequest: c.req.header("X-Capstan-Nav") === "1",
+        isStaticBuildRequest: c.req.header("X-Capstan-Static-Build") === "1",
+        liveReloadEnabled: config.liveReload === true,
+      });
     });
   }
 
   // --- Approval management endpoints ----------------------------------------
 
   mountApprovalRoutes(app, handlerRegistry);
+
+  // --- Runtime client assets -------------------------------------------------
+
+  app.get("/_capstan/client.js", () => {
+    return new Response(CAPSTAN_CLIENT_BOOTSTRAP, {
+      status: 200,
+      headers: {
+        "Content-Type": "application/javascript; charset=utf-8",
+        "Cache-Control": "no-cache",
+      },
+    });
+  });
+
+  app.get("/_capstan/client/*", async (c) => {
+    const assetPath = c.req.path.slice("/_capstan/client/".length);
+    return serveReactClientAssetFromConfig(assetPath, config);
+  });
 
   // --- Framework endpoints --------------------------------------------------
 
@@ -864,7 +1229,10 @@ ${LIVE_RELOAD_SCRIPT}
   app.get("/health", (c) => {
     return c.json({
       status: "ok",
-      uptime: process.uptime(),
+      uptime:
+        typeof process !== "undefined" && typeof process.uptime === "function"
+          ? process.uptime()
+          : 0,
       timestamp: new Date().toISOString(),
     });
   });
@@ -993,6 +1361,19 @@ ${LIVE_RELOAD_SCRIPT}
   app.get("*", async (c) => {
     const urlPath = new URL(c.req.url).pathname;
 
+    if (config.assetProvider?.readPublicAsset) {
+      const provided = await config.assetProvider.readPublicAsset(urlPath);
+      if (provided) {
+        return new Response(cloneBufferSource(await materializeAsset(provided)), {
+          status: 200,
+          headers: {
+            "Content-Type": provided.contentType ?? "application/octet-stream",
+            "Cache-Control": "no-cache",
+          },
+        });
+      }
+    }
+
     // Prevent directory traversal
     const resolved = path.resolve(publicDir, `.${urlPath}`);
     if (!resolved.startsWith(publicDir)) {
@@ -1011,6 +1392,23 @@ ${LIVE_RELOAD_SCRIPT}
         },
       });
     } catch {
+      if (shouldRenderNotFoundPage(c.req.raw)) {
+        const matched = matchRoute(manifest, "GET", urlPath);
+        if (matched?.route.type === "not-found") {
+          const executePageRoute = pageRouteExecutors.get(matched.route.filePath);
+          if (executePageRoute) {
+            return await executePageRoute({
+              request: c.req.raw,
+              params: matched.params,
+              ctx: createContext(c),
+              isNavRequest: c.req.header("X-Capstan-Nav") === "1",
+              isStaticBuildRequest: c.req.header("X-Capstan-Static-Build") === "1",
+              liveReloadEnabled: config.liveReload === true,
+            });
+          }
+        }
+      }
+
       return c.notFound();
     }
   });
@@ -1043,10 +1441,12 @@ export async function createDevServer(
   // --- Initial route scan ---------------------------------------------------
 
   let manifest = await scanRoutes(routesDir);
-  let { app, apiRouteCount, pageRouteCount, routeRegistry } = await buildApp(
+  let { app, apiRouteCount, pageRouteCount, routeRegistry } = await buildRuntimeApp({
+    ...config,
     manifest,
-    config,
-  );
+    mode: "development",
+    liveReload: true,
+  });
 
   // The Node.js HTTP server holds a reference to the current Hono app.
   // When routes change we rebuild the app and swap the reference -- in-flight
@@ -1130,7 +1530,12 @@ export async function createDevServer(
       // Invalidate only the changed file so unchanged modules stay cached.
       invalidateModuleCache(changedFile);
       manifest = await scanRoutes(routesDir);
-      const rebuilt = await buildApp(manifest, config);
+      const rebuilt = await buildRuntimeApp({
+        ...config,
+        manifest,
+        mode: "development",
+        liveReload: true,
+      });
       currentApp = rebuilt.app;
       apiRouteCount = rebuilt.apiRouteCount;
       pageRouteCount = rebuilt.pageRouteCount;

@@ -27,8 +27,29 @@ export interface MemoryAccessor { remember(content: string, opts?: RememberOptio
 
 // Agent loop types
 export interface AgentTool { name: string; description: string; parameters?: Record<string, unknown>; execute(args: Record<string, unknown>): Promise<unknown>; }
+export interface AgentToolCallRecord { tool: string; args: unknown; result: unknown; }
+export type AgentRunStatus = "completed" | "max_iterations" | "approval_required" | "paused" | "canceled";
+export type AgentLoopCheckpointStage =
+  | "initialized"
+  | "assistant_response"
+  | "tool_result"
+  | "approval_required"
+  | "completed"
+  | "max_iterations"
+  | "canceled";
+export interface AgentLoopPendingToolCall { assistantMessage: string; tool: string; args: Record<string, unknown>; }
+export interface AgentLoopCheckpoint {
+  stage: AgentLoopCheckpointStage;
+  config: Pick<AgentRunConfig, "goal" | "maxIterations" | "systemPrompt">;
+  messages: LLMMessage[];
+  iterations: number;
+  toolCalls: AgentToolCallRecord[];
+  pendingToolCall?: AgentLoopPendingToolCall | undefined;
+  lastAssistantResponse?: string | undefined;
+}
+export interface AgentLoopControlDecision { action: "continue" | "pause" | "cancel"; reason?: string; }
 export interface AgentRunConfig { goal: string; about?: [string, string]; maxIterations?: number; memory?: boolean; tools?: AgentTool[]; systemPrompt?: string; excludeRoutes?: string[]; }
-export interface AgentRunResult { result: unknown; iterations: number; toolCalls: Array<{ tool: string; args: unknown; result: unknown }>; status: "completed" | "max_iterations" | "approval_required"; pendingApproval?: { tool: string; args: unknown; reason: string }; }
+export interface AgentRunResult { result: unknown; iterations: number; toolCalls: AgentToolCallRecord[]; status: AgentRunStatus; pendingApproval?: { tool: string; args: unknown; reason: string } | undefined; checkpoint?: AgentLoopCheckpoint | undefined; }
 
 // AI context (standalone, no Capstan dependency)
 export interface AIContext { think<T = string>(prompt: string, opts?: ThinkOptions<T>): Promise<T>; generate(prompt: string, opts?: GenerateOptions): Promise<string>; thinkStream(prompt: string, opts?: Omit<ThinkOptions, "schema">): AsyncIterable<string>; generateStream(prompt: string, opts?: GenerateOptions): AsyncIterable<string>; remember(content: string, opts?: RememberOptions): Promise<string>; recall(query: string, opts?: RecallOptions): Promise<MemoryEntry[]>; memory: { about(type: string, id: string): MemoryAccessor; forget(entryId: string): Promise<boolean>; assembleContext(opts: AssembleContextOptions): Promise<string>; }; agent: { run(config: AgentRunConfig): Promise<AgentRunResult>; }; }

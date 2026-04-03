@@ -13,6 +13,29 @@ export interface FlyConfig {
   replayWrites?: boolean;
 }
 
+export function generateFlyToml(
+  appName: string,
+  config?: {
+    primaryRegion?: string;
+    internalPort?: number;
+  },
+): string {
+  const internalPort = config?.internalPort ?? 3000;
+  const primaryRegion = config?.primaryRegion ?? "iad";
+
+  return `app = "${appName}"
+primary_region = "${primaryRegion}"
+
+[http_service]
+  internal_port = ${internalPort}
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]
+`;
+}
+
 /**
  * Create a {@link ServerAdapter} for Fly.io deployments.
  *

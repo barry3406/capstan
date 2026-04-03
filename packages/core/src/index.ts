@@ -72,23 +72,17 @@ export type { CapstanPlugin, CapstanPluginContext } from "./plugin.js";
 export { setApprovalStore } from "./approval.js";
 export { setRateLimitStore } from "./ratelimit.js";
 
-export {
-  defineEvent,
-  onEvent,
-  emitEvent,
-  getEventBus,
-  resetEventBus,
-} from "./events.js";
-export type { EventDefinition } from "./events.js";
-
-export { defineWorker } from "./worker.js";
-export type { WorkerDefinition } from "./worker.js";
-
 export { CircuitBreaker, CircuitOpenError } from "./circuit-breaker.js";
 export type { CircuitBreakerConfig, CircuitState } from "./circuit-breaker.js";
 
-export { verifyCapstanApp, renderRuntimeVerifyText } from "./verify.js";
 export type { VerifyReport, VerifyDiagnostic, VerifyStep } from "./verify.js";
+export { renderRuntimeVerifyText } from "./verify-render.js";
+export async function verifyCapstanApp(
+  ...args: Parameters<typeof import("./verify.js").verifyCapstanApp>
+): Promise<import("./verify.js").VerifyReport> {
+  const mod = await import("./verify.js");
+  return mod.verifyCapstanApp(...args);
+}
 
 export { defineWebSocket, WebSocketRoom } from "./websocket.js";
 export type {

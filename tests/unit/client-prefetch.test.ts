@@ -6,20 +6,31 @@ import { PrefetchManager } from "@zauso-ai/capstan-react/client";
 // ---------------------------------------------------------------------------
 
 /** Lightweight mock element that supports getAttribute and event listeners. */
-function createMockElement(href: string | null): Element {
-  const listeners = new Map<string, Array<() => void>>();
+function createMockElement(href: string | null): Element & {
+  __fire: (type: string) => void;
+  __listenerCount: (type: string) => number;
+} {
+  const listeners = new Map<string, Set<() => void>>();
   return {
     getAttribute: (name: string) => (name === "href" ? href : null),
     addEventListener: (type: string, fn: () => void) => {
-      if (!listeners.has(type)) listeners.set(type, []);
-      listeners.get(type)!.push(fn);
+      if (!listeners.has(type)) listeners.set(type, new Set());
+      listeners.get(type)!.add(fn);
     },
-    removeEventListener: () => {},
+    removeEventListener: (type: string, fn: () => void) => {
+      listeners.get(type)?.delete(fn);
+    },
     // Helper to trigger events in tests
     __fire: (type: string) => {
       for (const fn of listeners.get(type) ?? []) fn();
     },
-  } as unknown as Element & { __fire: (type: string) => void };
+    __listenerCount: (type: string) => {
+      return listeners.get(type)?.size ?? 0;
+    },
+  } as unknown as Element & {
+    __fire: (type: string) => void;
+    __listenerCount: (type: string) => number;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -64,6 +75,21 @@ describe("PrefetchManager", () => {
     manager.destroy();
   });
 
+  test("unobserve removes hover listeners", () => {
+    const el = createMockElement("/about") as Element & {
+      __listenerCount: (type: string) => number;
+    };
+
+    manager.observe(el, "hover");
+    expect(el.__listenerCount("pointerenter")).toBe(1);
+    expect(el.__listenerCount("pointerleave")).toBe(1);
+
+    manager.unobserve(el);
+    expect(el.__listenerCount("pointerenter")).toBe(0);
+    expect(el.__listenerCount("pointerleave")).toBe(0);
+    manager.destroy();
+  });
+
   test("destroy is idempotent", () => {
     manager.destroy();
     manager.destroy(); // Should not throw
@@ -98,6 +124,19 @@ describe("PrefetchManager", () => {
     manager.observe(el, "hover");
     (el as Element & { __fire: (t: string) => void }).__fire("pointerenter");
     // No error — link was filtered
+    manager.destroy();
+  });
+
+  test("getHref filters out javascript and data URIs", () => {
+    const javascriptLink = createMockElement("javascript:void(0)");
+    const dataLink = createMockElement("data:text/plain,hello");
+
+    manager.observe(javascriptLink, "hover");
+    manager.observe(dataLink, "hover");
+
+    (javascriptLink as Element & { __fire: (t: string) => void }).__fire("pointerenter");
+    (dataLink as Element & { __fire: (t: string) => void }).__fire("pointerenter");
+
     manager.destroy();
   });
 

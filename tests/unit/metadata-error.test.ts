@@ -5,10 +5,10 @@ import {
   generateMetadataElements,
   defineMetadata,
   mergeMetadata,
-  ErrorBoundary,
-  NotFound,
-} from "@zauso-ai/capstan-react";
-import type { Metadata } from "@zauso-ai/capstan-react";
+  resolveMetadata,
+} from "../../packages/react/src/metadata.ts";
+import { ErrorBoundary, NotFound } from "../../packages/react/src/error-boundary.ts";
+import type { Metadata } from "../../packages/react/src/types.ts";
 
 // ---------------------------------------------------------------------------
 // generateMetadataElements
@@ -36,6 +36,14 @@ describe("generateMetadataElements", () => {
     });
     const html = renderToString(createElement("head", null, ...els));
     expect(html).toContain("<title>Dashboard</title>");
+  });
+
+  it("applies template even when it omits %s by appending the title", () => {
+    const els = generateMetadataElements({
+      title: { default: "Dashboard", template: " | Capstan" },
+    });
+    const html = renderToString(createElement("head", null, ...els));
+    expect(html).toContain("<title>Dashboard | Capstan</title>");
   });
 
   it("generates description meta tag", () => {
@@ -138,6 +146,22 @@ describe("generateMetadataElements", () => {
     expect(html).toContain('href="/apple-icon.png"');
   });
 
+  it("generates descriptor-based icons including shortcut and custom rel entries", () => {
+    const els = generateMetadataElements({
+      icons: {
+        shortcut: [{ url: "/shortcut.ico", sizes: "48x48" }],
+        other: [
+          { rel: "mask-icon", url: "/mask.svg", color: "#111111" },
+        ],
+      },
+    });
+    const html = renderToString(createElement("head", null, ...els));
+    expect(html).toContain('rel="shortcut icon"');
+    expect(html).toContain('sizes="48x48"');
+    expect(html).toContain('rel="mask-icon"');
+    expect(html).toContain('color="#111111"');
+  });
+
   it("generates alternates hreflang", () => {
     const els = generateMetadataElements({
       alternates: { en: "https://example.com/en", zh: "https://example.com/zh" },
@@ -147,6 +171,20 @@ describe("generateMetadataElements", () => {
     expect(html).toContain('rel="alternate"');
     expect(html).toContain('href="https://example.com/en"');
     expect(html).toContain('href="https://example.com/zh"');
+  });
+
+  it("generates structured alternates for media and type variants", () => {
+    const els = generateMetadataElements({
+      alternates: {
+        media: { "only screen and (max-width: 600px)": "https://m.example.com" },
+        types: { "application/rss+xml": "https://example.com/rss.xml" },
+      },
+    });
+    const html = renderToString(createElement("head", null, ...els));
+    expect(html).toContain('media="only screen and (max-width: 600px)"');
+    expect(html).toContain('href="https://m.example.com"');
+    expect(html).toContain('type="application/rss+xml"');
+    expect(html).toContain('href="https://example.com/rss.xml"');
   });
 
   it("returns empty array for empty metadata", () => {
@@ -192,6 +230,111 @@ describe("generateMetadataElements", () => {
     expect(els).toHaveLength(1);
     const html = renderToString(createElement("head", null, ...els));
     expect(html).toContain('content="summary"');
+  });
+
+  it("drops blank metadata values instead of emitting empty tags", () => {
+    const els = generateMetadataElements({
+      title: "   ",
+      description: "   ",
+      canonical: "   ",
+      robots: "   ",
+      icons: {
+        icon: ["   ", { url: " " }],
+        other: [{ rel: "mask-icon", url: "   " }],
+      },
+      alternates: {
+        languages: { en: "   " },
+      },
+    });
+    expect(els).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveMetadata
+// ---------------------------------------------------------------------------
+
+describe("resolveMetadata", () => {
+  it("resolves title template and social fallbacks from base metadata", () => {
+    const resolved = resolveMetadata({
+      title: { default: "Billing", template: "%s | Capstan" },
+      description: "Billing page",
+      canonical: "https://example.com/billing",
+    });
+
+    expect(resolved.title).toBe("Billing | Capstan");
+    expect(resolved.openGraph).toEqual({
+      title: "Billing | Capstan",
+      description: "Billing page",
+      url: "https://example.com/billing",
+    });
+    expect(resolved.twitter).toEqual({
+      title: "Billing | Capstan",
+      description: "Billing page",
+    });
+  });
+
+  it("preserves explicit social overrides over base metadata fallbacks", () => {
+    const resolved = resolveMetadata({
+      title: "Base",
+      description: "Base description",
+      openGraph: { title: "OG title" },
+      twitter: { description: "TW description", card: "summary" },
+    });
+
+    expect(resolved.openGraph).toEqual({
+      title: "OG title",
+      description: "Base description",
+    });
+    expect(resolved.twitter).toEqual({
+      card: "summary",
+      title: "Base",
+      description: "TW description",
+    });
+  });
+
+  it("normalizes robots object into a stable directive string", () => {
+    const resolved = resolveMetadata({
+      robots: {
+        index: false,
+        follow: true,
+        noarchive: true,
+        maxSnippet: 120,
+        unavailableAfter: "2026-12-31",
+      },
+    });
+
+    expect(resolved.robots).toBe(
+      "noindex, follow, noarchive, unavailable_after:2026-12-31, max-snippet:120",
+    );
+  });
+
+  it("normalizes icon and alternates collections into structured output", () => {
+    const resolved = resolveMetadata({
+      icons: {
+        icon: ["/favicon.ico", { url: "/icon.svg", type: "image/svg+xml" }],
+        other: [{ rel: "mask-icon", url: "/mask.svg", color: "#000000" }],
+      },
+      alternates: {
+        languages: { en: "https://example.com/en" },
+        media: { print: "https://example.com/print" },
+      },
+    });
+
+    expect(resolved.icons).toEqual({
+      icon: [
+        { url: "/favicon.ico" },
+        { url: "/icon.svg", type: "image/svg+xml" },
+      ],
+      apple: [],
+      shortcut: [],
+      other: [{ rel: "mask-icon", url: "/mask.svg", color: "#000000" }],
+    });
+    expect(resolved.alternates).toEqual({
+      languages: { en: "https://example.com/en" },
+      media: { print: "https://example.com/print" },
+      types: {},
+    });
   });
 });
 
@@ -252,6 +395,68 @@ describe("mergeMetadata", () => {
     expect(merged.openGraph?.image).toBe("https://img.png");
   });
 
+  it("preserves parent title template when child provides a plain title string", () => {
+    const parent: Metadata = {
+      title: { default: "Capstan", template: "%s | Capstan" },
+    };
+    const child: Metadata = { title: "Billing" };
+    const merged = mergeMetadata(parent, child);
+
+    expect(merged.title).toEqual({ default: "Billing", template: "%s | Capstan" });
+    expect(resolveMetadata(merged).title).toBe("Billing | Capstan");
+  });
+
+  it("allows child absolute title to bypass inherited parent template", () => {
+    const parent: Metadata = {
+      title: { default: "Capstan", template: "%s | Capstan" },
+    };
+    const child: Metadata = {
+      title: { absolute: "Billing Console" },
+    };
+    const merged = mergeMetadata(parent, child);
+
+    expect(resolveMetadata(merged).title).toBe("Billing Console");
+  });
+
+  it("merges robots objects instead of replacing them wholesale", () => {
+    const parent: Metadata = {
+      robots: { index: false, follow: true, noarchive: true },
+    };
+    const child: Metadata = {
+      robots: { follow: false, maxSnippet: 50 },
+    };
+    const merged = mergeMetadata(parent, child);
+
+    expect(merged.robots).toEqual({
+      index: false,
+      follow: false,
+      noarchive: true,
+      maxSnippet: 50,
+    });
+  });
+
+  it("merges structured alternates by subsection", () => {
+    const parent: Metadata = {
+      alternates: {
+        languages: { en: "/en" },
+        media: { print: "/print-v1" },
+      },
+    };
+    const child: Metadata = {
+      alternates: {
+        media: { print: "/print-v2" },
+        types: { "application/rss+xml": "/feed.xml" },
+      },
+    };
+    const merged = mergeMetadata(parent, child);
+
+    expect(merged.alternates).toEqual({
+      languages: { en: "/en" },
+      media: { print: "/print-v2" },
+      types: { "application/rss+xml": "/feed.xml" },
+    });
+  });
+
   it("child keywords override parent keywords entirely", () => {
     const parent: Metadata = { keywords: ["a", "b"] };
     const child: Metadata = { keywords: ["c"] };
@@ -286,15 +491,22 @@ describe("mergeMetadata", () => {
     const parent: Metadata = { alternates: { en: "/en" } };
     const child: Metadata = { alternates: { zh: "/zh" } };
     const merged = mergeMetadata(parent, child);
-    expect(merged.alternates?.en).toBe("/en");
-    expect(merged.alternates?.zh).toBe("/zh");
+    expect(merged.alternates).toEqual({
+      languages: { en: "/en", zh: "/zh" },
+      media: {},
+      types: {},
+    });
   });
 
   it("child alternates override parent for same key", () => {
     const parent: Metadata = { alternates: { en: "/en-old" } };
     const child: Metadata = { alternates: { en: "/en-new" } };
     const merged = mergeMetadata(parent, child);
-    expect(merged.alternates?.en).toBe("/en-new");
+    expect(merged.alternates).toEqual({
+      languages: { en: "/en-new" },
+      media: {},
+      types: {},
+    });
   });
 
   it("merges two empty metadata objects", () => {

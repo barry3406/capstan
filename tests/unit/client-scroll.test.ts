@@ -75,6 +75,12 @@ describe("saveScrollPosition + restoreScrollPosition", () => {
     expect(restoreScrollPosition(null)).toBe(false);
   });
 
+  test("restoreScrollPosition returns false for malformed stored data", () => {
+    const key = generateScrollKey();
+    mockSessionStorage.setItem(`__capstan_scroll_${key}`, JSON.stringify({ x: "bad", y: 10 }));
+    expect(restoreScrollPosition(key)).toBe(false);
+  });
+
   test("saveScrollPosition is a no-op when no current key is set", () => {
     const sizeBefore = mockSessionStorage.length;
     saveScrollPosition();

@@ -1,5 +1,6 @@
 import type { PrefetchStrategy } from "./types.js";
 import { getRouter } from "./router.js";
+import { isPrefetchableHref } from "./href.js";
 
 /**
  * PrefetchManager — watches links and prefetches their targets.
@@ -17,6 +18,7 @@ const VIEWPORT_MARGIN = "200px";
 export class PrefetchManager {
   private observer: IntersectionObserver | null = null;
   private hoverTimers = new Map<Element, ReturnType<typeof setTimeout>>();
+  private hoverListeners = new Map<Element, { onEnter: () => void; onLeave: () => void }>();
   private prefetched = new Set<string>();
 
   constructor() {
@@ -41,11 +43,8 @@ export class PrefetchManager {
   observe(element: Element, strategy: PrefetchStrategy): void {
     if (strategy === "none") return;
 
-    if (strategy === "viewport" && this.observer) {
-      this.observer.observe(element);
-    }
-
     if (strategy === "hover") {
+      this.unobserve(element);
       const onEnter = (): void => {
         const href = this.getHref(element);
         if (!href) return;
@@ -64,8 +63,13 @@ export class PrefetchManager {
         }
       };
 
+      this.hoverListeners.set(element, { onEnter, onLeave });
       element.addEventListener("pointerenter", onEnter);
       element.addEventListener("pointerleave", onLeave);
+    }
+
+    if (strategy === "viewport" && this.observer) {
+      this.observer.observe(element);
     }
   }
 
@@ -74,6 +78,12 @@ export class PrefetchManager {
    */
   unobserve(element: Element): void {
     this.observer?.unobserve(element);
+    const listeners = this.hoverListeners.get(element);
+    if (listeners) {
+      element.removeEventListener("pointerenter", listeners.onEnter);
+      element.removeEventListener("pointerleave", listeners.onLeave);
+      this.hoverListeners.delete(element);
+    }
     const timer = this.hoverTimers.get(element);
     if (timer !== undefined) {
       clearTimeout(timer);
@@ -86,6 +96,11 @@ export class PrefetchManager {
    */
   destroy(): void {
     this.observer?.disconnect();
+    for (const [element, listeners] of this.hoverListeners) {
+      element.removeEventListener("pointerenter", listeners.onEnter);
+      element.removeEventListener("pointerleave", listeners.onLeave);
+    }
+    this.hoverListeners.clear();
     for (const timer of this.hoverTimers.values()) {
       clearTimeout(timer);
     }
@@ -94,19 +109,18 @@ export class PrefetchManager {
   }
 
   private triggerPrefetch(href: string): void {
+    const router = getRouter();
+    if (!router) return;
     if (this.prefetched.has(href)) return;
     this.prefetched.add(href);
-    const router = getRouter();
-    if (router) {
-      void router.prefetch(href);
-    }
+    void router.prefetch(href);
   }
 
   private getHref(element: Element): string | null {
     const href = element.getAttribute("href");
     if (!href) return null;
     // Only prefetch same-origin, non-hash links
-    if (href.startsWith("http") || href.startsWith("//") || href.startsWith("#")) {
+    if (!isPrefetchableHref(href)) {
       return null;
     }
     return href;

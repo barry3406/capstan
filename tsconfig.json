@@ -24,9 +24,6 @@
       "path": "./packages/release"
     },
     {
-      "path": "./packages/harness"
-    },
-    {
       "path": "./packages/cli"
     }
   ]

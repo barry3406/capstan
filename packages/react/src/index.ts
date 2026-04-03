@@ -4,15 +4,28 @@ export { Outlet, OutletProvider } from "./layout.js";
 export { useAuth, useParams } from "./hooks.js";
 export { hydrateCapstanPage } from "./hydrate.js";
 export { ServerOnly, ClientOnly, serverOnly } from "./server-only.js";
-export { generateMetadataElements, defineMetadata, mergeMetadata } from "./metadata.js";
+export { generateMetadataElements, defineMetadata, mergeMetadata, resolveMetadata } from "./metadata.js";
 export { ErrorBoundary, NotFound } from "./error-boundary.js";
-export type { Metadata } from "./metadata.js";
 export type { ErrorBoundaryProps } from "./error-boundary.js";
-export { Image } from "./image.js";
-export type { ImageProps } from "./image.js";
-export { defineFont, fontPreloadLink } from "./font.js";
-export type { FontConfig, FontResult } from "./font.js";
+export { Image, buildImageUrl, buildImageSrcSet, imagePreloadLink } from "./image.js";
+export type { ImageProps, ImageFormat, ImagePreloadOptions } from "./image.js";
+export { defineFont, fontPreloadElement, fontPreloadLink } from "./font.js";
+export type { FontConfig, FontResult, FontStyle } from "./font.js";
 export type {
+  Metadata,
+  MetadataTitle,
+  MetadataTitleObject,
+  MetadataRobotsObject,
+  MetadataOpenGraph,
+  MetadataTwitter,
+  MetadataLinkDescriptor,
+  MetadataLinkInput,
+  MetadataIcons,
+  MetadataAlternates,
+  ResolvedMetadata,
+  ResolvedMetadataLinkDescriptor,
+  ResolvedMetadataIcons,
+  ResolvedMetadataAlternates,
   LoaderArgs,
   LoaderFunction,
   HydrationMode,

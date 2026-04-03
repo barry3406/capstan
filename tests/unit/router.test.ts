@@ -32,11 +32,11 @@ afterEach(async () => {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Create a file (and its parent directories) with empty content. */
-async function touch(base: string, relativePath: string): Promise<void> {
+/** Create a file (and its parent directories) with optional content. */
+async function touch(base: string, relativePath: string, content = ""): Promise<void> {
   const fullPath = join(base, relativePath);
   await mkdir(join(fullPath, ".."), { recursive: true });
-  await writeFile(fullPath, "", "utf-8");
+  await writeFile(fullPath, content, "utf-8");
 }
 
 // ---------------------------------------------------------------------------
@@ -165,6 +165,78 @@ describe("scanRoutes", () => {
     expect(manifest.routes.length).toBe(1);
     expect(manifest.routes[0]!.type).toBe("page");
   });
+
+  it("omits route group directories from url patterns", async () => {
+    const dir = await makeTempDir();
+    await touch(dir, "(marketing)/about.page.tsx");
+
+    const manifest = await scanRoutes(dir);
+    const page = manifest.routes.find((r) => r.type === "page");
+
+    expect(page).toBeDefined();
+    expect(page!.urlPattern).toBe("/about");
+  });
+
+  it("still includes layouts and middlewares inside route groups", async () => {
+    const dir = await makeTempDir();
+    await touch(dir, "(marketing)/_layout.tsx");
+    await touch(dir, "(marketing)/_middleware.ts");
+    await touch(dir, "(marketing)/about.page.tsx");
+
+    const manifest = await scanRoutes(dir);
+    const page = manifest.routes.find((r) => r.type === "page" && r.urlPattern === "/about");
+
+    expect(page).toBeDefined();
+    expect(page!.layouts).toEqual([join(dir, "(marketing)", "_layout.tsx")]);
+    expect(page!.middlewares).toEqual([join(dir, "(marketing)", "_middleware.ts")]);
+  });
+
+  it("does not treat malformed group-like directories as route groups", async () => {
+    const dir = await makeTempDir();
+    await touch(dir, "(marketing/about.page.tsx");
+
+    const manifest = await scanRoutes(dir);
+    const page = manifest.routes.find((r) => r.type === "page");
+
+    expect(page).toBeDefined();
+    expect(page!.urlPattern).toBe("/(marketing/about");
+  });
+
+  it("registers not-found.tsx as a scoped not-found route", async () => {
+    const dir = await makeTempDir();
+    await touch(dir, "docs/not-found.tsx");
+
+    const manifest = await scanRoutes(dir);
+    const route = manifest.routes.find((r) => r.type === "not-found");
+
+    expect(route).toBeDefined();
+    expect(route!.urlPattern).toBe("/docs");
+    expect(route!.componentType).toBe("server");
+  });
+
+  it("registers not-found.page.tsx as a scoped not-found route", async () => {
+    const dir = await makeTempDir();
+    await touch(dir, "(marketing)/not-found.page.tsx", '"use client";\nexport default function NotFound() {}');
+
+    const manifest = await scanRoutes(dir);
+    const route = manifest.routes.find((r) => r.type === "not-found");
+
+    expect(route).toBeDefined();
+    expect(route!.urlPattern).toBe("/");
+    expect(route!.componentType).toBe("client");
+  });
+
+  it("associates the nearest not-found boundary with page routes", async () => {
+    const dir = await makeTempDir();
+    await touch(dir, "docs/not-found.tsx");
+    await touch(dir, "docs/guides/install.page.tsx");
+
+    const manifest = await scanRoutes(dir);
+    const page = manifest.routes.find((r) => r.type === "page" && r.urlPattern === "/docs/guides/install");
+
+    expect(page).toBeDefined();
+    expect(page!.notFound).toBe(join(dir, "docs", "not-found.tsx"));
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -237,6 +309,66 @@ describe("matchRoute", () => {
     const match = matchRoute(manifest, "GET", "/");
     // Layouts/middlewares are not directly routable
     expect(match).toBeNull();
+  });
+
+  it("falls back to the nearest scoped not-found route for unknown GET paths", async () => {
+    const dir = await makeTempDir();
+    await touch(dir, "docs/not-found.tsx");
+
+    const manifest = await scanRoutes(dir);
+    const match = matchRoute(manifest, "GET", "/docs/missing/page");
+
+    expect(match).not.toBeNull();
+    expect(match!.route.type).toBe("not-found");
+    expect(match!.route.filePath).toBe(join(dir, "docs", "not-found.tsx"));
+    expect(match!.params).toEqual({});
+  });
+
+  it("prefers a deeper scoped not-found route over the root fallback", async () => {
+    const dir = await makeTempDir();
+    await touch(dir, "not-found.tsx");
+    await touch(dir, "docs/not-found.tsx");
+
+    const manifest = await scanRoutes(dir);
+    const match = matchRoute(manifest, "GET", "/docs/missing");
+
+    expect(match).not.toBeNull();
+    expect(match!.route.filePath).toBe(join(dir, "docs", "not-found.tsx"));
+  });
+
+  it("prefers a route-group scoped not-found route over a shallower root fallback on equal visible scope", async () => {
+    const dir = await makeTempDir();
+    await touch(dir, "not-found.tsx");
+    await touch(dir, "(marketing)/not-found.tsx");
+
+    const manifest = await scanRoutes(dir);
+    const match = matchRoute(manifest, "GET", "/missing");
+
+    expect(match).not.toBeNull();
+    expect(match!.route.filePath).toBe(join(dir, "(marketing)", "not-found.tsx"));
+  });
+
+  it("does not use not-found fallback for non-GET methods", async () => {
+    const dir = await makeTempDir();
+    await touch(dir, "not-found.tsx");
+
+    const manifest = await scanRoutes(dir);
+    const match = matchRoute(manifest, "POST", "/missing");
+
+    expect(match).toBeNull();
+  });
+
+  it("still prefers a direct route match over not-found fallback", async () => {
+    const dir = await makeTempDir();
+    await touch(dir, "docs/not-found.tsx");
+    await touch(dir, "docs/index.page.tsx");
+
+    const manifest = await scanRoutes(dir);
+    const match = matchRoute(manifest, "GET", "/docs");
+
+    expect(match).not.toBeNull();
+    expect(match!.route.type).toBe("page");
+    expect(match!.route.urlPattern).toBe("/docs");
   });
 });
 

@@ -1,4 +1,4 @@
-export type RouteType = "page" | "api" | "layout" | "middleware" | "loading" | "error";
+export type RouteType = "page" | "api" | "layout" | "middleware" | "loading" | "error" | "not-found";
 
 export interface RouteEntry {
   /** Absolute file path */
@@ -25,6 +25,8 @@ export interface RouteEntry {
   loading?: string;
   /** Nearest _error.tsx file path (for ErrorBoundary) */
   error?: string;
+  /** Nearest not-found boundary file path for this route's scope */
+  notFound?: string;
 }
 
 export interface RouteManifest {

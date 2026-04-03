@@ -6,11 +6,12 @@ import type { LLMProvider, LLMMessage, LLMResponse, LLMOptions, AgentTool } from
 // Helper: create a mock LLM that returns a sequence of responses
 // ---------------------------------------------------------------------------
 
-function mockLLM(responses: string[]): LLMProvider {
+function mockLLM(responses: string[], sink?: LLMMessage[][]): LLMProvider {
   let callIndex = 0;
   return {
     name: "mock",
-    async chat(_messages: LLMMessage[], _opts?: LLMOptions): Promise<LLMResponse> {
+    async chat(messages: LLMMessage[], _opts?: LLMOptions): Promise<LLMResponse> {
+      sink?.push(messages.map((message) => ({ ...message })));
       const content = responses[callIndex] ?? "done";
       callIndex++;
       return { content, model: "mock-1" };
@@ -600,6 +601,153 @@ describe("runAgentLoop", () => {
     expect(result.pendingApproval!.reason).toBe("Tool call blocked by policy");
   });
 
+  it("returns a paused checkpoint after a safe-point pause request", async () => {
+    const llm = mockLLM([
+      JSON.stringify({ tool: "step", arguments: { value: "one" } }),
+      "done",
+    ]);
+
+    const result = await runAgentLoop(
+      llm,
+      { goal: "pause after one step" },
+      [
+        {
+          name: "step",
+          description: "records work",
+          async execute() {
+            return { ok: true };
+          },
+        },
+      ],
+      {
+        getControlState: async (phase) =>
+          phase === "after_tool"
+            ? { action: "pause" }
+            : { action: "continue" },
+      },
+    );
+
+    expect(result.status).toBe("paused");
+    expect(result.iterations).toBe(1);
+    expect(result.checkpoint).toBeDefined();
+    expect(result.checkpoint!.stage).toBe("tool_result");
+    expect(result.checkpoint!.toolCalls).toHaveLength(1);
+    expect(result.checkpoint!.pendingToolCall).toBeUndefined();
+  });
+
+  it("resumes from a pending tool checkpoint without repeating the blocked policy check", async () => {
+    let llmCalls = 0;
+    let policyCalls = 0;
+    let writes = 0;
+
+    const llm: LLMProvider = {
+      name: "mock",
+      async chat(): Promise<LLMResponse> {
+        llmCalls++;
+        return { content: "done", model: "mock-1" };
+      },
+    };
+
+    const toolCallJson = JSON.stringify({
+      tool: "write",
+      arguments: { value: "approved" },
+    });
+
+    const result = await runAgentLoop(
+      llm,
+      { goal: "resume approved tool", maxIterations: 3 },
+      [
+        {
+          name: "write",
+          description: "writes a value",
+          async execute() {
+            writes++;
+            return { saved: true };
+          },
+        },
+      ],
+      {
+        checkpoint: {
+          stage: "approval_required",
+          config: { goal: "resume approved tool", maxIterations: 3 },
+          messages: [
+            { role: "system", content: "system" },
+            { role: "user", content: "resume approved tool" },
+          ],
+          iterations: 1,
+          toolCalls: [],
+          pendingToolCall: {
+            assistantMessage: toolCallJson,
+            tool: "write",
+            args: { value: "approved" },
+          },
+          lastAssistantResponse: toolCallJson,
+        },
+        resumePendingTool: true,
+        beforeToolCall: async () => {
+          policyCalls++;
+          return { allowed: false, reason: "should have been bypassed" };
+        },
+      },
+    );
+
+    expect(result.status).toBe("completed");
+    expect(writes).toBe(1);
+    expect(policyCalls).toBe(0);
+    expect(llmCalls).toBe(1);
+  });
+
+  it("returns a canceled checkpoint when cancellation is requested cooperatively", async () => {
+    const llm = mockLLM(["done"]);
+
+    const result = await runAgentLoop(
+      llm,
+      { goal: "cancel before model call" },
+      [],
+      {
+        getControlState: async () => ({ action: "cancel", reason: "operator canceled" }),
+      },
+    );
+
+    expect(result.status).toBe("canceled");
+    expect(result.result).toBe("operator canceled");
+    expect(result.iterations).toBe(0);
+    expect(result.checkpoint).toBeDefined();
+    expect(result.checkpoint!.stage).toBe("canceled");
+  });
+
+  it("persists an approval checkpoint with the pending tool call", async () => {
+    const llm = mockLLM([
+      JSON.stringify({ tool: "write", arguments: { value: "x" } }),
+    ]);
+
+    const result = await runAgentLoop(
+      llm,
+      { goal: "wait for approval" },
+      [
+        {
+          name: "write",
+          description: "writes a value",
+          async execute() {
+            return { saved: true };
+          },
+        },
+      ],
+      {
+        beforeToolCall: async () => ({
+          allowed: false,
+          reason: "approval needed",
+        }),
+      },
+    );
+
+    expect(result.status).toBe("approval_required");
+    expect(result.checkpoint).toBeDefined();
+    expect(result.checkpoint!.stage).toBe("approval_required");
+    expect(result.checkpoint!.pendingToolCall?.tool).toBe("write");
+    expect(result.checkpoint!.pendingToolCall?.args).toEqual({ value: "x" });
+  });
+
   // --- onMemoryEvent ---
 
   it("onMemoryEvent receives exact formatted string with tool name, args, and result", async () => {
@@ -762,6 +910,107 @@ describe("runAgentLoop", () => {
     expect(result.toolCalls).toHaveLength(1);
     // find() returns the first match
     expect(result.toolCalls[0]!.result).toBe("first");
+  });
+
+  it("allows checkpoint hooks to compact and rewrite the persisted transcript", async () => {
+    const llm = mockLLM([
+      JSON.stringify({ tool: "lookup", arguments: { sku: "abc" } }),
+      "Done.",
+    ]);
+
+    const tool: AgentTool = {
+      name: "lookup",
+      description: "Lookup pricing data",
+      async execute() {
+        return { payload: "oversized ".repeat(200) };
+      },
+    };
+
+    const checkpoints: string[][] = [];
+    const result = await runAgentLoop(
+      llm,
+      { goal: "Investigate pricing regression" },
+      [tool],
+      {
+        onCheckpoint: async (checkpoint) => {
+          if (checkpoint.stage !== "tool_result") {
+            checkpoints.push(checkpoint.messages.map((message) => message.content));
+            return checkpoint;
+          }
+
+          const compacted = {
+            ...checkpoint,
+            messages: [
+              checkpoint.messages[0]!,
+              checkpoint.messages[1]!,
+              {
+                role: "system" as const,
+                content: "[HARNESS_SUMMARY]\nCompacted transcript",
+              },
+              ...checkpoint.messages.slice(-2),
+            ],
+          };
+          checkpoints.push(compacted.messages.map((message) => message.content));
+          return compacted;
+        },
+      },
+    );
+
+    expect(result.status).toBe("completed");
+    expect(checkpoints.some((messages) => messages.some((content) => content.includes("[HARNESS_SUMMARY]")))).toBe(true);
+    expect(result.checkpoint?.messages.some((message) => message.content.includes("[HARNESS_SUMMARY]"))).toBe(true);
+  });
+
+  it("supports transient call-specific context injection without mutating the transcript", async () => {
+    const capturedMessages: LLMMessage[][] = [];
+    const llm = mockLLM(
+      [
+        JSON.stringify({ tool: "lookup", arguments: { sku: "abc" } }),
+        "Done.",
+      ],
+      capturedMessages,
+    );
+
+    const tool: AgentTool = {
+      name: "lookup",
+      description: "Lookup pricing data",
+      async execute() {
+        return { insight: "promotion expired" };
+      },
+    };
+
+    const result = await runAgentLoop(
+      llm,
+      { goal: "Investigate pricing regression" },
+      [tool],
+      {
+        prepareMessages: async (checkpoint) => {
+          const messages = checkpoint.messages.map((message) => ({ ...message }));
+          return [
+            messages[0]!,
+            {
+              role: "system",
+              content: "Runtime context below is authoritative.\n\npromotion expired",
+            },
+            ...messages.slice(1),
+          ];
+        },
+      },
+    );
+
+    expect(result.status).toBe("completed");
+    expect(
+      capturedMessages[0]!.some(
+        (message) =>
+          message.role === "system" &&
+          message.content.includes("Runtime context below is authoritative"),
+      ),
+    ).toBe(true);
+    expect(
+      result.checkpoint?.messages.some((message) =>
+        message.content.includes("Runtime context below is authoritative"),
+      ),
+    ).toBe(false);
   });
 });
 

@@ -25,5 +25,26 @@ export function createCloudflareHandler(app: { fetch: (req: Request) => Promise<
  * application on Cloudflare Workers.
  */
 export function generateWranglerConfig(name: string): string {
-  return `name = "${name}"\nmain = "dist/_worker.js"\ncompatibility_date = "2026-03-01"\ncompatibility_flags = ["nodejs_compat"]\n`;
+  return generateWranglerConfigWithOptions(name);
+}
+
+export function generateWranglerConfigWithOptions(
+  name: string,
+  options?: {
+    main?: string;
+    compatibilityDate?: string;
+    nodejsCompat?: boolean;
+  },
+): string {
+  const lines = [
+    `name = "${name}"`,
+    `main = "${options?.main ?? "dist/_worker.js"}"`,
+    `compatibility_date = "${options?.compatibilityDate ?? "2026-03-01"}"`,
+  ];
+
+  if (options?.nodejsCompat !== false) {
+    lines.push(`compatibility_flags = ["nodejs_compat"]`);
+  }
+
+  return `${lines.join("\n")}\n`;
 }

@@ -1,34 +1,7 @@
-import type { ModelDefinition, FieldDefinition, ScalarType, DbProvider } from "./types.js";
+import { autoIdSchemaExpr, columnMapping, columnMappingForReference, providerMeta } from "./dialect.js";
+import { findPrimaryKeyField, inferRelationForeignKey, resolveManyToManyRelation, resolveReferenceField, resolveTargetRelationForeignKey, tableNameForModel, tableVarForModel, toSnakeCase } from "./naming.js";
+import type { DbProvider, FieldDefinition, ModelDefinition, RelationDefinition } from "./types.js";
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Convert a camelCase name to snake_case for column names.
- */
-function toSnakeCase(str: string): string {
-  return str.replace(/[A-Z]/g, (ch) => `_${ch.toLowerCase()}`);
-}
-
-/**
- * Pluralise a model name for the table name (very simple heuristic).
- * "Ticket" -> "tickets", "Category" -> "categories", "Status" -> "statuses"
- */
-function pluralise(name: string): string {
-  const lower = name.charAt(0).toLowerCase() + name.slice(1);
-  if (lower.endsWith("y") && !/[aeiou]y$/i.test(lower)) {
-    return lower.slice(0, -1) + "ies";
-  }
-  if (lower.endsWith("s") || lower.endsWith("x") || lower.endsWith("sh") || lower.endsWith("ch")) {
-    return lower + "es";
-  }
-  return lower + "s";
-}
-
-/**
- * Escape a JavaScript string value for embedding in generated code.
- */
 function jsString(val: unknown): string {
   if (typeof val === "string") {
     return `"${val.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
@@ -36,260 +9,179 @@ function jsString(val: unknown): string {
   return String(val);
 }
 
-// ---------------------------------------------------------------------------
-// Column type mapping
-// ---------------------------------------------------------------------------
-
-type Provider = DbProvider;
-
-interface ColumnMapping {
-  /** The drizzle column builder function name, e.g. "text", "integer", "real" */
-  builder: string;
-  /** Extra config argument for the builder, if any */
-  config?: string;
-  /** The import name (function to import from the drizzle dialect module) */
-  import: string;
+function runtimeTimestampExpr(field: FieldDefinition, provider: DbProvider): string {
+  if (field.type === "date") {
+    return `new Date().toISOString().slice(0, 10)`;
+  }
+  if (provider === "sqlite" || provider === "libsql") {
+    return `new Date().toISOString()`;
+  }
+  return `new Date()`;
 }
 
-function sqliteColumnMapping(fieldType: ScalarType): ColumnMapping {
-  switch (fieldType) {
-    case "string":
-    case "text":
-    case "date":
-    case "datetime":
-      return { builder: "text", import: "text" };
-    case "integer":
-      return { builder: "integer", import: "integer" };
-    case "number":
-      return { builder: "real", import: "real" };
-    case "boolean":
-      return { builder: "integer", import: "integer", config: '{ mode: "boolean" }' };
-    case "json":
-      return { builder: "text", import: "text", config: '{ mode: "json" }' };
-    case "vector":
-      // SQLite has no native vector type; store as JSON-serialised TEXT
-      return { builder: "text", import: "text", config: '{ mode: "json" }' };
+function indexName(tableName: string, fields: string[]): string {
+  return `idx_${tableName}_${fields.map(toSnakeCase).join("_")}`;
+}
+
+function buildIndexExpr(
+  tableName: string,
+  idx: ModelDefinition["indexes"][number],
+  provider: DbProvider,
+): string {
+  const builder = idx.unique ? "uniqueIndex" : "index";
+  const columns = idx.fields.map((fieldName) => {
+    if (provider === "postgres" && idx.order) {
+      return `table.${fieldName}.${idx.order}()`;
+    }
+    return `table.${fieldName}`;
+  });
+  return `${builder}("${indexName(tableName, idx.fields)}").on(${columns.join(", ")})`;
+}
+
+function buildRelationExpr(
+  sourceModel: ModelDefinition,
+  sourceVar: string,
+  relationName: string,
+  relation: RelationDefinition,
+  modelMap: Map<string, ModelDefinition>,
+): string | null {
+  const targetModel = modelMap.get(relation.model);
+  if (!targetModel) return null;
+
+  const targetVar = tableVarForModel(targetModel);
+
+  switch (relation.kind) {
+    case "belongsTo": {
+      const foreignKey = inferRelationForeignKey(relation);
+      if (!(foreignKey in sourceModel.fields)) {
+        return null;
+      }
+      const targetField = sourceModel.fields[foreignKey]?.references
+        ? resolveReferenceField(sourceModel.fields[foreignKey]!.references!, modelMap).fieldName
+        : (findPrimaryKeyField(targetModel) ?? "id");
+      return `${relationName}: one(${targetVar}, { fields: [${sourceVar}.${foreignKey}], references: [${targetVar}.${targetField}] })`;
+    }
+    case "hasMany":
+      return `${relationName}: many(${targetVar})`;
+    case "hasOne":
+      return `${relationName}: one(${targetVar})`;
+    case "manyToMany":
+      return null;
   }
 }
 
-function pgColumnMapping(fieldType: ScalarType, dimensions?: number): ColumnMapping {
-  switch (fieldType) {
-    case "string":
-      return { builder: "varchar", import: "varchar", config: "{ length: 255 }" };
-    case "text":
-      return { builder: "text", import: "text" };
-    case "date":
-      return { builder: "date", import: "date" };
-    case "datetime":
-      return { builder: "timestamp", import: "timestamp" };
-    case "integer":
-      return { builder: "integer", import: "integer" };
-    case "number":
-      return { builder: "doublePrecision", import: "doublePrecision" };
-    case "boolean":
-      return { builder: "boolean", import: "boolean" };
-    case "json":
-      return { builder: "jsonb", import: "jsonb" };
-    case "vector":
-      // PostgreSQL uses pgvector's vector(dimensions) column type
-      return { builder: "vector", import: "vector", config: `{ dimensions: ${dimensions ?? 1536} }` };
+function buildRelationMetadataExpr(
+  sourceModel: ModelDefinition,
+  relationName: string,
+  relation: RelationDefinition,
+  modelMap: Map<string, ModelDefinition>,
+): string | null {
+  const targetModel = modelMap.get(relation.model);
+  if (!targetModel && relation.kind !== "manyToMany") {
+    return null;
+  }
+
+  switch (relation.kind) {
+    case "belongsTo":
+      {
+        const foreignKey = inferRelationForeignKey(relation);
+        const targetField = sourceModel.fields[foreignKey]?.references
+          ? resolveReferenceField(sourceModel.fields[foreignKey]!.references!, modelMap).fieldName
+          : (findPrimaryKeyField(targetModel!) ?? "id");
+        return `${relationName}: { kind: "belongsTo", model: "${relation.model}", foreignKey: "${foreignKey}", targetKey: "${targetField}" }`;
+      }
+    case "hasMany":
+      return `${relationName}: { kind: "hasMany", model: "${relation.model}", foreignKey: "${resolveTargetRelationForeignKey(sourceModel, relation, modelMap)}", sourceKey: "${findPrimaryKeyField(sourceModel) ?? "id"}" }`;
+    case "hasOne":
+      return `${relationName}: { kind: "hasOne", model: "${relation.model}", foreignKey: "${resolveTargetRelationForeignKey(sourceModel, relation, modelMap)}", sourceKey: "${findPrimaryKeyField(sourceModel) ?? "id"}" }`;
+    case "manyToMany": {
+      const resolved = resolveManyToManyRelation(sourceModel, relation, modelMap);
+      if (!resolved) {
+        return `${relationName}: { kind: "manyToMany", model: "${relation.model}", through: ${relation.through ? `"${relation.through}"` : "null"}, resolved: false }`;
+      }
+      return `${relationName}: { kind: "manyToMany", model: "${relation.model}", through: "${resolved.throughModel.name}", throughTable: "${tableNameForModel(resolved.throughModel)}", sourceForeignKey: "${resolved.sourceForeignKey}", targetForeignKey: "${resolved.targetForeignKey}", sourceKey: "${resolved.sourcePrimaryKey}", targetKey: "${resolved.targetPrimaryKey}", resolved: true }`;
+    }
   }
 }
-
-function mysqlColumnMapping(fieldType: ScalarType): ColumnMapping {
-  switch (fieldType) {
-    case "string":
-      return { builder: "varchar", import: "varchar", config: "{ length: 255 }" };
-    case "text":
-      return { builder: "text", import: "text" };
-    case "date":
-      return { builder: "varchar", import: "varchar", config: "{ length: 255 }" };
-    case "datetime":
-      return { builder: "datetime", import: "datetime" };
-    case "integer":
-      return { builder: "int", import: "int" };
-    case "number":
-      return { builder: "double", import: "double" };
-    case "boolean":
-      return { builder: "boolean", import: "boolean" };
-    case "json":
-      return { builder: "json", import: "json" };
-    case "vector":
-      // MySQL has no native vector type; store as JSON
-      return { builder: "json", import: "json" };
-  }
-}
-
-function columnMapping(fieldType: ScalarType, provider: Provider, dimensions?: number): ColumnMapping {
-  switch (provider) {
-    case "sqlite":
-    case "libsql":
-      return sqliteColumnMapping(fieldType);
-    case "postgres":
-      return pgColumnMapping(fieldType, dimensions);
-    case "mysql":
-      return mysqlColumnMapping(fieldType);
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Provider-specific metadata
-// ---------------------------------------------------------------------------
-
-interface ProviderMeta {
-  /** The drizzle table builder function name */
-  tableBuilder: string;
-  /** The drizzle import module path */
-  importModule: string;
-  /** SQL expression for "current timestamp" defaults */
-  nowDefault: string;
-}
-
-function providerMeta(provider: Provider): ProviderMeta {
-  switch (provider) {
-    case "sqlite":
-    case "libsql":
-      return {
-        tableBuilder: "sqliteTable",
-        importModule: "drizzle-orm/sqlite-core",
-        nowDefault: "(datetime('now'))",
-      };
-    case "postgres":
-      return {
-        tableBuilder: "pgTable",
-        importModule: "drizzle-orm/pg-core",
-        nowDefault: "now()",
-      };
-    case "mysql":
-      return {
-        tableBuilder: "mysqlTable",
-        importModule: "drizzle-orm/mysql-core",
-        nowDefault: "(NOW())",
-      };
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Auto-ID column expression per provider
-// ---------------------------------------------------------------------------
-
-/**
- * Build the column expression and required imports for an auto-id primary key
- * field. Each provider uses a slightly different column type:
- *  - SQLite:    text("col").primaryKey()
- *  - Postgres:  text("col").primaryKey()
- *  - MySQL:     varchar("col", { length: 36 }).primaryKey()
- */
-function autoIdExpr(colName: string, provider: Provider): { expr: string; imports: string[] } {
-  switch (provider) {
-    case "sqlite":
-    case "libsql":
-      return { expr: `text("${colName}").primaryKey()`, imports: ["text"] };
-    case "postgres":
-      return { expr: `text("${colName}").primaryKey()`, imports: ["text"] };
-    case "mysql":
-      return { expr: `varchar("${colName}", { length: 36 }).primaryKey()`, imports: ["varchar"] };
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Column expression builder
-// ---------------------------------------------------------------------------
 
 function buildColumnExpr(
   fieldName: string,
   def: FieldDefinition,
-  provider: Provider,
+  provider: DbProvider,
+  modelMap: Map<string, ModelDefinition>,
 ): { expr: string; imports: string[]; needsSql: boolean } {
   const colName = toSnakeCase(fieldName);
 
-  // Auto-id fields get special treatment per provider
   if (def.autoId) {
-    const result = autoIdExpr(colName, provider);
-    return { expr: result.expr, imports: result.imports, needsSql: false };
+    return autoIdSchemaExpr(colName, provider);
   }
 
-  const mapping = columnMapping(def.type, provider, def.dimensions);
+  const referencedField = def.references
+    ? (() => {
+        const target = resolveReferenceField(def.references, modelMap);
+        return modelMap.get(target.modelName)?.fields[target.fieldName];
+      })()
+    : undefined;
+  const mapping = referencedField
+    ? columnMappingForReference(referencedField, provider)
+    : columnMapping(def.type, provider, def.dimensions);
+  let expr = mapping.config
+    ? `${mapping.builder}("${colName}", ${mapping.config})`
+    : `${mapping.builder}("${colName}")`;
 
-  let expr: string;
-  if (mapping.config) {
-    expr = `${mapping.builder}("${colName}", ${mapping.config})`;
-  } else {
-    expr = `${mapping.builder}("${colName}")`;
-  }
-
-  // NOT NULL for required fields
-  if (def.required) {
+  if (def.required || def.updatedAt) {
     expr += ".notNull()";
   }
-
-  // Unique constraint
   if (def.unique) {
     expr += ".unique()";
   }
+  if (def.references) {
+    const target = resolveReferenceField(def.references, modelMap);
+    const targetVar = tableVarForModel(target.modelName);
+    expr += `.references(() => ${targetVar}.${target.fieldName})`;
+  }
 
-  // Default values
   let needsSql = false;
   if (def.default !== undefined) {
     if (def.default === "now") {
-      const meta = providerMeta(provider);
-      expr += `.default(sql\`${meta.nowDefault}\`)`;
+      expr += `.default(sql\`${providerMeta(provider).nowDefaultSql}\`)`;
       needsSql = true;
     } else if (typeof def.default === "string") {
       expr += `.default(${jsString(def.default)})`;
-    } else if (typeof def.default === "boolean") {
-      expr += `.default(${def.default})`;
-    } else if (typeof def.default === "number") {
-      expr += `.default(${def.default})`;
+    } else if (typeof def.default === "boolean" || typeof def.default === "number") {
+      expr += `.default(${String(def.default)})`;
+    } else if (typeof def.default === "object") {
+      expr += `.default(${jsString(JSON.stringify(def.default))})`;
     } else {
       expr += `.default(${jsString(def.default)})`;
     }
   }
 
+  if (def.updatedAt) {
+    if (def.default === undefined) {
+      expr += `.$defaultFn(() => ${runtimeTimestampExpr(def, provider)})`;
+    }
+    expr += `.$onUpdateFn(() => ${runtimeTimestampExpr(def, provider)})`;
+  }
+
   return { expr, imports: [mapping.import], needsSql };
 }
 
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
-
-/**
- * Generate a Drizzle ORM schema file (as a TypeScript string) from an array
- * of model definitions.
- *
- * The generated code targets the specified provider's drizzle package:
- *  - `"sqlite"`   -> `drizzle-orm/sqlite-core`
- *  - `"postgres"` -> `drizzle-orm/pg-core`
- *  - `"mysql"`    -> `drizzle-orm/mysql-core`
- *
- * @param models   - Array of model definitions to generate schema for.
- * @param provider - The database provider. Defaults to `"sqlite"` for
- *                   backwards compatibility.
- *
- * @example
- *   const src = generateDrizzleSchema([ticketModel, userModel]);
- *   fs.writeFileSync("schema.ts", src);
- *
- * @example
- *   const src = generateDrizzleSchema([ticketModel], "postgres");
- *
- * @example
- *   const src = generateDrizzleSchema([ticketModel], "mysql");
- */
 export function generateDrizzleSchema(
   models: ModelDefinition[],
-  provider: Provider = "sqlite",
+  provider: DbProvider = "sqlite",
 ): string {
   const meta = providerMeta(provider);
+  const modelMap = new Map(models.map((model) => [model.name, model]));
 
-  // Collect all drizzle imports we need
   const neededImports = new Set<string>([meta.tableBuilder]);
   let needsSql = false;
+  let needsRelations = false;
+  let hasRelationComments = false;
 
-  // First pass: determine imports
   for (const model of models) {
     for (const [fieldName, def] of Object.entries(model.fields)) {
-      const result = buildColumnExpr(fieldName, def, provider);
+      const result = buildColumnExpr(fieldName, def, provider, modelMap);
       for (const imp of result.imports) {
         neededImports.add(imp);
       }
@@ -297,33 +189,99 @@ export function generateDrizzleSchema(
         needsSql = true;
       }
     }
-  }
 
-  // Build import line
-  const importNames = [...neededImports].sort();
-  const lines: string[] = [];
-  lines.push(`import { ${importNames.join(", ")} } from "${meta.importModule}";`);
-  if (needsSql) {
-    lines.push(`import { sql } from "drizzle-orm";`);
-  }
-
-  // Generate each table
-  for (const model of models) {
-    const tableName = pluralise(model.name);
-    const varName = tableName;
-
-    lines.push("");
-    lines.push(`export const ${varName} = ${meta.tableBuilder}("${tableName}", {`);
-
-    const fieldEntries = Object.entries(model.fields);
-    for (let i = 0; i < fieldEntries.length; i++) {
-      const [fieldName, def] = fieldEntries[i]!;
-      const result = buildColumnExpr(fieldName, def, provider);
-      const comma = i < fieldEntries.length - 1 ? "," : ",";
-      lines.push(`  ${fieldName}: ${result.expr}${comma}`);
+    if (model.indexes.length > 0) {
+      neededImports.add("index");
+      neededImports.add("uniqueIndex");
     }
 
-    lines.push("});");
+    for (const relation of Object.values(model.relations)) {
+      if (relation.kind === "manyToMany") {
+        hasRelationComments = true;
+      } else {
+        needsRelations = true;
+      }
+    }
+  }
+
+  const lines: string[] = [];
+  lines.push(`import { ${[...neededImports].sort().join(", ")} } from "${meta.importModule}";`);
+  if (needsSql || models.some((model) =>
+    Object.values(model.fields).some((field) => field.autoId),
+  )) {
+    lines.push(`import { sql${needsRelations ? ", relations" : ""} } from "drizzle-orm";`);
+  } else if (needsRelations) {
+    lines.push(`import { relations } from "drizzle-orm";`);
+  }
+
+  for (const model of models) {
+    const tableName = tableNameForModel(model);
+    const varName = tableVarForModel(model);
+
+    lines.push("");
+    const fields = Object.entries(model.fields);
+    if (model.indexes.length > 0) {
+      lines.push(`export const ${varName} = ${meta.tableBuilder}("${tableName}", {`);
+    } else {
+      lines.push(`export const ${varName} = ${meta.tableBuilder}("${tableName}", {`);
+    }
+
+    for (const [fieldName, def] of fields) {
+      const result = buildColumnExpr(fieldName, def, provider, modelMap);
+      lines.push(`  ${fieldName}: ${result.expr},`);
+    }
+
+    if (model.indexes.length === 0) {
+      lines.push("});");
+    } else {
+      lines.push("}, (table) => [");
+      for (const idx of model.indexes) {
+        lines.push(`  ${buildIndexExpr(tableName, idx, provider)},`);
+      }
+      lines.push("]);");
+    }
+  }
+
+  if (needsRelations || hasRelationComments) {
+    for (const model of models) {
+      const varName = tableVarForModel(model);
+      const relationLines: string[] = [];
+      const relationMetadataLines: string[] = [];
+      let skippedManyToMany = false;
+
+      for (const [relationName, relation] of Object.entries(model.relations)) {
+        const line = buildRelationExpr(model, varName, relationName, relation, modelMap);
+        if (line) {
+          relationLines.push(`  ${line},`);
+        } else if (relation.kind === "manyToMany") {
+          skippedManyToMany = true;
+        }
+        const metadataLine = buildRelationMetadataExpr(model, relationName, relation, modelMap);
+        if (metadataLine) {
+          relationMetadataLines.push(`  ${metadataLine},`);
+        }
+      }
+
+      if (relationLines.length === 0 && !skippedManyToMany && relationMetadataLines.length === 0) {
+        continue;
+      }
+
+      lines.push("");
+      if (skippedManyToMany) {
+        lines.push(`// ${model.name}: many-to-many relations require an explicit join model and are not generated automatically.`);
+      }
+      if (relationMetadataLines.length > 0) {
+        lines.push(`export const ${varName}RelationMetadata = {`);
+        lines.push(...relationMetadataLines);
+        lines.push("} as const;");
+        lines.push("");
+      }
+      if (relationLines.length > 0) {
+        lines.push(`export const ${varName}Relations = relations(${varName}, ({ one, many }) => ({`);
+        lines.push(...relationLines);
+        lines.push("}));");
+      }
+    }
   }
 
   return lines.join("\n") + "\n";

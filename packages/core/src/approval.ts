@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import type { KeyValueStore } from "./store.js";
 import { MemoryStore } from "./store.js";
 
@@ -27,6 +26,16 @@ let approvalStore: KeyValueStore<PendingApproval> = new MemoryStore();
  */
 let approvalIds = new Set<string>();
 
+async function createRuntimeRandomUUID(): Promise<string> {
+  const runtimeCrypto = globalThis.crypto;
+  if (runtimeCrypto && typeof runtimeCrypto.randomUUID === "function") {
+    return runtimeCrypto.randomUUID();
+  }
+
+  const { randomUUID } = await import("node:crypto");
+  return randomUUID();
+}
+
 /**
  * Replace the default in-memory approval store with a custom implementation.
  *
@@ -49,7 +58,7 @@ export async function createApproval(opts: {
   policy: string;
   reason: string;
 }): Promise<PendingApproval> {
-  const id = randomUUID();
+  const id = await createRuntimeRandomUUID();
   const approval: PendingApproval = {
     id,
     method: opts.method,

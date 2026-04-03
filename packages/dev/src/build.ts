@@ -2,6 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { RouteManifest } from "@zauso-ai/capstan-router";
+import { buildRuntimeApp } from "./server.js";
 
 export interface BuildStaticOptions {
   /** Project root directory */
@@ -36,13 +37,22 @@ export async function buildStaticPages(
   const { outputDir, manifest } = options;
   const result: BuildStaticResult = { pages: 0, paths: [], errors: [] };
 
-  // Lazy-import @zauso-ai/capstan-react — may not be available in all contexts
-  let renderPage: ((opts: Record<string, unknown>) => Promise<{ html: string; statusCode: number }>) | undefined;
+  let app: Awaited<ReturnType<typeof buildRuntimeApp>>["app"];
   try {
-    const reactPkg = await import("@zauso-ai/capstan-react");
-    renderPage = reactPkg.renderPage as unknown as (opts: Record<string, unknown>) => Promise<{ html: string; statusCode: number }>;
-  } catch {
-    result.errors.push("Failed to import @zauso-ai/capstan-react — cannot pre-render SSG pages");
+    ({ app } = await buildRuntimeApp({
+      rootDir: options.rootDir,
+      manifest,
+      mode: "production",
+      liveReload: false,
+      staticDir: outputDir,
+      unknownPolicyMode: "deny",
+    }));
+  } catch (err) {
+    result.errors.push(
+      `Failed to initialize the shared runtime for SSG: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
     return result;
   }
 
@@ -63,35 +73,6 @@ export async function buildStaticPages(
     if (typeof pageModule["default"] !== "function") {
       result.errors.push(`${route.filePath}: SSG page missing default export`);
       continue;
-    }
-
-    // Load layouts
-    const layouts: Array<{ default: unknown }> = [];
-    for (const layoutPath of route.layouts) {
-      try {
-        const layoutMod = await import(pathToFileURL(layoutPath).href) as Record<string, unknown>;
-        if (typeof layoutMod["default"] === "function") {
-          layouts.push({ default: layoutMod["default"] });
-        }
-      } catch {
-        // Layout load failure — skip but don't block
-      }
-    }
-
-    // Load boundary components
-    let loadingComponent: unknown;
-    let errorComponent: unknown;
-    if (route.loading) {
-      try {
-        const mod = await import(pathToFileURL(route.loading).href) as Record<string, unknown>;
-        if (mod["default"]) loadingComponent = mod["default"];
-      } catch { /* skip */ }
-    }
-    if (route.error) {
-      try {
-        const mod = await import(pathToFileURL(route.error).href) as Record<string, unknown>;
-        if (mod["default"]) errorComponent = mod["default"];
-      } catch { /* skip */ }
     }
 
     // Determine param sets to render
@@ -140,32 +121,23 @@ export async function buildStaticPages(
         }
       }
 
-      const syntheticRequest = new Request(`http://localhost${urlPath}`);
-      const loaderArgs = {
-        params,
-        request: syntheticRequest,
-        ctx: { auth: { isAuthenticated: false, type: "anonymous" as const } },
-        fetch: {
-          get: async () => null,
-          post: async () => null,
-          put: async () => null,
-          delete: async () => null,
+      const syntheticRequest = new Request(`http://localhost${urlPath}`, {
+        headers: {
+          "X-Capstan-Static-Build": "1",
+          Accept: "text/html",
         },
-      };
+      });
 
       try {
-        const rendered = await renderPage({
-          pageModule: {
-            default: pageModule["default"],
-            loader: pageModule["loader"],
-          },
-          layouts,
-          params,
-          request: syntheticRequest,
-          loaderArgs,
-          loadingComponent,
-          errorComponent,
-        });
+        const response = await app.fetch(syntheticRequest);
+        const html = await response.text();
+
+        if (!response.ok) {
+          result.errors.push(
+            `${route.filePath} (${urlPath}): render failed with ${response.status} ${response.statusText}`,
+          );
+          continue;
+        }
 
         // Write to filesystem
         const segments = urlPath.replace(/^\/+|\/+$/g, "");
@@ -174,7 +146,7 @@ export async function buildStaticPages(
           : join(outputDir, segments, "index.html");
 
         await mkdir(dirname(filePath), { recursive: true });
-        await writeFile(filePath, rendered.html, "utf-8");
+        await writeFile(filePath, html, "utf-8");
 
         result.pages++;
         result.paths.push(urlPath === "" ? "/" : urlPath);

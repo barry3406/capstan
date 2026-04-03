@@ -349,3 +349,79 @@ describe("detectComponentType via scan", () => {
     expect(page!.componentType).toBe("client");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Route groups and not-found boundaries
+// ---------------------------------------------------------------------------
+
+describe("route groups and not-found boundaries", () => {
+  test("route groups do not contribute url segments but do contribute boundaries", async () => {
+    await createFile("(marketing)/_loading.tsx", "");
+    await createFile("(marketing)/_error.tsx", "");
+    await createFile("(marketing)/landing.page.tsx", "");
+
+    const { routes } = await scanRoutes(tempDir);
+    const page = findPage(routes, "/landing");
+
+    expect(page).toBeDefined();
+    expect(page!.loading).toBe(join(tempDir, "(marketing)", "_loading.tsx"));
+    expect(page!.error).toBe(join(tempDir, "(marketing)", "_error.tsx"));
+  });
+
+  test("nested route groups remain transparent in the url", async () => {
+    await createFile("(marketing)/(campaigns)/offers.page.tsx", "");
+
+    const { routes } = await scanRoutes(tempDir);
+    const page = findPage(routes, "/offers");
+
+    expect(page).toBeDefined();
+    expect(page!.urlPattern).toBe("/offers");
+  });
+
+  test("not-found boundary inherits to descendant page routes", async () => {
+    await createFile("docs/not-found.tsx", "");
+    await createFile("docs/guides/install.page.tsx", "");
+
+    const { routes } = await scanRoutes(tempDir);
+    const page = findPage(routes, "/docs/guides/install");
+
+    expect(page).toBeDefined();
+    expect(page!.notFound).toBe(join(tempDir, "docs", "not-found.tsx"));
+  });
+
+  test("nearest not-found boundary wins over a root fallback", async () => {
+    await createFile("not-found.tsx", "");
+    await createFile("docs/not-found.tsx", "");
+    await createFile("docs/intro.page.tsx", "");
+
+    const { routes } = await scanRoutes(tempDir);
+    const page = findPage(routes, "/docs/intro");
+
+    expect(page).toBeDefined();
+    expect(page!.notFound).toBe(join(tempDir, "docs", "not-found.tsx"));
+  });
+
+  test("pages without a not-found boundary keep notFound undefined", async () => {
+    await createFile("index.page.tsx", "");
+
+    const { routes } = await scanRoutes(tempDir);
+    const page = findPage(routes, "/");
+
+    expect(page).toBeDefined();
+    expect(page!.notFound).toBeUndefined();
+  });
+
+  test("not-found entries appear as their own route type and use directory scope", async () => {
+    await createFile("(marketing)/docs/_layout.tsx", "");
+    await createFile("(marketing)/docs/_middleware.ts", "");
+    await createFile("(marketing)/docs/not-found.tsx", "");
+
+    const { routes } = await scanRoutes(tempDir);
+    const notFound = routes.find((r) => r.type === "not-found");
+
+    expect(notFound).toBeDefined();
+    expect(notFound!.urlPattern).toBe("/docs");
+    expect(notFound!.layouts).toEqual([join(tempDir, "(marketing)", "docs", "_layout.tsx")]);
+    expect(notFound!.middlewares).toEqual([join(tempDir, "(marketing)", "docs", "_middleware.ts")]);
+  });
+});

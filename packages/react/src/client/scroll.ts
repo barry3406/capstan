@@ -28,7 +28,7 @@ export function setCurrentScrollKey(key: string): void {
  * Call this before navigating away.
  */
 export function saveScrollPosition(): void {
-  if (!currentKey) return;
+  if (!currentKey || typeof window === "undefined") return;
   try {
     sessionStorage.setItem(
       STORAGE_KEY_PREFIX + currentKey,
@@ -44,11 +44,12 @@ export function saveScrollPosition(): void {
  * Returns true if a saved position was found and restored.
  */
 export function restoreScrollPosition(key: string | null): boolean {
-  if (!key) return false;
+  if (!key || typeof window === "undefined") return false;
   try {
     const raw = sessionStorage.getItem(STORAGE_KEY_PREFIX + key);
     if (!raw) return false;
-    const pos = JSON.parse(raw) as { x: number; y: number };
+    const pos = JSON.parse(raw) as { x?: unknown; y?: unknown };
+    if (typeof pos.x !== "number" || typeof pos.y !== "number") return false;
     window.scrollTo(pos.x, pos.y);
     return true;
   } catch {
@@ -60,5 +61,6 @@ export function restoreScrollPosition(key: string | null): boolean {
  * Scroll to the top of the page (default behavior after forward navigation).
  */
 export function scrollToTop(): void {
+  if (typeof window === "undefined") return;
   window.scrollTo(0, 0);
 }

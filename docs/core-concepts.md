@@ -164,6 +164,9 @@ Capstan uses a file-based routing convention in the `app/routes/` directory. The
 | `_middleware.ts`    | Middleware  | Runs before handlers in scope       |
 | `_loading.tsx`      | Loading     | Suspense fallback for pages in scope |
 | `_error.tsx`        | Error       | Error boundary for pages in scope    |
+| `not-found.tsx` / `not-found.page.tsx` | Not Found | Scoped 404 boundary for unknown routes in scope |
+
+Route groups use directory names like `(marketing)` or `(internal)`. They are transparent in the URL, but their `_layout.tsx`, `_middleware.ts`, `_loading.tsx`, `_error.tsx`, and `not-found` files still participate in inheritance.
 
 ### URL Mapping Examples
 
@@ -177,6 +180,8 @@ Capstan uses a file-based routing convention in the `app/routes/` directory. The
 | `app/routes/tickets/[id].api.ts`     | `/tickets/:id`        |
 | `app/routes/orgs/[orgId]/members/[memberId].api.ts` | `/orgs/:orgId/members/:memberId` |
 | `app/routes/docs/[...rest].page.tsx` | `/docs/*`             |
+| `app/routes/(marketing)/pricing.page.tsx` | `/pricing`       |
+| `app/routes/docs/not-found.tsx`      | `/docs` scope fallback |
 
 ### Dynamic Segments
 
@@ -195,6 +200,15 @@ Use the spread syntax `[...param]` for catch-all segments:
 
 ```
 app/routes/docs/[...path].page.tsx  -->  /docs/* (matches /docs/a, /docs/a/b, etc.)
+```
+
+### Not Found Boundaries
+
+`not-found.tsx` and `not-found.page.tsx` define scoped 404 fallbacks. When no page route matches a `GET` or `HEAD` request, Capstan renders the nearest `not-found` file whose directory scope contains the URL.
+
+```
+app/routes/not-found.tsx         --> fallback for all unmatched routes
+app/routes/docs/not-found.tsx    --> fallback for /docs/*
 ```
 
 ### Layout Nesting
@@ -737,7 +751,7 @@ The `LLMProvider` interface can be implemented for other providers. Both provide
 
 ## AI Toolkit (@zauso-ai/capstan-ai)
 
-`@zauso-ai/capstan-ai` is a standalone AI agent toolkit that works independently OR with the Capstan framework. It provides structured reasoning, text generation, persistent memory, and a self-orchestrating agent loop.
+`@zauso-ai/capstan-ai` is a standalone AI agent toolkit that works independently OR with the Capstan framework. It provides structured reasoning, text generation, scoped memory primitives with pluggable backends, a self-orchestrating agent loop, and `createHarness()` for browser/filesystem sandboxing. For recurring runs, pair it with `@zauso-ai/capstan-cron`.
 
 ### Standalone Usage (No Capstan Required)
 
@@ -779,7 +793,7 @@ Both `think()` and `generate()` have streaming variants -- `thinkStream()` and `
 
 ### Memory System
 
-The memory system provides persistent, searchable memory scoped to any entity:
+The memory system provides searchable memory scoped to any entity. The built-in backend is in-memory; persistence depends on the configured backend:
 
 ```typescript
 // Store memories
@@ -827,6 +841,72 @@ Agent loop features:
 - **`beforeToolCall` hook**: enforce policies or require approval before tool execution
 - **Configurable iteration limit**: `maxIterations` (default: 10)
 - **Entity-scoped memory**: `about` option automatically scopes all memory operations
+
+### Agent Harness Mode
+
+`createHarness()` wraps the agent loop with an isolated runtime substrate that long-running agents typically need:
+
+```typescript
+import { createHarness } from "@zauso-ai/capstan-ai";
+
+const harness = await createHarness({
+  llm: openaiProvider({ apiKey: process.env.OPENAI_API_KEY! }),
+  sandbox: {
+    browser: {
+      engine: "camoufox",
+      platform: "jd",
+      accountId: "price-monitor-01",
+      guardMode: "vision",
+    },
+    fs: { rootDir: "./workspace", allowDelete: false },
+  },
+  verify: { enabled: true },
+});
+
+const result = await harness.run({
+  goal: "Check the latest product prices and save a summary to workspace/report.md",
+});
+
+await harness.destroy();
+```
+
+Harness features:
+- **Browser sandbox**: Playwright by default, or Camoufox kernel for persistent profiles and advanced anti-detection
+- **Filesystem sandbox**: scoped reads/writes with traversal protection
+- **Durable runtime**: each run gets a persisted run record, event log, artifact store, and resumable checkpoint under `.capstan/harness/`
+- **Lifecycle control**: `startRun()`, `pauseRun()`, `cancelRun()`, `resumeRun()`, `getCheckpoint()`, and `replayRun()` make supervision and recovery explicit
+- **Context kernel**: session memory, persisted summaries, long-term runtime memory, artifact-aware context assembly, and transcript compaction all live under `.capstan/harness/`
+- **Pluggable sandbox driver**: local isolation by default, with a runtime driver contract for custom execution backends
+- **Verification layer**: post-tool validation hooks plus LLM-based pass/fail classification
+- **Observability layer**: event stream, metrics, and trace-friendly lifecycle events
+
+### Scheduled Agent Runs (@zauso-ai/capstan-cron)
+
+Use `@zauso-ai/capstan-cron` to run agent or harness workflows on a schedule:
+
+```typescript
+import { createCronRunner, createAgentCron } from "@zauso-ai/capstan-cron";
+
+const runner = createCronRunner();
+
+runner.add(createAgentCron({
+  cron: "0 */2 * * *",
+  name: "price-monitor",
+  goal: "Review price changes and write a fresh report",
+  llm: openaiProvider({ apiKey: process.env.OPENAI_API_KEY! }),
+  harnessConfig: {
+    sandbox: {
+      browser: { engine: "camoufox", platform: "jd", accountId: "price-monitor-01" },
+      fs: { rootDir: "./workspace" },
+    },
+    verify: { enabled: true },
+  },
+}));
+
+runner.start();
+```
+
+`createCronRunner()` is an interval-based fallback for Node.js and simple schedules. For timezone-sensitive or complex calendar rules, prefer `createBunCronRunner()` on Bun so the runtime owns the cron semantics.
 
 ### Using with Capstan Handlers
 

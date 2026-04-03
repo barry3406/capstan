@@ -2,9 +2,41 @@
 
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import pc from "picocolors";
+import type { RouteManifest } from "@zauso-ai/capstan-router";
+import {
+  createDeployManifest,
+  type DeployManifest,
+  loadDeployManifest,
+  resolveServerEntryPath,
+} from "./deploy-manifest.js";
+import {
+  BUILD_TARGETS,
+  DEPLOY_INIT_TARGETS,
+  collectPortableRuntimeAssets,
+  createPortableRouteManifest,
+  createPortableRuntimeAssetsModuleSource,
+  createPortableRuntimeManifestModuleSource,
+  createPortableRuntimeModulesModuleSource,
+  createProjectDeploymentFiles,
+  createDeployTargetContract,
+  createProjectDockerfile,
+  createProjectDockerIgnore,
+  createProjectEnvExample,
+  createStandaloneDeployManifest,
+  createStandaloneDockerfile,
+  createStandaloneDockerIgnore,
+  createStandalonePlatformFiles,
+  createStandalonePackageJson,
+  getStandaloneOutputDir,
+  getPortableRuntimeRootDir,
+  readJsonArtifact,
+  readProjectPackageJson,
+  shouldEmitPortableRuntimeBundle,
+  type BuildTarget,
+} from "./deploy-targets.js";
 
 // ---------------------------------------------------------------------------
 // Known commands for fuzzy matching
@@ -12,11 +44,13 @@ import pc from "picocolors";
 
 const KNOWN_COMMANDS = [
   "dev", "build", "start",
+  "deploy:init",
   "add",
   "db:migrate", "db:push", "db:status",
   "verify",
   "mcp",
   "agent:manifest", "agent:openapi",
+  "harness:list", "harness:get", "harness:events", "harness:artifacts", "harness:checkpoint", "harness:pause", "harness:cancel", "harness:replay", "harness:paths",
 ] as const;
 
 /**
@@ -86,6 +120,9 @@ async function main(): Promise<void> {
     case "start":
       await runStart(args);
       return;
+    case "deploy:init":
+      await runDeployInit(args);
+      return;
     case "verify":
       await runVerify(args, args.includes("--json"));
       return;
@@ -106,6 +143,33 @@ async function main(): Promise<void> {
       return;
     case "agent:openapi":
       await runAgentOpenapi();
+      return;
+    case "harness:list":
+      await runHarnessList(args);
+      return;
+    case "harness:get":
+      await runHarnessGet(args);
+      return;
+    case "harness:events":
+      await runHarnessEvents(args);
+      return;
+    case "harness:artifacts":
+      await runHarnessArtifacts(args);
+      return;
+    case "harness:checkpoint":
+      await runHarnessCheckpoint(args);
+      return;
+    case "harness:pause":
+      await runHarnessPause(args);
+      return;
+    case "harness:cancel":
+      await runHarnessCancel(args);
+      return;
+    case "harness:replay":
+      await runHarnessReplay(args);
+      return;
+    case "harness:paths":
+      await runHarnessPaths(args);
       return;
     case "add":
       await runAdd(args);
@@ -130,23 +194,46 @@ async function main(): Promise<void> {
 }
 
 async function runVerify(args: string[], asJson: boolean): Promise<void> {
-  // Strip --json from args to get the positional target
-  const positional = args.filter((a) => a !== "--json");
-  const target = positional[0];
+  const deploymentMode = hasFlag(args, "--deployment");
+  let pathArg = readFlagValue(args, "--path");
+  if (!pathArg) {
+    const positional: string[] = [];
+    for (let index = 0; index < args.length; index++) {
+      const arg = args[index]!;
+      if (arg === "--json" || arg === "--deployment") {
+        continue;
+      }
+      if ((arg === "--target" || arg === "--path") && args[index + 1]) {
+        index++;
+        continue;
+      }
+      if (!arg.startsWith("--")) {
+        positional.push(arg);
+      }
+    }
+    pathArg = positional[0];
+  }
+  const appRoot = pathArg ? resolve(process.cwd(), pathArg) : process.cwd();
 
-  // Target is optional (defaults to cwd)
-  const appRoot = target ? resolve(process.cwd(), target) : process.cwd();
+  if (!existsSync(join(appRoot, "app", "routes"))) {
+    console.error(pc.red("Could not detect project type."));
+    console.error(pc.dim("  - Ensure app/routes/ directory exists."));
+    console.error(pc.dim(`  Looked in: ${appRoot}`));
+    process.exitCode = 1;
+    return;
+  }
 
-  const hasAppRoutes = existsSync(join(appRoot, "app", "routes"));
-
-  if (hasAppRoutes) {
-    const { verifyCapstanApp, renderRuntimeVerifyText } = await import("@zauso-ai/capstan-core");
-    const report = await verifyCapstanApp(appRoot);
+  if (deploymentMode) {
+    const requestedTarget = readFlagValue(args, "--target");
+    const report = await verifyDeployment({
+      appRoot,
+      ...(requestedTarget ? { requestedTarget } : {}),
+    });
 
     if (asJson) {
       console.log(JSON.stringify(report, null, 2));
     } else {
-      process.stdout.write(renderRuntimeVerifyText(report));
+      process.stdout.write(renderDeploymentVerifyText(report));
     }
 
     if (report.status === "failed") {
@@ -155,15 +242,372 @@ async function runVerify(args: string[], asJson: boolean): Promise<void> {
     return;
   }
 
-  console.error(pc.red("Could not detect project type."));
-  console.error(pc.dim("  - Ensure app/routes/ directory exists."));
-  if (target) {
-    console.error(pc.dim(`  Looked in: ${appRoot}`));
+  const { verifyCapstanApp, renderRuntimeVerifyText } = await import("@zauso-ai/capstan-core");
+  const report = await verifyCapstanApp(appRoot);
+
+  if (asJson) {
+    console.log(JSON.stringify(report, null, 2));
   } else {
-    console.error(pc.dim(`  Looked in: ${process.cwd()}`));
-    console.error(pc.yellow("  Tip: run from your project root, or pass the directory as an argument."));
+    process.stdout.write(renderRuntimeVerifyText(report));
   }
-  process.exitCode = 1;
+
+  if (report.status === "failed") {
+    process.exitCode = 1;
+  }
+}
+
+interface DeploymentVerifyDiagnostic {
+  severity: "error" | "warning" | "info";
+  code: string;
+  message: string;
+  hint?: string;
+}
+
+interface DeploymentVerifyReport {
+  status: "passed" | "failed";
+  appRoot: string;
+  target: BuildTarget;
+  timestamp: string;
+  diagnostics: DeploymentVerifyDiagnostic[];
+  summary: {
+    errorCount: number;
+    warningCount: number;
+  };
+}
+
+function getDeployContractKey(
+  target: BuildTarget,
+): keyof NonNullable<DeployManifest["targets"]> {
+  switch (target) {
+    case "node-standalone":
+      return "nodeStandalone";
+    case "docker":
+      return "docker";
+    case "vercel-node":
+      return "vercelNode";
+    case "vercel-edge":
+      return "vercelEdge";
+    case "cloudflare":
+      return "cloudflare";
+    case "fly":
+      return "fly";
+  }
+}
+
+function createDeploymentReport(
+  appRoot: string,
+  target: BuildTarget,
+  diagnostics: DeploymentVerifyDiagnostic[],
+): DeploymentVerifyReport {
+  const errorCount = diagnostics.filter((diagnostic) => diagnostic.severity === "error").length;
+  const warningCount = diagnostics.filter((diagnostic) => diagnostic.severity === "warning").length;
+
+  return {
+    status: errorCount > 0 ? "failed" : "passed",
+    appRoot,
+    target,
+    timestamp: new Date().toISOString(),
+    diagnostics,
+    summary: {
+      errorCount,
+      warningCount,
+    },
+  };
+}
+
+function renderDeploymentVerifyText(report: DeploymentVerifyReport): string {
+  const lines = [
+    "Capstan Deployment Verify",
+    "",
+    `  Target: ${report.target}`,
+    "",
+  ];
+
+  if (report.diagnostics.length === 0) {
+    lines.push("  ✓ No deployment issues detected.");
+  }
+
+  for (const diagnostic of report.diagnostics) {
+    const marker =
+      diagnostic.severity === "error"
+        ? "\u2717"
+        : diagnostic.severity === "warning"
+          ? "!"
+          : "-";
+    lines.push(`  ${marker} ${diagnostic.message}`);
+    if (diagnostic.hint) {
+      lines.push(`    \u2192 ${diagnostic.hint}`);
+    }
+  }
+
+  lines.push("");
+  lines.push(
+    `  ${report.summary.errorCount} error${report.summary.errorCount !== 1 ? "s" : ""}, ${report.summary.warningCount} warning${report.summary.warningCount !== 1 ? "s" : ""}`,
+  );
+  lines.push("");
+
+  return lines.join("\n");
+}
+
+async function resolveConfigAt(rootDir: string): Promise<string | null> {
+  const { access } = await import("node:fs/promises");
+  const candidates = [
+    resolve(rootDir, "capstan.config.ts"),
+    resolve(rootDir, "capstan.config.js"),
+  ];
+
+  for (const candidate of candidates) {
+    try {
+      await access(candidate);
+      return candidate;
+    } catch {
+      continue;
+    }
+  }
+
+  return null;
+}
+
+async function collectProjectSourceFiles(rootDir: string): Promise<string[]> {
+  const { readdir } = await import("node:fs/promises");
+
+  async function walk(dir: string): Promise<string[]> {
+    let entries: import("node:fs").Dirent[];
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return [];
+    }
+
+    const files: string[] = [];
+    for (const entry of entries) {
+      const fullPath = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        files.push(...await walk(fullPath));
+        continue;
+      }
+
+      if (entry.isFile() && /\.(ts|tsx|js|jsx|mjs)$/.test(entry.name)) {
+        files.push(fullPath);
+      }
+    }
+
+    return files;
+  }
+
+  const roots = [
+    join(rootDir, "app"),
+    join(rootDir, "dist", "app"),
+  ];
+  const files = new Set<string>();
+
+  for (const candidate of roots) {
+    for (const file of await walk(candidate)) {
+      files.add(file);
+    }
+  }
+
+  for (const configCandidate of [
+    join(rootDir, "capstan.config.ts"),
+    join(rootDir, "capstan.config.js"),
+    join(rootDir, "dist", "capstan.config.js"),
+  ]) {
+    if (existsSync(configCandidate)) {
+      files.add(configCandidate);
+    }
+  }
+
+  return [...files];
+}
+
+async function detectNodeRuntimeImports(rootDir: string): Promise<string[]> {
+  const offenders: string[] = [];
+  const sourceFiles = await collectProjectSourceFiles(rootDir);
+
+  for (const filePath of sourceFiles) {
+    const raw = await readFile(filePath, "utf-8");
+    if (
+      /from\s+["']node:/.test(raw) ||
+      /import\s*\(\s*["']node:/.test(raw) ||
+      /require\(\s*["']node:/.test(raw)
+    ) {
+      offenders.push(relative(rootDir, filePath));
+    }
+  }
+
+  return offenders;
+}
+
+async function verifyDeployment(options: {
+  appRoot: string;
+  requestedTarget?: string;
+}): Promise<DeploymentVerifyReport> {
+  const diagnostics: DeploymentVerifyDiagnostic[] = [];
+  const deployManifest = await loadDeployManifest(options.appRoot);
+
+  if (!deployManifest) {
+    diagnostics.push({
+      severity: "error",
+      code: "missing_deploy_manifest",
+      message: "dist/deploy-manifest.json is missing.",
+      hint: "Run `capstan build` or `capstan build --target <target>` before deployment verification.",
+    });
+    return createDeploymentReport(
+      options.appRoot,
+      "node-standalone",
+      diagnostics,
+    );
+  }
+
+  if (options.requestedTarget && !isBuildTarget(options.requestedTarget)) {
+    diagnostics.push({
+      severity: "error",
+      code: "unsupported_target",
+      message: `Unsupported deployment target "${options.requestedTarget}".`,
+      hint: `Valid targets: ${BUILD_TARGETS.join(", ")}`,
+    });
+    return createDeploymentReport(
+      options.appRoot,
+      deployManifest.build.target ?? "node-standalone",
+      diagnostics,
+    );
+  }
+
+  const target = options.requestedTarget && isBuildTarget(options.requestedTarget)
+    ? options.requestedTarget
+    : deployManifest.build.target ?? "node-standalone";
+  const contractKey = getDeployContractKey(target);
+  const contract = deployManifest.targets?.[contractKey];
+
+  if (!contract) {
+    diagnostics.push({
+      severity: "error",
+      code: "missing_target_contract",
+      message: `Build output does not contain a deployment contract for ${target}.`,
+      hint: `Run \`capstan build --target ${target}\` to generate the correct deployment bundle.`,
+    });
+    return createDeploymentReport(options.appRoot, target, diagnostics);
+  }
+
+  if (deployManifest.build.target && deployManifest.build.target !== target) {
+    diagnostics.push({
+      severity: "warning",
+      code: "target_mismatch",
+      message: `Build manifest target is ${deployManifest.build.target}, but verification is running against ${target}.`,
+      hint: `Rebuild with \`capstan build --target ${target}\` if you want target-specific artifacts.`,
+    });
+  }
+
+  const filesToCheck: string[] = [];
+  if ("entry" in contract && typeof contract.entry === "string") {
+    filesToCheck.push(contract.entry);
+  }
+  if ("configFile" in contract && typeof contract.configFile === "string") {
+    filesToCheck.push(contract.configFile);
+  }
+  if ("dockerfile" in contract && typeof contract.dockerfile === "string") {
+    filesToCheck.push(contract.dockerfile);
+  }
+  if ("dockerIgnore" in contract && typeof contract.dockerIgnore === "string") {
+    filesToCheck.push(contract.dockerIgnore);
+  }
+  if ("packageJson" in contract && typeof contract.packageJson === "string") {
+    filesToCheck.push(contract.packageJson);
+  }
+
+  for (const contractPath of filesToCheck) {
+    const absolutePath = resolve(options.appRoot, contractPath);
+    if (!existsSync(absolutePath)) {
+      diagnostics.push({
+        severity: "error",
+        code: "missing_target_file",
+        message: `${contractPath} is missing for ${target}.`,
+        hint: `Re-run \`capstan build --target ${target}\` and verify the output directory was preserved.`,
+      });
+    }
+  }
+
+  if (target === "vercel-edge" || target === "cloudflare") {
+    for (const runtimeFile of [
+      "dist/standalone/runtime/manifest.js",
+      "dist/standalone/runtime/modules.js",
+      "dist/standalone/runtime/assets.js",
+    ]) {
+      if (!existsSync(resolve(options.appRoot, runtimeFile))) {
+        diagnostics.push({
+          severity: "error",
+          code: "missing_portable_runtime",
+          message: `${runtimeFile} is missing from the portable deployment bundle.`,
+          hint: `Re-run \`capstan build --target ${target}\`.`,
+        });
+      }
+    }
+  }
+
+  const configPath = await resolveConfigAt(options.appRoot);
+  if (configPath) {
+    try {
+      const configModule = await import(pathToFileURL(configPath).href);
+      const appConfig = configModule.default ?? configModule;
+      const provider = appConfig?.database?.provider;
+      const authEnabled = Boolean(appConfig?.auth?.session?.secret);
+
+      if (provider === "sqlite") {
+        if (target === "vercel-edge" || target === "cloudflare") {
+          diagnostics.push({
+            severity: "error",
+            code: "sqlite_edge_unsupported",
+            message: `SQLite is not a safe deployment backend for ${target}.`,
+            hint: "Use a network database such as Postgres or switch this target back to node-standalone/docker.",
+          });
+        } else if (target === "vercel-node" || target === "fly") {
+          diagnostics.push({
+            severity: "warning",
+            code: "sqlite_distribution_risk",
+            message: `SQLite may break under ${target} because instances are ephemeral or multi-region.`,
+            hint: "Prefer Postgres/MySQL for serverless or multi-region deployment targets.",
+          });
+        }
+      }
+
+      if (authEnabled && target === "vercel-edge") {
+        diagnostics.push({
+          severity: "error",
+          code: "edge_auth_runtime",
+          message: "Session auth is currently not supported on vercel-edge builds.",
+          hint: "Use `vercel-node` for auth-enabled apps, or remove auth before targeting the edge runtime.",
+        });
+      } else if (authEnabled && target === "cloudflare") {
+        diagnostics.push({
+          severity: "warning",
+          code: "worker_auth_runtime",
+          message: "Cloudflare deployments with auth depend on Node compatibility behavior.",
+          hint: "Verify the generated worker under Wrangler before shipping auth-enabled production traffic.",
+        });
+      }
+    } catch (error) {
+      diagnostics.push({
+        severity: "warning",
+        code: "config_load_failed",
+        message: "Deployment verification could not fully load capstan.config.",
+        hint: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  if (target === "vercel-edge" || target === "cloudflare") {
+    const offenders = await detectNodeRuntimeImports(options.appRoot);
+    if (offenders.length > 0) {
+      diagnostics.push({
+        severity: "error",
+        code: "node_runtime_imports",
+        message: `Edge and worker deployments cannot include Node-only imports. Offenders: ${offenders.slice(0, 5).join(", ")}${offenders.length > 5 ? "..." : ""}`,
+        hint: "Remove `node:` imports from routes/config or switch this deployment target to vercel-node/docker/fly.",
+      });
+    }
+  }
+
+  return createDeploymentReport(options.appRoot, target, diagnostics);
 }
 
 // ---------------------------------------------------------------------------
@@ -265,6 +709,21 @@ async function runBuild(args: string[]): Promise<void> {
   const { generateAgentManifest, generateOpenApiSpec } = await import("@zauso-ai/capstan-agent");
 
   const isStatic = args.includes("--static");
+  const buildTargetArg = readFlagValue(args, "--target");
+  if (buildTargetArg && !isBuildTarget(buildTargetArg)) {
+    console.error(
+      pc.red(
+        `[capstan] Unsupported build target "${buildTargetArg}". Valid targets: ${BUILD_TARGETS.join(", ")}`,
+      ),
+    );
+    process.exitCode = 1;
+    return;
+  }
+
+  const buildTarget: BuildTarget | undefined =
+    buildTargetArg && isBuildTarget(buildTargetArg)
+      ? buildTargetArg
+      : undefined;
   const cwd = process.cwd();
   const distDir = join(cwd, "dist");
 
@@ -304,36 +763,36 @@ async function runBuild(args: string[]): Promise<void> {
   console.log(pc.dim("[capstan]") + " Scanning routes...");
   const manifest = await scanRoutes(routesDir);
 
-  // Rewrite file paths from source .ts/.tsx to compiled .js/.jsx
-  // and make them relative to the dist directory
-  const rewrittenManifest = {
+  const compiledManifest = {
     ...manifest,
     rootDir: join(distDir, "app", "routes"),
     routes: manifest.routes.map((route) => ({
       ...route,
       filePath: route.filePath
         .replace(cwd, distDir)
-        .replace(/\.tsx$/, ".jsx")
+        .replace(/\.tsx$/, ".js")
         .replace(/\.ts$/, ".js"),
       layouts: route.layouts.map((l) =>
-        l.replace(cwd, distDir).replace(/\.tsx$/, ".jsx").replace(/\.ts$/, ".js"),
+        l.replace(cwd, distDir).replace(/\.tsx$/, ".js").replace(/\.ts$/, ".js"),
       ),
       middlewares: route.middlewares.map((m) =>
-        m.replace(cwd, distDir).replace(/\.tsx$/, ".jsx").replace(/\.ts$/, ".js"),
+        m.replace(cwd, distDir).replace(/\.tsx$/, ".js").replace(/\.ts$/, ".js"),
       ),
       ...(route.loading ? {
-        loading: route.loading.replace(cwd, distDir).replace(/\.tsx$/, ".jsx").replace(/\.ts$/, ".js"),
+        loading: route.loading.replace(cwd, distDir).replace(/\.tsx$/, ".js").replace(/\.ts$/, ".js"),
       } : {}),
       ...(route.error ? {
-        error: route.error.replace(cwd, distDir).replace(/\.tsx$/, ".jsx").replace(/\.ts$/, ".js"),
+        error: route.error.replace(cwd, distDir).replace(/\.tsx$/, ".js").replace(/\.ts$/, ".js"),
+      } : {}),
+      ...(route.notFound ? {
+        notFound: route.notFound.replace(cwd, distDir).replace(/\.tsx$/, ".js").replace(/\.ts$/, ".js"),
       } : {}),
     })),
   };
-
   await mkdir(distDir, { recursive: true });
   await writeFile(
     join(distDir, "_capstan_manifest.json"),
-    JSON.stringify(rewrittenManifest, null, 2),
+    JSON.stringify(compiledManifest, null, 2),
   );
   console.log(pc.dim("[capstan]") + pc.green(" Generated dist/_capstan_manifest.json"));
 
@@ -359,9 +818,11 @@ async function runBuild(args: string[]): Promise<void> {
 
   // Step 5: Copy public/ assets to dist/public/ (if the directory exists)
   const publicDir = join(cwd, "app", "public");
+  let publicAssetsCopied = false;
   try {
     await access(publicDir);
     await cp(publicDir, join(distDir, "public"), { recursive: true });
+    publicAssetsCopied = true;
     console.log(pc.dim("[capstan]") + pc.green(" Copied app/public/ to dist/public/"));
   } catch {
     // No public directory — skip.
@@ -375,7 +836,7 @@ async function runBuild(args: string[]): Promise<void> {
       const ssgResult = await buildStaticPages({
         rootDir: cwd,
         outputDir: join(distDir, "static"),
-        manifest: rewrittenManifest,
+        manifest: compiledManifest,
       });
       if (ssgResult.pages > 0) {
         console.log(
@@ -398,18 +859,14 @@ async function runBuild(args: string[]): Promise<void> {
 
   // Step 6: Generate the production server entry file
   const serverEntry = `import { createServer } from "node:http";
-import { readFileSync, existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { Hono } from "hono";
-import { cors } from "hono/cors";
-import { serveStatic } from "@hono/node-server/serve-static";
-import { createRequestLogger, csrfProtection } from "@zauso-ai/capstan-core";
+import pc from "picocolors";
+import { buildRuntimeApp } from "@zauso-ai/capstan-dev";
 
 const cwd = process.cwd();
 const distDir = resolve(cwd, "dist");
-
-// Read the pre-built route manifest
 const manifestPath = join(distDir, "_capstan_manifest.json");
 const manifest = JSON.parse(readFileSync(manifestPath, "utf-8"));
 
@@ -417,505 +874,144 @@ const port = parseInt(process.env.CAPSTAN_PORT ?? process.env.PORT ?? "3000", 10
 const host = process.env.CAPSTAN_HOST ?? "0.0.0.0";
 const MAX_BODY_SIZE = parseInt(process.env.CAPSTAN_MAX_BODY_SIZE ?? "1048576", 10);
 
-async function main() {
-  const app = new Hono();
-  app.use("*", createRequestLogger());
-
-  // --- CORS configuration ---------------------------------------------------
-  // Production CORS is restricted by default.  Set CAPSTAN_CORS_ORIGIN to
-  // control allowed origins:
-  //   "*"             — allow all origins (explicit opt-in)
-  //   "https://a.com" — allow only that origin
-  //   not set         — same-origin only (Origin must match the server host)
-  const corsOriginEnv = process.env.CAPSTAN_CORS_ORIGIN;
-
-  if (corsOriginEnv === "*") {
-    // Explicit opt-in to allow all origins.
-    app.use("*", cors());
-  } else {
-    app.use("*", cors({
-      origin: (origin, c) => {
-        if (corsOriginEnv) {
-          // Explicit allowed origin configured.
-          return origin === corsOriginEnv ? origin : null;
-        }
-        // No env var — restrict to same-origin: only allow the Origin if it
-        // matches the server's own host (scheme + host + port).
-        try {
-          const reqHost = c.req.header("host") ?? "";
-          const originUrl = new URL(origin);
-          const originHost = originUrl.host; // includes port
-          if (originHost === reqHost) {
-            return origin;
-          }
-        } catch {
-          // Malformed origin — deny.
-        }
-        return null;
-      },
-    }));
-  }
-
-  // --- Auth middleware -------------------------------------------------------
-  // Load config from the compiled capstan.config.js to obtain auth settings.
-  // If auth config exists, create a real auth resolver via @zauso-ai/capstan-auth
-  // so that session cookies and API keys are verified on every request.
-
-  let resolveAuth = null;
-  let appConfig = null;
-
+async function loadAppConfig() {
   const configCandidates = [
     join(distDir, "capstan.config.js"),
     join(cwd, "capstan.config.js"),
   ];
 
   for (const candidate of configCandidates) {
-    if (existsSync(candidate)) {
-      try {
-        const configUrl = pathToFileURL(candidate).href;
-        const configMod = await import(configUrl);
-        appConfig = configMod.default ?? configMod;
-        break;
-      } catch (err) {
-        console.warn("[capstan] Failed to load config from " + candidate + ":", err?.message ?? err);
-      }
-    }
-  }
+    if (!existsSync(candidate)) continue;
 
-  // Derive auth config: support both CapstanConfig shape (auth.session) and
-  // the flat AuthConfig shape ({ session: { secret } }).
-  const authCfg = appConfig?.auth ?? null;
-  const authSessionConfig = authCfg?.session ?? null;
-
-  if (authSessionConfig && authSessionConfig.secret) {
     try {
-      const authPkg = await import("@zauso-ai/capstan-auth");
-      resolveAuth = authPkg.createAuthMiddleware(
-        {
-          session: {
-            secret: authSessionConfig.secret,
-            maxAge: authSessionConfig.maxAge,
-          },
-          apiKeys: authCfg.apiKeys ?? undefined,
-        },
-        {
-          findAgentByKeyPrefix: appConfig?.findAgentByKeyPrefix ?? undefined,
-        },
-      );
-      console.log(pc.dim("[capstan]") + " Auth middleware enabled (session + API key verification).");
+      const configUrl = pathToFileURL(candidate).href;
+      const configMod = await import(configUrl);
+      return configMod.default ?? configMod;
     } catch (err) {
-      console.warn("[capstan] @zauso-ai/capstan-auth not available. Auth middleware disabled.", err?.message ?? "");
-    }
-  } else {
-    console.warn("[capstan] No auth config found. All requests will be treated as anonymous.");
-  }
-
-  // Hono middleware: resolve auth for every request and store on context.
-  app.use("*", async (c, next) => {
-    if (resolveAuth) {
-      try {
-        const authCtx = await resolveAuth(c.req.raw);
-        c.set("capstanAuth", authCtx);
-      } catch (err) {
-        console.error(pc.red("[capstan] Auth resolution error:"), err?.message ?? err);
-        c.set("capstanAuth", { isAuthenticated: false, type: "anonymous", permissions: [] });
-      }
-    }
-    await next();
-  });
-
-  // --- CSRF middleware -------------------------------------------------------
-  // Only enable CSRF protection when cookie-based session auth is configured.
-  if (authSessionConfig && authSessionConfig.secret) {
-    app.use("*", csrfProtection());
-  }
-
-  // Helper: build a CapstanContext from Hono context, using resolved auth.
-  function buildCtx(c) {
-    const authFromMiddleware = c.get("capstanAuth");
-    return {
-      auth: authFromMiddleware ?? { isAuthenticated: false, type: "anonymous", permissions: [] },
-      request: c.req.raw,
-      env: process.env,
-      honoCtx: c,
-    };
-  }
-
-  // --- Policy loading --------------------------------------------------------
-  // Load user-defined policies from dist/app/policies/index.js (if present).
-  // This mirrors enforcePolicies from @zauso-ai/capstan-core so that custom
-  // policies (beyond "requireAuth") are enforced in production.
-
-  const policyRegistry = new Map();
-  let enforcePoliciesFn = null;
-
-  try {
-    const corePkg = await import("@zauso-ai/capstan-core");
-    if (typeof corePkg.enforcePolicies === "function") {
-      enforcePoliciesFn = corePkg.enforcePolicies;
-    }
-  } catch {
-    // @zauso-ai/capstan-core not available.
-  }
-
-  const policiesIndexPath = join(distDir, "app", "policies", "index.js");
-  if (existsSync(policiesIndexPath)) {
-    try {
-      const policiesMod = await import(pathToFileURL(policiesIndexPath).href);
-      const exports = policiesMod.default ?? policiesMod;
-      if (exports && typeof exports === "object") {
-        for (const [key, value] of Object.entries(exports)) {
-          if (value && typeof value === "object" && "check" in value) {
-            policyRegistry.set(value.key ?? key, value);
-          }
-        }
-      }
-      if (policyRegistry.size > 0) {
-        console.log(pc.dim("[capstan]") + " Loaded " + policyRegistry.size + " custom policies from app/policies/index.js");
-      }
-    } catch (err) {
-      console.warn("[capstan] Failed to load policies from " + policiesIndexPath + ":", err?.message ?? err);
+      console.warn("[capstan] Failed to load config from " + candidate + ":", err?.message ?? err);
     }
   }
 
-  // Built-in requireAuth policy used when no custom override exists.
-  const builtinRequireAuth = {
-    key: "requireAuth",
-    title: "Require Authentication",
-    effect: "deny",
-    check: async ({ ctx }) => {
-      if (ctx.auth.isAuthenticated) return { effect: "allow" };
-      return { effect: "deny", reason: "Authentication required" };
+  return null;
+}
+
+function normalizeAuthConfig(appConfig) {
+  const authConfig = appConfig?.auth ?? null;
+  const sessionConfig = authConfig?.session ?? null;
+
+  if (!sessionConfig?.secret) {
+    return undefined;
+  }
+
+  const normalized = {
+    session: {
+      secret: sessionConfig.secret,
     },
   };
 
-  // Enforce all policies for a handler. Returns null if allowed, or a Response
-  // if the request should be blocked/deferred.
-  async function enforceHandlerPolicy(c, ctx, handler, input) {
-    if (!handler.policy) return null;
-
-    const policyName = handler.policy;
-    const policyDef = policyRegistry.get(policyName)
-      ?? (policyName === "requireAuth" ? builtinRequireAuth : null);
-
-    if (!policyDef) {
-      // Unknown policy in production: deny by default (fail closed).
-      console.warn("[capstan] Unknown policy: " + policyName + ". Denying request (fail closed).");
-      return c.json({ error: "Forbidden", reason: "Unknown policy: " + policyName }, 403);
-    }
-
-    let result;
-    if (enforcePoliciesFn) {
-      result = await enforcePoliciesFn([policyDef], ctx, input);
-    } else {
-      result = await policyDef.check({ ctx, input });
-    }
-
-    if (result.effect === "deny") {
-      return c.json(
-        { error: "Forbidden", reason: result.reason ?? "Policy denied", policy: policyName },
-        403,
-      );
-    }
-
-    if (result.effect === "approve") {
-      try {
-        const corePkg = await import("@zauso-ai/capstan-core");
-        if (typeof corePkg.createApproval === "function") {
-          const approval = corePkg.createApproval({
-            method: c.req.method,
-            path: c.req.path,
-            input,
-            policy: policyName,
-            reason: result.reason ?? "This action requires approval",
-          });
-          return c.json(
-            {
-              status: "approval_required",
-              approvalId: approval.id,
-              reason: result.reason ?? "This action requires approval",
-              pollUrl: "/capstan/approvals/" + approval.id,
-            },
-            202,
-          );
-        }
-      } catch {}
-      return c.json(
-        { error: "Forbidden", reason: "Approval required but approval system unavailable", policy: policyName },
-        403,
-      );
-    }
-
-    return null;
+  if (sessionConfig.maxAge !== undefined) {
+    normalized.session.maxAge = sessionConfig.maxAge;
   }
 
-  // Serve static assets from dist/public/ if present
+  if (authConfig.apiKeys !== undefined) {
+    normalized.apiKeys = authConfig.apiKeys;
+  }
+
+  return normalized;
+}
+
+async function loadPolicyRegistry() {
+  const registry = new Map();
+  const policiesIndexPath = join(distDir, "app", "policies", "index.js");
+
+  if (!existsSync(policiesIndexPath)) {
+    return registry;
+  }
+
   try {
-    app.use("/public/*", serveStatic({ root: distDir }));
-  } catch {
-    // serveStatic not available or dist/public/ does not exist
-  }
-
-  // Route metadata for framework endpoints
-  const routeRegistry = [];
-
-  let apiRouteCount = 0;
-  let pageRouteCount = 0;
-
-  // Register API routes from the manifest
-  for (const route of manifest.routes) {
-    if (route.type !== "api") continue;
-
-    let handlers;
-    try {
-      const moduleUrl = pathToFileURL(route.filePath).href;
-      handlers = await import(moduleUrl);
-    } catch (err) {
-      console.error(pc.red("[capstan] Failed to load API route " + route.filePath + ":"), err?.message ?? err);
-      continue;
-    }
-
-    const methods = ["GET", "POST", "PUT", "DELETE", "PATCH"];
-    for (const method of methods) {
-      const handler = handlers[method];
-      if (handler === undefined) continue;
-
-      apiRouteCount++;
-
-      const isApiDef = handler !== null && typeof handler === "object" && "handler" in handler && typeof handler.handler === "function";
-      const meta = { method, path: route.urlPattern };
-      if (isApiDef && handler.description) meta.description = handler.description;
-      if (isApiDef && handler.capability) meta.capability = handler.capability;
-      routeRegistry.push(meta);
-
-      const honoMethod = method.toLowerCase();
-      app[honoMethod](route.urlPattern, async (c) => {
-        let input;
-        try {
-          if (method === "GET") {
-            input = Object.fromEntries(new URL(c.req.url).searchParams);
-          } else {
-            const ct = c.req.header("content-type") ?? "";
-            if (ct.includes("application/json")) {
-              input = await c.req.json();
-            } else {
-              input = {};
-            }
-          }
-        } catch {
-          input = {};
-        }
-
-        const ctx = buildCtx(c);
-
-        try {
-          if (isApiDef) {
-            // Policy enforcement using auth-resolved ctx and loaded policies.
-            const policyResponse = await enforceHandlerPolicy(c, ctx, handler, input);
-            if (policyResponse !== null) return policyResponse;
-
-            const result = await handler.handler({ input, ctx });
-            return c.json(result);
-          }
-          if (typeof handler === "function") {
-            const result = await handler({ input, ctx });
-            return c.json(result);
-          }
-          return c.json({ error: "Invalid handler export" }, 500);
-        } catch (err) {
-          if (err && typeof err === "object" && "issues" in err && Array.isArray(err.issues)) {
-            return c.json({ error: "Validation Error", issues: err.issues }, 400);
-          }
-          console.error(pc.red("[capstan] Request error:"), err);
-          const message = "Internal Server Error";
-          return c.json({ error: message }, 500);
-        }
-      });
-    }
-  }
-
-  // Serve pre-rendered SSG pages from dist/static/ (fast path)
-  const ssgManifestPath = join(distDir, "static", "_ssg_manifest.json");
-  let ssgPaths = new Set();
-  try {
-    if (existsSync(ssgManifestPath)) {
-      const ssgData = JSON.parse(readFileSync(ssgManifestPath, "utf-8"));
-      if (Array.isArray(ssgData.paths)) ssgPaths = new Set(ssgData.paths);
-    }
-  } catch { /* no SSG manifest — skip */ }
-
-  if (ssgPaths.size > 0) {
-    for (const ssgPath of ssgPaths) {
-      app.get(ssgPath, async (c) => {
-        const segments = ssgPath.replace(/^\\/+|\\/+$/g, "");
-        const filePath = segments === ""
-          ? join(distDir, "static", "index.html")
-          : join(distDir, "static", segments, "index.html");
-        try {
-          const html = readFileSync(filePath, "utf-8");
-          return c.html(html, 200);
-        } catch {
-          return c.notFound();
-        }
-      });
-    }
-    console.log(pc.dim("[capstan]") + " Serving " + ssgPaths.size + " SSG page(s) from static files");
-  }
-
-  // Register page routes from the manifest
-  for (const route of manifest.routes) {
-    if (route.type !== "page") continue;
-
-    let pageModule;
-    try {
-      const moduleUrl = pathToFileURL(route.filePath).href;
-      pageModule = await import(moduleUrl);
-    } catch (err) {
-      console.error(pc.red("[capstan] Failed to load page " + route.filePath + ":"), err?.message ?? err);
-      continue;
-    }
-
-    if (!pageModule.default) continue;
-    pageRouteCount++;
-
-    app.get(route.urlPattern, async (c) => {
-      const params = {};
-      for (const name of route.params) {
-        const value = c.req.param(name);
-        if (value !== undefined) params[name] = value;
-      }
-
-      const ctx = buildCtx(c);
-
-      let loaderData = null;
-      if (typeof pageModule.loader === "function") {
-        try {
-          loaderData = await pageModule.loader({
-            params,
-            request: c.req.raw,
-            ctx: { auth: ctx.auth },
-            fetch: { get: async () => null, post: async () => null, put: async () => null, delete: async () => null },
-          });
-        } catch (err) {
-          console.error(pc.red("[capstan] Loader error in " + route.filePath + ":"), err?.message ?? err);
+    const policiesMod = await import(pathToFileURL(policiesIndexPath).href);
+    const exportsObject = policiesMod.default ?? policiesMod;
+    if (exportsObject && typeof exportsObject === "object") {
+      for (const [key, value] of Object.entries(exportsObject)) {
+        if (value && typeof value === "object" && "check" in value) {
+          registry.set(value.key ?? key, value);
         }
       }
+    }
+  } catch (err) {
+    console.warn("[capstan] Failed to load policies from " + policiesIndexPath + ":", err?.message ?? err);
+  }
 
-      // Attempt SSR via @zauso-ai/capstan-react
+  return registry;
+}
+
+function createCorsOptions() {
+  const corsOriginEnv = process.env.CAPSTAN_CORS_ORIGIN;
+  if (corsOriginEnv === "*") {
+    return undefined;
+  }
+
+  return {
+    origin: (origin, c) => {
+      if (corsOriginEnv) {
+        return origin === corsOriginEnv ? origin : null;
+      }
+
       try {
-        const reactPkg = await import("@zauso-ai/capstan-react");
-        const result = await reactPkg.renderPage({
-          pageModule: { default: pageModule.default, loader: pageModule.loader },
-          layouts: [],
-          params,
-          request: c.req.raw,
-          loaderArgs: {
-            params,
-            request: c.req.raw,
-            ctx: { auth: ctx.auth },
-            fetch: { get: async () => null, post: async () => null, put: async () => null, delete: async () => null },
-          },
-        });
-        return c.html(result.html, result.statusCode);
+        const reqHost = c.req.header("host") ?? "";
+        const originUrl = new URL(origin);
+        return originUrl.host === reqHost ? origin : null;
       } catch {
-        // Fallback minimal HTML
-        const html = \`<!DOCTYPE html>
-<html lang="en">
-<head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" /><title>${appName.replace(/"/g, "&quot;")}</title></head>
-<body>
-  <div id="capstan-root"><p>Page: \${route.urlPattern}</p></div>
-  <script>window.__CAPSTAN_DATA__ = \${JSON.stringify({ loaderData, params }).replace(/</g, '\\\\u003c').replace(/>/g, '\\\\u003e')}</script>
-</body>
-</html>\`;
-        return c.html(html);
+        return null;
       }
-    });
+    },
+  };
+}
+
+async function main() {
+  const appConfig = await loadAppConfig();
+  const authConfig = normalizeAuthConfig(appConfig);
+  const policyRegistry = await loadPolicyRegistry();
+  const corsOptions = createCorsOptions();
+
+  if (policyRegistry.size > 0) {
+    console.log(pc.dim("[capstan]") + " Loaded " + policyRegistry.size + " custom policies from app/policies/index.js");
   }
 
-  // Read pre-built agent-manifest.json and openapi.json
-  let agentManifestJson = null;
-  let openApiJson = null;
-  try { agentManifestJson = JSON.parse(readFileSync(join(distDir, "agent-manifest.json"), "utf-8")); } catch {}
-  try { openApiJson = JSON.parse(readFileSync(join(distDir, "openapi.json"), "utf-8")); } catch {}
-
-  // Framework endpoints
-  app.get("/.well-known/capstan.json", (c) => {
-    if (agentManifestJson) return c.json(agentManifestJson);
-    return c.json({ error: "Agent manifest not found" }, 404);
+  const { app, apiRouteCount, pageRouteCount } = await buildRuntimeApp({
+    rootDir: distDir,
+    manifest,
+    mode: "production",
+    host,
+    port,
+    appName: appConfig?.app?.name ?? appConfig?.name ?? "capstan-app",
+    appDescription: appConfig?.app?.description ?? appConfig?.description,
+    publicDir: join(distDir, "public"),
+    staticDir: join(distDir, "static"),
+    liveReload: false,
+    unknownPolicyMode: "deny",
+    policyRegistry,
+    corsOptions,
+    ...(authConfig ? { auth: authConfig } : {}),
+    ...(typeof appConfig?.findAgentByKeyPrefix === "function"
+      ? { findAgentByKeyPrefix: appConfig.findAgentByKeyPrefix }
+      : {}),
   });
-  app.get("/openapi.json", (c) => {
-    if (openApiJson) return c.json(openApiJson);
-    return c.json({ error: "OpenAPI spec not found" }, 404);
-  });
-  app.get("/health", (c) => {
-    return c.json({ status: "ok", uptime: process.uptime(), timestamp: new Date().toISOString() });
-  });
 
-  // Approval management endpoints (if @zauso-ai/capstan-core is available)
-  // All approval endpoints require authentication and either the "admin" role
-  // or the "approval:manage" permission.  Fail closed if auth is unavailable.
-  function requireApprovalAuth(c) {
-    const auth = c.get("capstanAuth");
-    if (!auth || !auth.isAuthenticated) {
-      return c.json({ error: "Authentication required to manage approvals" }, 401);
-    }
-    const perms = auth.permissions ?? [];
-    const isAdmin = auth.role === "admin";
-    const hasPermission = perms.includes("approval:manage");
-    if (!isAdmin && !hasPermission) {
-      return c.json({ error: "Forbidden: approval:manage permission required" }, 403);
-    }
-    return null;
-  }
-
-  try {
-    const corePkg = await import("@zauso-ai/capstan-core");
-    if (typeof corePkg.listApprovals === "function") {
-      app.get("/capstan/approvals", (c) => {
-        const authErr = requireApprovalAuth(c);
-        if (authErr) return authErr;
-        const status = new URL(c.req.url).searchParams.get("status") ?? undefined;
-        const approvals = corePkg.listApprovals(status);
-        return c.json({ approvals });
-      });
-      app.get("/capstan/approvals/:id", (c) => {
-        const authErr = requireApprovalAuth(c);
-        if (authErr) return authErr;
-        const approval = corePkg.getApproval(c.req.param("id"));
-        if (!approval) return c.json({ error: "Approval not found" }, 404);
-        return c.json(approval);
-      });
-      app.post("/capstan/approvals/:id/resolve", async (c) => {
-        const authErr = requireApprovalAuth(c);
-        if (authErr) return authErr;
-        let body;
-        try { body = await c.req.json(); } catch { body = {}; }
-        const decision = body.decision === "approved" ? "approved" : "denied";
-        const approval = corePkg.resolveApproval(c.req.param("id"), decision, body.resolvedBy);
-        if (!approval) return c.json({ error: "Approval not found" }, 404);
-        return c.json(approval);
-      });
-    }
-  } catch {
-    // Approval endpoints not available.
-  }
-
-  // Start HTTP server
-  const isBunRuntime = typeof (globalThis as any).Bun !== "undefined";
+  const isBunRuntime = typeof globalThis.Bun !== "undefined";
 
   function printStartupBanner() {
     console.log("");
     console.log(pc.bold("  Capstan production server running" + (isBunRuntime ? " (Bun)" : "")));
     console.log("  Local:  " + pc.cyan("http://" + (host === "0.0.0.0" ? "localhost" : host) + ":" + port));
     console.log(pc.dim("  Routes: " + (apiRouteCount + pageRouteCount) + " total (" + apiRouteCount + " API, " + pageRouteCount + " pages)"));
-    if (resolveAuth) console.log(pc.green("  Auth:   enabled"));
+    if (authConfig) console.log(pc.green("  Auth:   enabled"));
     else console.log(pc.dim("  Auth:   disabled (no auth config)"));
     if (policyRegistry.size > 0) console.log(pc.dim("  Policies: " + policyRegistry.size + " custom policies loaded"));
     console.log("");
   }
 
   if (isBunRuntime) {
-    // Bun: use Bun.serve() with Hono's native fetch handler
     const bunServer = Bun.serve({
       port,
       hostname: host,
@@ -927,105 +1023,122 @@ async function main() {
 
     process.on("SIGINT", () => { bunServer.stop(); process.exit(0); });
     process.on("SIGTERM", () => { bunServer.stop(); process.exit(0); });
-  } else {
-    // Node.js: bridge node:http to Hono's fetch interface
-    const server = createServer(async (req, res) => {
-      try {
-        const url = new URL(req.url ?? "/", "http://" + (req.headers.host ?? host + ":" + port));
-        const headers = new Headers();
-        for (const [key, value] of Object.entries(req.headers)) {
-          if (value === undefined) continue;
-          if (Array.isArray(value)) { for (const v of value) headers.append(key, v); }
-          else headers.set(key, value);
-        }
-
-        const hasBody = req.method !== "GET" && req.method !== "HEAD";
-        let body;
-        if (hasBody) {
-          body = await new Promise((resolve, reject) => {
-            const chunks = [];
-            let received = 0;
-            req.on("data", (c) => {
-              received += c.length;
-              if (received > MAX_BODY_SIZE) {
-                req.destroy();
-                const err = new Error("Request body exceeds maximum allowed size of " + MAX_BODY_SIZE + " bytes");
-                err.statusCode = 413;
-                reject(err);
-                return;
-              }
-              chunks.push(c);
-            });
-            req.on("error", reject);
-            req.on("end", () => {
-              const raw = Buffer.concat(chunks).toString("utf-8");
-              resolve(raw.length > 0 ? raw : undefined);
-            });
-          });
-        }
-
-        const init = { method: req.method ?? "GET", headers };
-        if (body !== undefined) init.body = body;
-
-        const request = new Request(url.toString(), init);
-        const response = await app.fetch(request);
-
-        res.writeHead(response.status, Object.fromEntries(response.headers.entries()));
-        const responseBody = await response.text();
-        res.end(responseBody);
-      } catch (err) {
-        if (err && err.statusCode === 413) {
-          if (!res.headersSent) res.writeHead(413, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "Payload Too Large" }));
-          return;
-        }
-        console.error(pc.red("[capstan] Unhandled request error:"), err);
-        if (!res.headersSent) res.writeHead(500, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "Internal Server Error" }));
-      }
-    });
-
-    // Track active connections for graceful shutdown.
-    const activeConnections = new Set();
-
-    server.on("connection", (socket) => {
-      activeConnections.add(socket);
-      socket.once("close", () => activeConnections.delete(socket));
-    });
-
-    server.listen(port, host, () => {
-      printStartupBanner();
-    });
-
-    // --- Graceful shutdown ---------------------------------------------------
-    let shuttingDown = false;
-
-    function gracefulShutdown() {
-      if (shuttingDown) return;
-      shuttingDown = true;
-      console.log("Shutting down gracefully...");
-
-      // Stop accepting new connections.
-      server.close(() => {
-        process.exit(0);
-      });
-
-      // Force-close remaining connections after 5 seconds.
-      const timer = setTimeout(() => {
-        for (const socket of activeConnections) {
-          try { socket.destroy(); } catch {}
-        }
-        process.exit(0);
-      }, 5000);
-
-      if (typeof timer === "object" && "unref" in timer) {
-        timer.unref();
-      }
-    }
-
-    process.on("SIGINT", gracefulShutdown);
-    process.on("SIGTERM", gracefulShutdown);
+    return;
   }
+
+  const server = createServer(async (req, res) => {
+    try {
+      const url = new URL(
+        req.url ?? "/",
+        "http://" + (req.headers.host ?? host + ":" + port),
+      );
+      const headers = new Headers();
+      for (const [key, value] of Object.entries(req.headers)) {
+        if (value === undefined) continue;
+        if (Array.isArray(value)) {
+          for (const item of value) headers.append(key, item);
+        } else {
+          headers.set(key, value);
+        }
+      }
+
+      const hasBody = req.method !== "GET" && req.method !== "HEAD";
+      let body;
+      if (hasBody) {
+        body = await new Promise((resolve, reject) => {
+          const chunks = [];
+          let received = 0;
+
+          req.on("data", (chunk) => {
+            received += chunk.length;
+            if (received > MAX_BODY_SIZE) {
+              req.destroy();
+              const error = new Error(
+                "Request body exceeds maximum allowed size of " + MAX_BODY_SIZE + " bytes",
+              );
+              error.statusCode = 413;
+              reject(error);
+              return;
+            }
+            chunks.push(chunk);
+          });
+          req.on("error", reject);
+          req.on("end", () => {
+            const raw = Buffer.concat(chunks);
+            resolve(raw.length > 0 ? raw : undefined);
+          });
+        });
+      }
+
+      const init = {
+        method: req.method ?? "GET",
+        headers,
+      };
+      if (body !== undefined) {
+        init.body = body;
+      }
+
+      const request = new Request(url.toString(), init);
+      const response = await app.fetch(request);
+      const responseBody = Buffer.from(await response.arrayBuffer());
+
+      res.writeHead(response.status, Object.fromEntries(response.headers.entries()));
+      res.end(responseBody);
+    } catch (err) {
+      if (err?.statusCode === 413) {
+        if (!res.headersSent) {
+          res.writeHead(413, { "Content-Type": "application/json" });
+        }
+        res.end(JSON.stringify({ error: "Payload Too Large" }));
+        return;
+      }
+
+      console.error(pc.red("[capstan] Unhandled request error:"), err);
+      if (!res.headersSent) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+      }
+      res.end(JSON.stringify({ error: "Internal Server Error" }));
+    }
+  });
+
+  const activeConnections = new Set();
+
+  server.on("connection", (socket) => {
+    activeConnections.add(socket);
+    socket.once("close", () => activeConnections.delete(socket));
+  });
+
+  server.listen(port, host, () => {
+    printStartupBanner();
+  });
+
+  let shuttingDown = false;
+
+  function gracefulShutdown() {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log("Shutting down gracefully...");
+
+    server.close(() => {
+      process.exit(0);
+    });
+
+    const timer = setTimeout(() => {
+      for (const socket of activeConnections) {
+        try {
+          socket.destroy();
+        } catch {}
+      }
+      process.exit(0);
+    }, 5000);
+
+    if (typeof timer === "object" && "unref" in timer) {
+      timer.unref();
+    }
+  }
+
+  process.on("SIGINT", gracefulShutdown);
+  process.on("SIGTERM", gracefulShutdown);
 }
 
 main().catch((err) => {
@@ -1036,22 +1149,53 @@ main().catch((err) => {
 
   await writeFile(join(distDir, "_capstan_server.js"), serverEntry);
   console.log(pc.dim("[capstan]") + pc.green(" Generated dist/_capstan_server.js"));
+  const deployTargets = buildTarget
+    ? createDeployTargetContract(buildTarget)
+    : undefined;
+  const deployManifest = createDeployManifest({
+    rootDir: cwd,
+    distDir,
+    appName,
+    ...(appDescription ? { appDescription } : {}),
+    isStaticBuild: isStatic,
+    publicAssetsCopied,
+    ...(buildTarget ? { buildTarget } : {}),
+    ...(deployTargets ? { targets: deployTargets } : {}),
+  });
+  await writeFile(
+    join(distDir, "deploy-manifest.json"),
+    JSON.stringify(deployManifest, null, 2),
+  );
+  console.log(pc.dim("[capstan]") + pc.green(" Generated dist/deploy-manifest.json"));
+
+  if (buildTarget) {
+    await emitStandaloneBuildTarget({
+      rootDir: cwd,
+      distDir,
+      buildTarget,
+      appName,
+      deployManifest,
+    });
+  }
   console.log(pc.dim("[capstan]") + pc.green(" Build complete."));
 }
 
 async function runStart(args: string[]): Promise<void> {
   const isBun = typeof (globalThis as any).Bun !== "undefined";
   const { access } = await import("node:fs/promises");
-  const { join } = await import("node:path");
 
-  const cwd = process.cwd();
-  const serverEntry = join(cwd, "dist", "_capstan_server.js");
+  const fromDir = readFlagValue(args, "--from");
+  const startRoot = fromDir
+    ? resolve(process.cwd(), fromDir)
+    : process.cwd();
+  const deployManifest = await loadDeployManifest(startRoot);
+  const serverEntry = resolveServerEntryPath(startRoot, deployManifest);
 
   // Verify the production build exists
   try {
     await access(serverEntry);
   } catch {
-    console.error(pc.red("[capstan] dist/_capstan_server.js not found."));
+    console.error(pc.red(`[capstan] ${relative(process.cwd(), serverEntry)} not found.`));
     console.error(pc.yellow("[capstan] Run `capstan build` first to compile the project."));
     process.exitCode = 1;
     return;
@@ -1069,7 +1213,7 @@ async function runStart(args: string[]): Promise<void> {
   if (isBun) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const child = (globalThis as any).Bun.spawn(["bun", serverEntry], {
-      cwd,
+      cwd: startRoot,
       stdio: ["inherit", "inherit", "inherit"],
       env: envVars,
     });
@@ -1083,7 +1227,7 @@ async function runStart(args: string[]): Promise<void> {
       process.execPath,
       [serverEntry],
       {
-        cwd,
+        cwd: startRoot,
         stdio: "inherit",
         env: envVars,
       },
@@ -1097,6 +1241,210 @@ async function runStart(args: string[]): Promise<void> {
     for (const sig of ["SIGINT", "SIGTERM"] as const) {
       process.on(sig, () => child.kill(sig));
     }
+  }
+}
+
+async function runDeployInit(args: string[]): Promise<void> {
+  const { access, writeFile } = await import("node:fs/promises");
+
+  const target = readFlagValue(args, "--target") ?? "docker";
+  if (!isDeployInitTarget(target)) {
+    console.error(
+      pc.red(
+        `[capstan] Unsupported deploy:init target "${target}". Valid targets: ${DEPLOY_INIT_TARGETS.join(", ")}`,
+      ),
+    );
+    process.exitCode = 1;
+    return;
+  }
+
+  const force = args.includes("--force");
+  const cwd = process.cwd();
+  let appName = "capstan-app";
+  try {
+    const configPath = await resolveConfig();
+    if (configPath) {
+      const configModule = await import(pathToFileURL(configPath).href);
+      const config = configModule.default ?? configModule;
+      if (typeof config?.app?.name === "string") {
+        appName = config.app.name;
+      } else if (typeof config?.name === "string") {
+        appName = config.name;
+      }
+    } else {
+      const packageJson = await readProjectPackageJson(cwd);
+      if (typeof packageJson?.name === "string") {
+        appName = packageJson.name;
+      }
+    }
+  } catch {
+    // Fall back to the default deploy app name.
+  }
+
+  const files = createProjectDeploymentFiles({
+    target,
+    appName,
+  }).map((file) => ({
+    path: join(cwd, file.path),
+    content: file.content,
+  }));
+
+  const conflicts: string[] = [];
+
+  for (const file of files) {
+    try {
+      await access(file.path);
+      if (!force) {
+        conflicts.push(relative(cwd, file.path));
+      }
+    } catch {
+      // File does not exist yet.
+    }
+  }
+
+  if (conflicts.length > 0) {
+    console.error(
+      pc.red(
+        `[capstan] Refusing to overwrite existing deployment files: ${conflicts.join(", ")}`,
+      ),
+    );
+    console.error(pc.yellow("[capstan] Re-run with `--force` to replace them."));
+    process.exitCode = 1;
+    return;
+  }
+
+  for (const file of files) {
+    await writeFile(file.path, file.content, "utf-8");
+    console.log(pc.dim("[capstan]") + pc.green(` Generated ${relative(cwd, file.path)}`));
+  }
+}
+
+async function emitStandaloneBuildTarget(options: {
+  rootDir: string;
+  distDir: string;
+  buildTarget: BuildTarget;
+  appName: string;
+  deployManifest: DeployManifest;
+}): Promise<void> {
+  const { access, cp, mkdir, rm, stat, writeFile } = await import("node:fs/promises");
+  const { dirname } = await import("node:path");
+
+  const { rootDir, distDir, buildTarget, appName, deployManifest } = options;
+  const standaloneRoot = getStandaloneOutputDir(rootDir);
+  const standaloneDistDir = join(standaloneRoot, "dist");
+  const projectPackageJson = await readProjectPackageJson(rootDir);
+
+  await rm(standaloneRoot, { recursive: true, force: true });
+  await mkdir(standaloneDistDir, { recursive: true });
+
+  const runtimeArtifacts = [
+    "app",
+    "public",
+    "static",
+    "_capstan_manifest.json",
+    "_capstan_server.js",
+    "agent-manifest.json",
+    "openapi.json",
+    "capstan.config.js",
+  ];
+
+  for (const artifact of runtimeArtifacts) {
+    const sourcePath = join(distDir, artifact);
+    try {
+      await access(sourcePath);
+    } catch {
+      continue;
+    }
+
+    const sourceStat = await stat(sourcePath);
+    await cp(sourcePath, join(standaloneDistDir, artifact), {
+      recursive: sourceStat.isDirectory(),
+    });
+  }
+
+  const standaloneManifest = createStandaloneDeployManifest(
+    deployManifest,
+    buildTarget,
+  );
+  await writeFile(
+    join(standaloneDistDir, "deploy-manifest.json"),
+    JSON.stringify(standaloneManifest, null, 2),
+    "utf-8",
+  );
+  await writeFile(
+    join(standaloneRoot, "package.json"),
+    await createStandalonePackageJson({
+      projectPackageJson,
+      appName,
+    }),
+    "utf-8",
+  );
+  console.log(pc.dim("[capstan]") + pc.green(" Generated dist/standalone/package.json"));
+  console.log(pc.dim("[capstan]") + pc.green(" Generated dist/standalone/dist/deploy-manifest.json"));
+
+  const hasConfig = existsSync(join(standaloneDistDir, "capstan.config.js"));
+  const hasPolicies = existsSync(join(standaloneDistDir, "app", "policies", "index.js"));
+
+  if (shouldEmitPortableRuntimeBundle(buildTarget)) {
+    const runtimeDir = join(standaloneRoot, "runtime");
+    await mkdir(runtimeDir, { recursive: true });
+
+    const routeManifest = await readJsonArtifact<RouteManifest>(
+      join(standaloneDistDir, "_capstan_manifest.json"),
+    );
+    const portableRouteManifest = createPortableRouteManifest(
+      routeManifest,
+      standaloneDistDir,
+    );
+    const agentManifest = await readJsonArtifact<unknown>(
+      join(standaloneDistDir, "agent-manifest.json"),
+    );
+    const openApiSpec = await readJsonArtifact<unknown>(
+      join(standaloneDistDir, "openapi.json"),
+    );
+    const assetMaps = await collectPortableRuntimeAssets(standaloneDistDir);
+
+    await writeFile(
+      join(runtimeDir, "manifest.js"),
+      createPortableRuntimeManifestModuleSource({
+        manifest: portableRouteManifest,
+        agentManifest,
+        openApiSpec,
+      }),
+      "utf-8",
+    );
+    await writeFile(
+      join(runtimeDir, "modules.js"),
+      createPortableRuntimeModulesModuleSource(portableRouteManifest, {
+        runtimeRoot: getPortableRuntimeRootDir(),
+      }),
+      "utf-8",
+    );
+    await writeFile(
+      join(runtimeDir, "assets.js"),
+      createPortableRuntimeAssetsModuleSource(assetMaps),
+      "utf-8",
+    );
+    console.log(pc.dim("[capstan]") + pc.green(" Generated dist/standalone/runtime/manifest.js"));
+    console.log(pc.dim("[capstan]") + pc.green(" Generated dist/standalone/runtime/modules.js"));
+    console.log(pc.dim("[capstan]") + pc.green(" Generated dist/standalone/runtime/assets.js"));
+  }
+
+  const platformFiles = createStandalonePlatformFiles({
+    buildTarget,
+    appName,
+    hasConfig,
+    hasPolicies,
+    ...(deployManifest.app.description
+      ? { appDescription: deployManifest.app.description }
+      : {}),
+  });
+
+  for (const file of platformFiles) {
+    const targetPath = join(standaloneRoot, file.path);
+    await mkdir(dirname(targetPath), { recursive: true });
+    await writeFile(targetPath, file.content, "utf-8");
+    console.log(pc.dim("[capstan]") + pc.green(` Generated ${relative(rootDir, targetPath)}`));
   }
 }
 
@@ -1592,6 +1940,160 @@ function readFlagValue(args: string[], flag: string): string | undefined {
   return value && !value.startsWith("--") ? value : undefined;
 }
 
+function isBuildTarget(value: string): value is BuildTarget {
+  return (BUILD_TARGETS as readonly string[]).includes(value);
+}
+
+function isDeployInitTarget(value: string): value is (typeof DEPLOY_INIT_TARGETS)[number] {
+  return (DEPLOY_INIT_TARGETS as readonly string[]).includes(value);
+}
+
+function hasFlag(args: string[], flag: string): boolean {
+  return args.includes(flag);
+}
+
+function readPositionalArgs(args: string[]): string[] {
+  const positional: string[] = [];
+
+  for (let index = 0; index < args.length; index++) {
+    const value = args[index];
+    if (!value) continue;
+    if (value === "--root") {
+      index++;
+      continue;
+    }
+    if (value.startsWith("--")) {
+      continue;
+    }
+    positional.push(value);
+  }
+
+  return positional;
+}
+
+async function resolveHarnessRuntime(args: string[]) {
+  const { openHarnessRuntime } = await import("@zauso-ai/capstan-ai");
+  const rootDir = resolve(
+    process.cwd(),
+    readFlagValue(args, "--root") ?? process.cwd(),
+  );
+  return openHarnessRuntime(rootDir);
+}
+
+function printHarnessPayload(payload: unknown, asJson: boolean): void {
+  if (asJson) {
+    console.log(JSON.stringify(payload, null, 2));
+    return;
+  }
+
+  if (Array.isArray(payload)) {
+    if (payload.length === 0) {
+      console.log(pc.dim("No harness records found."));
+      return;
+    }
+    for (const item of payload) {
+      console.log(JSON.stringify(item, null, 2));
+    }
+    return;
+  }
+
+  console.log(JSON.stringify(payload, null, 2));
+}
+
+async function runHarnessList(args: string[]): Promise<void> {
+  const runtime = await resolveHarnessRuntime(args);
+  const runs = await runtime.listRuns();
+  printHarnessPayload(runs, hasFlag(args, "--json"));
+}
+
+async function runHarnessGet(args: string[]): Promise<void> {
+  const [runId] = readPositionalArgs(args);
+  if (!runId) {
+    throw new Error("Usage: capstan harness:get <runId> [--root <dir>] [--json]");
+  }
+
+  const runtime = await resolveHarnessRuntime(args);
+  const run = await runtime.getRun(runId);
+
+  if (!run) {
+    throw new Error(`Harness run not found: ${runId}`);
+  }
+
+  printHarnessPayload(run, hasFlag(args, "--json"));
+}
+
+async function runHarnessEvents(args: string[]): Promise<void> {
+  const [runId] = readPositionalArgs(args);
+  const runtime = await resolveHarnessRuntime(args);
+  const events = await runtime.getEvents(runId);
+  printHarnessPayload(events, hasFlag(args, "--json"));
+}
+
+async function runHarnessArtifacts(args: string[]): Promise<void> {
+  const [runId] = readPositionalArgs(args);
+  if (!runId) {
+    throw new Error("Usage: capstan harness:artifacts <runId> [--root <dir>] [--json]");
+  }
+
+  const runtime = await resolveHarnessRuntime(args);
+  const artifacts = await runtime.getArtifacts(runId);
+  printHarnessPayload(artifacts, hasFlag(args, "--json"));
+}
+
+async function runHarnessCheckpoint(args: string[]): Promise<void> {
+  const [runId] = readPositionalArgs(args);
+  if (!runId) {
+    throw new Error("Usage: capstan harness:checkpoint <runId> [--root <dir>] [--json]");
+  }
+
+  const runtime = await resolveHarnessRuntime(args);
+  const checkpoint = await runtime.getCheckpoint(runId);
+
+  if (!checkpoint) {
+    throw new Error(`Harness checkpoint not found: ${runId}`);
+  }
+
+  printHarnessPayload(checkpoint, hasFlag(args, "--json"));
+}
+
+async function runHarnessPause(args: string[]): Promise<void> {
+  const [runId] = readPositionalArgs(args);
+  if (!runId) {
+    throw new Error("Usage: capstan harness:pause <runId> [--root <dir>] [--json]");
+  }
+
+  const runtime = await resolveHarnessRuntime(args);
+  const run = await runtime.pauseRun(runId);
+  printHarnessPayload(run, hasFlag(args, "--json"));
+}
+
+async function runHarnessCancel(args: string[]): Promise<void> {
+  const [runId] = readPositionalArgs(args);
+  if (!runId) {
+    throw new Error("Usage: capstan harness:cancel <runId> [--root <dir>] [--json]");
+  }
+
+  const runtime = await resolveHarnessRuntime(args);
+  const run = await runtime.cancelRun(runId);
+  printHarnessPayload(run, hasFlag(args, "--json"));
+}
+
+async function runHarnessReplay(args: string[]): Promise<void> {
+  const [runId] = readPositionalArgs(args);
+  if (!runId) {
+    throw new Error("Usage: capstan harness:replay <runId> [--root <dir>] [--json]");
+  }
+
+  const runtime = await resolveHarnessRuntime(args);
+  const report = await runtime.replayRun(runId);
+  printHarnessPayload(report, hasFlag(args, "--json"));
+}
+
+async function runHarnessPaths(args: string[]): Promise<void> {
+  const runtime = await resolveHarnessRuntime(args);
+  printHarnessPayload(runtime.getPaths(), hasFlag(args, "--json"));
+}
+
 // ---------------------------------------------------------------------------
 // capstan add
 // ---------------------------------------------------------------------------
@@ -1761,8 +2263,9 @@ function printHelp(): void {
 
   group("Development", [
     ["dev",   "Start dev server with live reload"],
-    ["build [--static]", "Build for production (--static pre-renders SSG pages)"],
-    ["start", "Start production server"],
+    ["build [--static] [--target <node-standalone|docker|vercel-node|vercel-edge|cloudflare|fly>]", "Build for production targets"],
+    ["start [--from <dir>]", "Start production server from the current project or a standalone output"],
+    ["deploy:init [--target <docker|vercel-node|vercel-edge|cloudflare|fly>]", "Generate root deployment files for a target"],
   ]);
 
   group("Scaffolding", [
@@ -1779,13 +2282,25 @@ function printHelp(): void {
   ]);
 
   group("Verification", [
-    ["verify", "Run 8-step verification cascade"],
+    ["verify [--deployment] [--target <target>]", "Run runtime or deployment verification"],
   ]);
 
   group("Agent Protocols", [
     ["mcp",            "Start MCP server (stdio)"],
     ["agent:manifest", "Print agent manifest JSON"],
     ["agent:openapi",  "Print OpenAPI spec JSON"],
+  ]);
+
+  group("Harness Runtime", [
+    ["harness:list",      "List persisted harness runs"],
+    ["harness:get",       "Read one persisted run record"],
+    ["harness:events",    "Read runtime events (optionally scoped to one run)"],
+    ["harness:artifacts", "List artifacts for one run"],
+    ["harness:checkpoint","Read the persisted loop checkpoint for a run"],
+    ["harness:pause",     "Request cooperative pause for a running run"],
+    ["harness:cancel",    "Request cancellation for a run"],
+    ["harness:replay",    "Replay events and verify stored run state"],
+    ["harness:paths",     "Print harness runtime filesystem paths"],
   ]);
 
   console.log(`  Run ${pc.cyan("capstan <command> --help")} for details.\n`);

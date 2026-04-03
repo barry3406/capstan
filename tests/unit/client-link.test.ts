@@ -133,6 +133,16 @@ describe("Link click interception logic", () => {
     expect(href.startsWith("http") || href.startsWith("//") || href.startsWith("#")).toBe(true);
   });
 
+  test("javascript: link is not intercepted", () => {
+    const href = "javascript:void(0)";
+    expect(href.startsWith("http") || href.startsWith("//") || href.startsWith("#") || href.startsWith("mailto:") || href.startsWith("tel:") || href.startsWith("javascript:") || href.startsWith("data:")).toBe(true);
+  });
+
+  test("data: link is not intercepted", () => {
+    const href = "data:text/plain,hello";
+    expect(href.startsWith("http") || href.startsWith("//") || href.startsWith("#") || href.startsWith("mailto:") || href.startsWith("tel:") || href.startsWith("javascript:") || href.startsWith("data:")).toBe(true);
+  });
+
   test("internal path is intercepted", () => {
     const href = "/about";
     expect(href.startsWith("http") || href.startsWith("//") || href.startsWith("#")).toBe(false);

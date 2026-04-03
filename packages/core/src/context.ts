@@ -22,7 +22,11 @@ export function createContext(honoCtx: HonoContext): CapstanContext {
   return {
     auth: existingAuth ?? anonymousAuth,
     request: honoCtx.req.raw,
-    env: process.env as Record<string, string | undefined>,
+    env: (
+      typeof process !== "undefined" && process.env
+        ? process.env
+        : {}
+    ) as Record<string, string | undefined>,
     honoCtx,
   };
 }

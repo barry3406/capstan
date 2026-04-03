@@ -28,19 +28,8 @@ export class NavigationCache {
   }
 
   get(url: string): NavigationPayload | undefined {
-    const entry = this.entries.get(url);
-    if (!entry) return undefined;
-
-    // Check TTL
-    if (Date.now() - entry.insertedAt > this.ttlMs) {
-      this.entries.delete(url);
-      return undefined;
-    }
-
-    // Move to end (most recently used) — Map preserves insertion order
-    this.entries.delete(url);
-    this.entries.set(url, entry);
-    return entry.payload;
+    const entry = this.read(url, true);
+    return entry?.payload;
   }
 
   set(url: string, payload: NavigationPayload): void {
@@ -59,7 +48,7 @@ export class NavigationCache {
   }
 
   has(url: string): boolean {
-    return this.get(url) !== undefined;
+    return this.read(url, true) !== undefined;
   }
 
   delete(url: string): boolean {
@@ -72,5 +61,26 @@ export class NavigationCache {
 
   get size(): number {
     return this.entries.size;
+  }
+
+  peek(url: string): NavigationPayload | undefined {
+    return this.read(url, false)?.payload;
+  }
+
+  private read(url: string, touch: boolean): CacheEntry | undefined {
+    const entry = this.entries.get(url);
+    if (!entry) return undefined;
+
+    if (Date.now() - entry.insertedAt > this.ttlMs) {
+      this.entries.delete(url);
+      return undefined;
+    }
+
+    if (touch) {
+      this.entries.delete(url);
+      this.entries.set(url, entry);
+    }
+
+    return entry;
   }
 }

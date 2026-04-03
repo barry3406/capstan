@@ -9,6 +9,13 @@ import {
   healthApi,
   policiesIndex,
   gitignore,
+  dockerfile,
+  flyDockerfile,
+  dockerignore,
+  envExample,
+  flyToml,
+  vercelConfig,
+  wranglerConfig,
   agentsMd,
   mainCss,
   ticketModel,
@@ -62,8 +69,9 @@ export async function scaffoldProject(config: {
   projectName: string;
   template: "blank" | "tickets";
   outputDir: string;
+  deployTarget?: "docker" | "vercel-node" | "vercel-edge" | "cloudflare" | "fly";
 }): Promise<void> {
-  const { projectName, template, outputDir } = config;
+  const { projectName, template, outputDir, deployTarget } = config;
   const title = toTitle(projectName);
 
   // Files shared by every template
@@ -89,6 +97,37 @@ export async function scaffoldProject(config: {
     );
   }
 
+  if (deployTarget === "docker") {
+    files.push(
+      { path: "Dockerfile", content: dockerfile() },
+      { path: ".dockerignore", content: dockerignore() },
+      { path: ".env.example", content: envExample() },
+    );
+  }
+
+  if (deployTarget === "vercel-node" || deployTarget === "vercel-edge") {
+    files.push(
+      { path: "vercel.json", content: vercelConfig(deployTarget) },
+      { path: ".env.example", content: envExample() },
+    );
+  }
+
+  if (deployTarget === "cloudflare") {
+    files.push(
+      { path: "wrangler.toml", content: wranglerConfig(projectName) },
+      { path: ".env.example", content: envExample() },
+    );
+  }
+
+  if (deployTarget === "fly") {
+    files.push(
+      { path: "Dockerfile", content: flyDockerfile() },
+      { path: ".dockerignore", content: dockerignore() },
+      { path: "fly.toml", content: flyToml(projectName) },
+      { path: ".env.example", content: envExample() },
+    );
+  }
+
   // Ensure the empty directories the spec calls for exist even when no files
   // land in them (e.g. models/ and migrations/ for the blank template).
   const emptyDirs = ["app/models", "app/migrations"];
@@ -98,5 +137,7 @@ export async function scaffoldProject(config: {
 
   await writeFiles(outputDir, files);
 
-  console.log(`\n  Scaffolded "${projectName}" with the "${template}" template.`);
+  console.log(
+    `\n  Scaffolded "${projectName}" with the "${template}" template${deployTarget ? ` (+ ${deployTarget} deploy files)` : ""}.`,
+  );
 }

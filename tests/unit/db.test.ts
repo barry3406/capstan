@@ -8,6 +8,7 @@ import {
   defineModel,
   generateDrizzleSchema,
   createDatabase,
+  planMigration,
   generateMigration,
   applyMigration,
 } from "@zauso-ai/capstan-db";
@@ -398,12 +399,12 @@ describe("generateDrizzleSchema", () => {
     expect(schema).not.toContain("datetime('now')");
   });
 
-  it("generates text id primaryKey for postgres", () => {
+  it("generates uuid id primaryKey with defaultRandom for postgres", () => {
     const model = defineModel("Item", {
       fields: { id: field.id() },
     });
     const schema = generateDrizzleSchema([model], "postgres");
-    expect(schema).toContain('text("id").primaryKey()');
+    expect(schema).toContain('uuid("id").primaryKey().defaultRandom()');
   });
 
   // --- MySQL schema generation ---
@@ -518,7 +519,7 @@ describe("generateDrizzleSchema", () => {
     expect(schema).toContain('varchar("id", { length: 36 }).primaryKey()');
   });
 
-  it("uses NOW() for default timestamps in mysql", () => {
+  it("uses CURRENT_TIMESTAMP for default timestamps in mysql", () => {
     const model = defineModel("Log", {
       fields: {
         id: field.id(),
@@ -527,7 +528,7 @@ describe("generateDrizzleSchema", () => {
     });
 
     const schema = generateDrizzleSchema([model], "mysql");
-    expect(schema).toContain("(NOW())");
+    expect(schema).toContain("CURRENT_TIMESTAMP");
     expect(schema).not.toContain("datetime('now')");
   });
 
@@ -572,12 +573,19 @@ describe("createDatabase", () => {
     try { require("node:fs").unlinkSync(dbPath); } catch {}
   });
 
-  it("throws helpful error when pg is not installed for postgres provider", async () => {
-    // pg is not installed in the test environment, so this should throw
-    // a helpful error message about installing pg.
-    await expect(
-      createDatabase({ provider: "postgres" as const, url: "postgres://localhost" }),
-    ).rejects.toThrow("pg");
+  it("returns a postgres runtime when the driver is installed", async () => {
+    const database = await createDatabase({
+      provider: "postgres" as const,
+      url: "postgres://localhost:5432/capstan_test",
+    });
+
+    expect(database.provider).toBe("postgres");
+    expect(typeof database.query).toBe("function");
+    expect(typeof database.execute).toBe("function");
+    expect(typeof database.transaction).toBe("function");
+    expect(typeof database.model).toBe("function");
+
+    await database.close();
   });
 });
 
@@ -624,15 +632,21 @@ describe("generateMigration", () => {
     expect(sql[0]).toContain("NOT NULL");
   });
 
-  it("generates DROP TABLE for removed models", () => {
+  it("only generates DROP TABLE for removed models when destructive changes are enabled", () => {
     const model = defineModel("OldThing", {
       fields: { id: field.id() },
     });
 
     const sql = generateMigration([model], []);
-    expect(sql.length).toBe(1);
-    // The pluralise function lowercases the first letter: "OldThing" -> "oldThings"
-    expect(sql[0]).toContain("DROP TABLE IF EXISTS oldThings");
+    expect(sql).toEqual([]);
+
+    const plan = planMigration([model], []);
+    expect(plan.issues).toHaveLength(1);
+    expect(plan.issues[0]?.code).toBe("DROP_TABLE");
+
+    const destructiveSql = generateMigration([model], [], { allowDestructive: true });
+    expect(destructiveSql.length).toBe(1);
+    expect(destructiveSql[0]).toContain("DROP TABLE IF EXISTS oldThings");
   });
 
   it("generates CREATE INDEX statements for new indexes", () => {

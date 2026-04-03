@@ -1,3 +1,5 @@
+import { createDatabaseRuntime } from "./runtime.js";
+import type { DatabaseRuntime, SqlMutationResult, SqlRuntimeAdapter } from "./runtime.js";
 import type { DatabaseConfig } from "./types.js";
 
 // Helper to dynamically import optional peer dependencies without TypeScript
@@ -7,11 +9,10 @@ async function importPeer(specifier: string): Promise<any> {
   return import(specifier);
 }
 
-export interface DatabaseInstance {
-  /** The Drizzle ORM database instance. */
-  db: unknown;
-  /** Close the underlying database connection. */
-  close: () => void;
+export interface DatabaseInstance extends DatabaseRuntime {}
+
+function normalizeParams(params?: unknown[]): unknown[] {
+  return params ?? [];
 }
 
 /**
@@ -106,13 +107,41 @@ async function createSqliteDatabase(url: string): Promise<DatabaseInstance> {
   sqlite.pragma("journal_mode = WAL");
 
   const db = drizzle({ client: sqlite });
-
-  return {
-    db,
-    close() {
-      sqlite.close();
+  const adapter: SqlRuntimeAdapter = {
+    provider: "sqlite",
+    async query(sql, params) {
+      const statement = sqlite.prepare(sql);
+      return statement.all(...normalizeParams(params)) as Record<string, unknown>[];
+    },
+    async execute(sql, params) {
+      const statement = sqlite.prepare(sql);
+      const normalized = sql.trim().toUpperCase();
+      if (normalized.startsWith("SELECT") || normalized.includes(" RETURNING ")) {
+        const rows = statement.all(...normalizeParams(params)) as Record<string, unknown>[];
+        return { affectedRows: rows.length, rows };
+      }
+      const result = statement.run(...normalizeParams(params));
+      return { affectedRows: Number(result.changes ?? 0) };
+    },
+    async transaction<T>(fn: (adapter: SqlRuntimeAdapter) => Promise<T>): Promise<T> {
+      sqlite.exec("BEGIN");
+      try {
+        const result = await fn(adapter);
+        sqlite.exec("COMMIT");
+        return result;
+      } catch (error) {
+        sqlite.exec("ROLLBACK");
+        throw error;
+      }
     },
   };
+
+  return createDatabaseRuntime(
+    db,
+    "sqlite",
+    () => sqlite.close(),
+    adapter,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -147,13 +176,59 @@ async function createPostgresDatabase(url: string): Promise<DatabaseInstance> {
   const pool = new Pool({ connectionString: url });
 
   const db = drizzle({ client: pool });
+  const rootAdapter: SqlRuntimeAdapter = {
+    provider: "postgres",
+    async query(sql, params) {
+      const result = await pool.query(sql, normalizeParams(params));
+      return result.rows as Record<string, unknown>[];
+    },
+    async execute(sql, params) {
+      const result = await pool.query(sql, normalizeParams(params));
+      return {
+        affectedRows: result.rowCount ?? result.rows.length,
+        rows: result.rows as Record<string, unknown>[],
+      };
+    },
+    async transaction<T>(fn: (adapter: SqlRuntimeAdapter) => Promise<T>): Promise<T> {
+      const client = await pool.connect();
+      const adapter: SqlRuntimeAdapter = {
+        provider: "postgres",
+        async query(statement, params) {
+          const result = await client.query(statement, normalizeParams(params));
+          return result.rows as Record<string, unknown>[];
+        },
+        async execute(statement, params) {
+          const result = await client.query(statement, normalizeParams(params));
+          return {
+            affectedRows: result.rowCount ?? result.rows.length,
+            rows: result.rows as Record<string, unknown>[],
+          };
+        },
+        async transaction<U>(innerFn: (adapter: SqlRuntimeAdapter) => Promise<U>): Promise<U> {
+          return innerFn(adapter);
+        },
+      };
 
-  return {
-    db,
-    close() {
-      pool.end();
+      await client.query("BEGIN");
+      try {
+        const result = await fn(adapter);
+        await client.query("COMMIT");
+        return result;
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
     },
   };
+
+  return createDatabaseRuntime(
+    db,
+    "postgres",
+    () => pool.end(),
+    rootAdapter,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -187,14 +262,67 @@ async function createMysqlDatabase(url: string): Promise<DatabaseInstance> {
 
   const pool = createPool({ uri: url });
   const db = drizzle({ client: pool });
+  function normalizeMysqlRows(result: unknown): Record<string, unknown>[] {
+    return Array.isArray(result) ? result as Record<string, unknown>[] : [];
+  }
 
-  return {
-    db,
-    close() {
-      // The interface is synchronous; fire-and-forget the async pool shutdown.
-      void pool.end();
+  const rootAdapter: SqlRuntimeAdapter = {
+    provider: "mysql",
+    async query(sql, params) {
+      const [rows] = await pool.query(sql, normalizeParams(params));
+      return normalizeMysqlRows(rows);
+    },
+    async execute(sql, params) {
+      const [result] = await pool.query(sql, normalizeParams(params));
+      if (Array.isArray(result)) {
+        return { affectedRows: result.length, rows: result as Record<string, unknown>[] };
+      }
+      const payload = result as { affectedRows?: number };
+      return { affectedRows: payload.affectedRows ?? 0 };
+    },
+    async transaction<T>(fn: (adapter: SqlRuntimeAdapter) => Promise<T>): Promise<T> {
+      const connection = await pool.getConnection();
+      const adapter: SqlRuntimeAdapter = {
+        provider: "mysql",
+        async query(statement, params) {
+          const [rows] = await connection.query(statement, normalizeParams(params));
+          return normalizeMysqlRows(rows);
+        },
+        async execute(statement, params) {
+          const [result] = await connection.query(statement, normalizeParams(params));
+          if (Array.isArray(result)) {
+            return { affectedRows: result.length, rows: result as Record<string, unknown>[] };
+          }
+          const payload = result as { affectedRows?: number };
+          return { affectedRows: payload.affectedRows ?? 0 };
+        },
+        async transaction<U>(innerFn: (adapter: SqlRuntimeAdapter) => Promise<U>): Promise<U> {
+          return innerFn(adapter);
+        },
+      };
+
+      await connection.beginTransaction();
+      try {
+        const result = await fn(adapter);
+        await connection.commit();
+        return result;
+      } catch (error) {
+        await connection.rollback();
+        throw error;
+      } finally {
+        connection.release();
+      }
     },
   };
+
+  return createDatabaseRuntime(
+    db,
+    "mysql",
+    () => {
+      void pool.end();
+    },
+    rootAdapter,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -228,11 +356,36 @@ async function createLibsqlDatabase(url: string): Promise<DatabaseInstance> {
 
   const client = createClient({ url });
   const db = drizzle({ client });
-
-  return {
-    db,
-    close() {
-      client.close();
+  const adapter: SqlRuntimeAdapter = {
+    provider: "libsql",
+    async query(sql, params) {
+      const result = await client.execute({ sql, args: normalizeParams(params) });
+      return result.rows as Record<string, unknown>[];
+    },
+    async execute(sql, params) {
+      const result = await client.execute({ sql, args: normalizeParams(params) });
+      return {
+        affectedRows: Number(result.rowsAffected ?? result.rows.length ?? 0),
+        rows: result.rows as Record<string, unknown>[],
+      };
+    },
+    async transaction<T>(fn: (adapter: SqlRuntimeAdapter) => Promise<T>): Promise<T> {
+      await client.execute("BEGIN");
+      try {
+        const result = await fn(adapter);
+        await client.execute("COMMIT");
+        return result;
+      } catch (error) {
+        await client.execute("ROLLBACK");
+        throw error;
+      }
     },
   };
+
+  return createDatabaseRuntime(
+    db,
+    "libsql",
+    () => client.close(),
+    adapter,
+  );
 }

@@ -77,6 +77,42 @@ function tryMatch(
   return { params, specificity: staticSegments };
 }
 
+function matchesNotFoundScope(scopePattern: string, urlPath: string): boolean {
+  if (scopePattern === "/") {
+    return true;
+  }
+
+  return urlPath === scopePattern || urlPath.startsWith(`${scopePattern}/`);
+}
+
+function countVisibleSegments(urlPattern: string): number {
+  return urlPattern.split("/").filter(Boolean).length;
+}
+
+function normalizeFilePath(value: string): string {
+  return value.replace(/\\/g, "/");
+}
+
+function countDirectoryDepth(manifest: RouteManifest, filePath: string): number {
+  const normalizedRoot = normalizeFilePath(manifest.rootDir).replace(/\/+$/, "");
+  const normalizedFile = normalizeFilePath(filePath);
+
+  if (!normalizedFile.startsWith(normalizedRoot)) {
+    return 0;
+  }
+
+  const relativePath = normalizedFile
+    .slice(normalizedRoot.length)
+    .replace(/^\/+/, "");
+  const segments = relativePath.split("/").filter(Boolean);
+
+  if (segments.length <= 1) {
+    return 0;
+  }
+
+  return segments.slice(0, -1).length;
+}
+
 /**
  * Match a URL path and HTTP method against the route manifest.
  *
@@ -106,8 +142,14 @@ export function matchRoute(
   let best: Candidate | null = null;
 
   for (const route of manifest.routes) {
-    // Skip layout and middleware entries — they are not directly routable
-    if (route.type === "layout" || route.type === "middleware") {
+    // Skip boundary/support entries during direct matching.
+    if (
+      route.type === "layout" ||
+      route.type === "middleware" ||
+      route.type === "loading" ||
+      route.type === "error" ||
+      route.type === "not-found"
+    ) {
       continue;
     }
 
@@ -166,5 +208,47 @@ export function matchRoute(
     }
   }
 
-  return best?.match ?? null;
+  if (best !== null) {
+    return best.match;
+  }
+
+  // not-found is a page fallback. Only apply it to GET/HEAD when no direct
+  // route matched.
+  if (upperMethod !== "GET" && upperMethod !== "HEAD") {
+    return null;
+  }
+
+  let bestNotFound: RouteManifest["routes"][number] | null = null;
+  let bestVisibleDepth = -1;
+  let bestDirectoryDepth = -1;
+
+  for (const route of manifest.routes) {
+    if (route.type !== "not-found") {
+      continue;
+    }
+
+    if (!matchesNotFoundScope(route.urlPattern, normalizedPath)) {
+      continue;
+    }
+
+    const visibleDepth = countVisibleSegments(route.urlPattern);
+    const directoryDepth = countDirectoryDepth(manifest, route.filePath);
+
+    if (
+      bestNotFound === null ||
+      visibleDepth > bestVisibleDepth ||
+      (visibleDepth === bestVisibleDepth && directoryDepth > bestDirectoryDepth) ||
+      (
+        visibleDepth === bestVisibleDepth &&
+        directoryDepth === bestDirectoryDepth &&
+        route.filePath.localeCompare(bestNotFound.filePath) < 0
+      )
+    ) {
+      bestNotFound = route;
+      bestVisibleDepth = visibleDepth;
+      bestDirectoryDepth = directoryDepth;
+    }
+  }
+
+  return bestNotFound ? { route: bestNotFound, params: {} } : null;
 }

@@ -14,7 +14,11 @@ const LOG_LEVEL_RANK: Record<LogLevel, number> = {
 };
 
 function resolveLogLevel(): LogLevel {
-  const raw = (process.env["LOG_LEVEL"] ?? "info").toLowerCase();
+  const raw = (
+    typeof process !== "undefined" && process.env
+      ? process.env["LOG_LEVEL"]
+      : "info"
+  )?.toLowerCase() ?? "info";
   if (raw in LOG_LEVEL_RANK) {
     return raw as LogLevel;
   }

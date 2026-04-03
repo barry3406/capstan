@@ -1,122 +1,211 @@
 # Roadmap
 
-## Planning Rule
+## Purpose
 
-Capstan grows by closing one complete loop at a time.
+Capstan exists to make applications agent-operable by default.
 
-The core loop is:
+This roadmap is not a feature wish list. It is an ordering of work that makes
+one loop more deterministic:
 
-1. A human provides a short product or workflow brief
-2. A coding agent scaffolds a Capstan application (`create-capstan-app`)
-3. Capstan verifies that application with structured diagnostics (`capstan verify`)
-4. A human can use the resulting web application (SSR pages, SPA navigation)
-5. Another agent can consume the same application's capabilities (MCP, A2A, OpenAPI)
-6. The application can be deployed through adapters (Vercel, Fly, Cloudflare, Bun, Node)
+1. A human expresses intent
+2. A coding agent reads the application contract and makes a change
+3. The harness executes work and keeps long-running runs recoverable
+4. Feedback verifies the result and explains failures in structured form
+5. Release turns the result into deployable software with explicit contracts
+6. Humans and other agents operate the same system through shared surfaces
 
-If a milestone does not make that loop more robust, it is not on the critical path.
+If a milestone does not make that loop more legible, executable, verifiable,
+recoverable, or easier to supervise, it is not on the critical path.
 
----
+## Planning Filter
 
-## Shipped
+Every proposed milestone should answer five questions:
 
-### Foundation (v0.1)
+1. How does an agent discover this?
+2. How does an agent execute this?
+3. How does it verify success or failure?
+4. How does it recover or retry?
+5. How does a human supervise or override it?
 
-- **`defineAPI()` + multi-protocol** — one function call exposes HTTP, MCP Tools, A2A Skills, and OpenAPI simultaneously via `CapabilityRegistry`
-- **File-based routing** — `*.api.ts`, `*.page.tsx`, `_layout.tsx`, `_middleware.ts`, dynamic `[param]`, catch-all `[...rest]`
-- **Database layer** — `defineModel()` with Drizzle ORM, field types, relations, auto-migration, auto-CRUD routes
-- **Auth** — JWT sessions, API key auth (agent-friendly), OAuth providers (Google, GitHub)
-- **Policy engine** — `definePolicy()` with `allow` / `deny` / `approve` / `redact` effects
-- **Approval workflow** — human-in-the-loop for agent actions, managed at `/capstan/approvals`
-- **8-step verification** — `capstan verify --json` with structured repair checklist for AI agents
-- **CLI** — `capstan dev`, `build`, `start`, `verify`, `add`, `mcp`, `db:migrate`, `db:push`
-- **Scaffolder** — `create-capstan-app` with interactive prompts and templates
-- **Agent integration** — MCP server (stdio), MCP client, A2A adapter, LangChain tools, agent manifests
-- **AI toolkit** — `@zauso-ai/capstan-ai` standalone: `createAI`, `think()`, `generate()`, memory (remember/recall/forget), agent loop with tool use
+Work that improves only visual novelty, package count, or framework parity does
+not outrank work that reduces entropy in those five dimensions.
 
-### Server Rendering (v0.1)
+## Product Shape Today
 
-- **Streaming SSR** — `renderPage()`, `renderPageStream()` with React
-- **Data loaders** — `defineLoader()`, `useLoaderData()`, in-process `fetch` methods
-- **Layout nesting** — `_layout.tsx` with `<Outlet>`, arbitrary nesting depth
-- **Selective hydration** — `full` / `visible` / `none` per page, `<ServerOnly>`, `<ClientOnly>`, `serverOnly()` guard
-- **React components** — `Image` (responsive srcset, lazy, blur-up), `defineFont()`, `defineMetadata()`, `ErrorBoundary`, `NotFound`
+Capstan already has working pieces across five kernels, but they are not yet
+equally mature.
 
-### Infrastructure (v0.1)
+### Graph
 
-- **WebSocket** — `defineWebSocket()`, `WebSocketRoom`, connection lifecycle
-- **CSS pipeline** — Lightning CSS, Tailwind v4 auto-detection, zero-config
-- **Vite integration** — optional client build pipeline, middleware mode for dev
-- **Deployment adapters** — Vercel, Fly.io, Cloudflare Workers, Bun, Node
-- **Observability** — OpenTelemetry tracing, metrics, circuit breaker, events
-- **Security** — DPoP (RFC 9449), SPIFFE/mTLS, CSRF protection, rate limiting per auth type
-- **Compliance** — EU AI Act `defineCompliance()`, audit logging
-- **State stores** — pluggable `KeyValueStore<T>`, Redis adapter
-- **Plugins** — plugin system with setup context
+- `defineAPI()`, `definePolicy()`, `defineModel()`, file-based routing, and
+  generated manifests establish the machine-readable contract of an app
+- HTTP, MCP, A2A, and OpenAPI projections already come from shared capability
+  definitions
+- resources, capabilities, tasks, policies, artifacts, and views are the
+  current vocabulary for describing an application
 
-### Caching & Render Strategies (latest)
+### Harness
 
-- **Data cache** — `cacheSet` / `cacheGet` with TTL + tags, `cached()` stale-while-revalidate decorator, `cacheInvalidateTag()` bulk invalidation
-- **Response cache** — `responseCacheGet` / `responseCacheSet` for full-page HTML, cross-invalidation with data cache
-- **Render strategies** — `SSRStrategy`, `ISRStrategy` (stale-while-revalidate with background revalidation), `SSGStrategy` (stub)
-- **Page-level control** — `renderMode` (`"ssr"` / `"isr"` / `"ssg"` / `"streaming"`), `revalidate`, `cacheTags` exports
-- **`_loading.tsx` / `_error.tsx`** — file conventions for Suspense fallback and ErrorBoundary, directory-scoped like layouts
+- `@zauso-ai/capstan-ai` provides `think()`, `generate()`, memory, and agent
+  loops
+- harness runtime foundations already exist for durable runs, events,
+  checkpoints, artifacts, browser automation, and filesystem sandboxes
+- recurring agent work is supported through cron-oriented runtime pieces
 
-### Client-Side Router (latest)
+### Surface
 
-- **`<Link>` component** — renders `<a>`, SPA interception, prefetch strategies (`hover` / `viewport` / `none`)
-- **`CapstanRouter`** — navigate, prefetch, subscribe, popstate, View Transitions
-- **Navigation payload** — server returns JSON via `X-Capstan-Nav: 1`, morphdom for server components, React reconciliation for client components
-- **Prefetching** — `PrefetchManager` with IntersectionObserver (viewport) and hover (80ms delay)
-- **Scroll restoration** — sessionStorage-based, keyed by `history.state`
-- **View Transitions** — `withViewTransition()` wraps DOM mutations in `document.startViewTransition()`, graceful fallback
-- **React hooks** — `useNavigate()`, `useRouterState()`, `NavigationProvider`
-- **Manifest** — `window.__CAPSTAN_MANIFEST__` injected in full-page HTML, `bootstrapClient()` global click delegation
+- React SSR, streaming, loaders, layouts, and SPA navigation provide the human
+  application shell
+- generated control-plane and human-surface foundations already exist in
+  scaffolded app output
+- approval and policy semantics already influence what humans and agents can do
 
----
+### Feedback
 
-## Next
+- `capstan verify --json` provides structured diagnostics for coding agents
+- cross-protocol checks, runtime smoke checks, and generated-app assertions are
+  already part of the quality loop
+- the repo already treats verification as a first-class product capability, not
+  just a test command
 
-### Phase 3: Static Site Generation
+### Release
 
-- **`SSGStrategy`** — full implementation (currently falls back to SSR)
-- **`generateStaticParams()`** — page export that returns an array of params to prerender at build time
-- **`capstan build --static`** — scan routes, call `generateStaticParams()`, prerender HTML to `dist/`
-- **Hybrid output** — mix SSR, ISR, and SSG pages in the same app
+- `capstan build` and `capstan start` already produce explicit deployable output
+- deployment manifests, standalone bundles, and first-party targets for
+  Node, Docker, Vercel, Cloudflare, and Fly are now part of the current
+  release contract
+- `capstan verify --deployment` now checks target-specific artifacts and
+  runtime risks before shipping
 
-### Phase 4: Navigation Refinements
+## What Capstan Is Actually Building
 
-- **Per-element scroll** — restore scroll for specific scrollable containers, not just `window`
-- **Hash fragment navigation** — smooth scroll to `#id` targets
-- **Named View Transitions** — CSS `view-transition-name` integration for element-level animation
-- **HMR upgrade** — move from full-reload SSE to module-level hot updates (page morphing, CSS stylesheet swap)
+Capstan is not trying to become a generic CRUD generator, a thin AI SDK
+wrapper, or a page-first framework with agent extras bolted on later.
 
-### Phase 5: React Server Components
+The core product is:
 
-- **Full RSC protocol** — server component serialization, client/server component boundary
-- **Streaming boundaries** — incremental streaming with per-component Suspense
-- **Server Actions** — form submissions that call server functions directly
-- **Partial prerendering** — static shell with dynamic holes
+- a machine-readable application contract
+- a harness that can run and recover agent work
+- shared human and machine surfaces over that contract
+- a feedback system that closes the repair loop
+- a release layer that keeps deployments explicit and operable
 
-### Phase 6: UI Surface Generation
+Frontend ergonomics matter, but only insofar as they strengthen that loop.
 
-- **`surface-react`** — generated CRUD pages from `defineModel()` + `defineAPI()` definitions
-- **`surface-web`** — embeddable web components for agent-operable UIs
-- **Admin dashboard** — auto-generated model browser, API explorer, approval management
+## Near-Term Priorities
 
-### Phase 7: Release Workflows
+### 1. Contract Convergence
 
-- **Structured release** — `capstan release` with environment promotion (dev -> staging -> prod)
-- **Rollback automation** — automatic rollback on health check failure
-- **Migration safety gates** — database migration verification before deploy
-- **Deployment traceability** — link releases to git commits, verification results, and approval records
+Capstan needs one coherent application contract that the runtime, scaffolder,
+verifier, and generated surfaces all agree on.
 
----
+Priority work:
+
+- converge file-based apps, generated apps, manifests, and verification onto
+  one machine-readable model
+- make resources, capabilities, tasks, policies, artifacts, and views
+  discoverable from the same source
+- reduce drift between generated files, runtime behavior, docs, and repair
+  guidance
+- make contract snapshots and diffs stable enough for tooling, CI, and agents
+
+### 2. Operator Surfaces
+
+The next surface milestone is not "generic admin UI." It is a first-party
+operator surface for supervision.
+
+Priority work:
+
+- generate a human surface from capabilities, tasks, policies, approvals,
+  artifacts, and views
+- provide a top-level attention inbox and grouped queue lanes for durable work
+- support task-scoped, resource-scoped, and route-scoped drill-down without
+  losing breadcrumb context
+- expose approve, provide-input, retry, cancel, and inspect flows through the
+  same runtime contracts that agents use
+- later, factor stable pieces into embeddable control-plane widgets
+
+### 3. Durable Harness Execution
+
+The harness has to become a dependable runtime for long-running agent work, not
+just a local utility.
+
+Priority work:
+
+- make checkpoints, approvals, input requests, retries, replay, and recovery
+  semantics more explicit
+- tighten browser, shell, and filesystem runtime contracts
+- improve run inspection, event streaming, artifact capture, and compaction
+- make recovery paths legible to both operators and coding agents
+
+### 4. Feedback And Repair
+
+Capstan wins when agents can converge without guesswork.
+
+Priority work:
+
+- expand structured verification around contract drift, runtime drift, surface
+  drift, and release drift
+- keep generated-app assertions and runtime smoke tests as first-class product
+  behavior
+- produce better repair checklists and more actionable failure categories for
+  agents
+- add stronger regression coverage for long-running workflows and supervised
+  operator flows
+
+### 5. Structured Release
+
+Release should become the final contract, not an afterthought after `build`.
+
+Priority work:
+
+- make environment shape, secret requirements, migrations, and rollout gates
+  explicit
+- support preview, promote, rollback, and release history as structured flows
+- connect verification outcomes and deployment contracts to runtime release
+  records
+- keep platform targets, deployment verification, and release records aligned
+  as preview/promote/rollback land
+
+## Supporting Work
+
+The following work still matters, but it is supporting work unless it directly
+strengthens the main loop.
+
+### Frontend Runtime Polish
+
+- finish SSG where it improves generated previews or operator-facing apps
+- continue SPA router polish, cache behavior, and loading/error ergonomics
+- add RSC, server actions, or partial prerendering only when they reduce
+  entropy instead of increasing framework complexity
+
+### Protocol And Integration Breadth
+
+- continue improving MCP, A2A, OpenAPI, and transport-level execution quality
+- deepen external tool and connector stories where they help real operator or
+  agent workflows
+- prefer shared runtime semantics over protocol-specific feature forks
+
+## De-Prioritized Narratives
+
+The following are no longer good anchors for the roadmap:
+
+- generic CRUD page generation as a product identity
+- standalone surface package proliferation as a strategy
+- feature-parity chasing with Next.js when it does not improve agent operation
+- adding more abstractions before the graph, harness, surface, feedback, and
+  release loop is tighter
 
 ## Success Definition
 
-Capstan succeeds when a coding agent can take a short brief and produce an application where:
+Capstan succeeds when a short brief lets a coding agent produce or change an
+application that:
 
-- Humans can operate it through a polished web interface with SPA navigation
-- AI agents can consume it natively through MCP, A2A, and OpenAPI
-- Capstan can validate, inspect, and repair it with structured diagnostics
-- The application can be deployed and released with confidence through adapters and safety gates
+- is legible as resources, capabilities, tasks, policies, artifacts, and views
+- can be executed by agents through low-entropy machine surfaces
+- can be supervised by humans through a shared operator surface
+- can explain failures in structured terms and suggest concrete repair paths
+- can recover long-running work without ad hoc manual debugging
+- can be promoted through a machine-readable release workflow
+
+That is the roadmap: not "more features," but a tighter, more operable loop.

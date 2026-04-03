@@ -4,6 +4,7 @@ import type { ReactElement } from "react";
 import { PageContext } from "./loader.js";
 import { OutletProvider } from "./layout.js";
 import { ErrorBoundary } from "./error-boundary.js";
+import { generateMetadataElements } from "./metadata.js";
 import type {
   HydrationMode,
   RenderPageOptions,
@@ -64,6 +65,164 @@ function DocumentShell(props: { children?: ReactElement }) {
   );
 }
 
+function wrapWithLayouts(
+  content: ReactElement,
+  options: RenderPageOptions,
+): ReactElement {
+  const { layouts } = options;
+  let wrappedContent = content;
+
+  for (let i = layouts.length - 1; i >= 0; i--) {
+    const layout = layouts[i]!;
+    const layoutKey = options.layoutKeys?.[i];
+
+    const outlet = layoutKey
+      ? createElement("div", { "data-capstan-outlet": layoutKey }, wrappedContent)
+      : wrappedContent;
+
+    const wrapped = createElement(OutletProvider, {
+      outlet,
+      children: createElement(layout.default, {}),
+    });
+
+    wrappedContent = layoutKey
+      ? createElement("div", { "data-capstan-layout": layoutKey }, wrapped)
+      : wrapped;
+  }
+
+  return wrappedContent;
+}
+
+function buildPageTree(
+  options: RenderPageOptions,
+  loaderData: unknown,
+  content: ReactElement,
+  includeDocumentShell: boolean,
+  includeMetadata: boolean,
+): ReactElement {
+  const contextValue = {
+    loaderData,
+    params: options.params,
+    auth: options.loaderArgs.ctx.auth,
+  };
+
+  const wrappedContent = wrapWithLayouts(content, options);
+  const pageMetadata = (options.pageModule as RenderPageOptions["pageModule"] & {
+    metadata?: unknown;
+  }).metadata;
+  const metadataElements =
+    includeMetadata && pageMetadata && typeof pageMetadata === "object"
+      ? generateMetadataElements(
+          pageMetadata as Parameters<typeof generateMetadataElements>[0],
+        )
+      : [];
+  const tree = createElement(
+    PageContext.Provider,
+    { value: contextValue },
+    ...metadataElements,
+    wrappedContent,
+  );
+
+  if (includeDocumentShell && options.layouts.length === 0) {
+    return createElement(DocumentShell, null, tree);
+  }
+
+  return tree;
+}
+
+function buildPageContent(options: RenderPageOptions): ReactElement {
+  let content: ReactElement = createElement(options.pageModule.default, {});
+
+  if (options.loadingComponent) {
+    content = createElement(
+      Suspense,
+      { fallback: createElement(options.loadingComponent) },
+      content,
+    );
+  }
+
+  if (options.errorComponent) {
+    content = createElement(
+      ErrorBoundary,
+      {
+        fallback: (error: Error, reset: () => void) =>
+          createElement(options.errorComponent!, { error, reset }),
+      },
+      content,
+    );
+  }
+
+  return content;
+}
+
+function buildErrorFallbackContent(
+  options: RenderPageOptions,
+  error: Error,
+): ReactElement {
+  if (!options.errorComponent) {
+    throw error;
+  }
+
+  return createElement(options.errorComponent, {
+    error,
+    reset: () => {},
+  });
+}
+
+async function collectRenderedStream(
+  stream: ReadableStream<Uint8Array>,
+): Promise<string> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let html = "";
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    html += decoder.decode(value, { stream: true });
+  }
+
+  html += decoder.decode();
+  return html;
+}
+
+function buildStreamOptions(
+  options: RenderPageOptions,
+  loaderData: unknown,
+): Parameters<typeof renderToReadableStream>[1] {
+  const componentType = options.componentType ?? options.pageModule.componentType;
+  const hydrationMode: HydrationMode =
+    options.hydration ?? options.pageModule.hydration ?? "full";
+  const serializedData = escapeJsonForScript(
+    JSON.stringify({
+      loaderData,
+      params: options.params,
+      auth: options.loaderArgs.ctx.auth,
+    }),
+  );
+
+  return componentType === "server"
+    ? {}
+    : hydrationMode === "none"
+      ? {}
+      : hydrationMode === "visible"
+        ? {
+            bootstrapScriptContent: [
+              `window.__CAPSTAN_DATA__ = ${serializedData}`,
+              `(function(){`,
+              `var o=new IntersectionObserver(function(e){`,
+              `if(e[0].isIntersecting){o.disconnect();import('/_capstan/client.js');}`,
+              `});`,
+              `o.observe(document.getElementById('capstan-root'));`,
+              `})();`,
+            ].join(""),
+          }
+        : {
+            bootstrapScriptContent: `window.__CAPSTAN_DATA__ = ${serializedData}`,
+            bootstrapModules: ["/_capstan/client.js"],
+          };
+}
+
 /**
  * Streaming SSR entry point.
  *
@@ -83,117 +242,15 @@ export async function renderPageStream(
     loaderData = await pageModule.loader(loaderArgs);
   }
 
-  // 2. Create the page context value
-  const contextValue = {
+  const content = buildPageContent(options);
+  const finalTree = buildPageTree(
+    options,
     loaderData,
-    params,
-    auth: loaderArgs.ctx.auth,
-  };
-
-  // 3. Render page component
-  let content: ReactElement = createElement(pageModule.default, {});
-
-  // 3a. Wrap in loading boundary (Suspense) if _loading.tsx provided
-  if (options.loadingComponent) {
-    content = createElement(
-      Suspense,
-      { fallback: createElement(options.loadingComponent) },
-      content,
-    );
-  }
-
-  // 3b. Wrap in error boundary if _error.tsx provided
-  if (options.errorComponent) {
-    content = createElement(
-      ErrorBoundary,
-      {
-        fallback: (error: Error, reset: () => void) =>
-          createElement(options.errorComponent!, { error, reset }),
-      },
-      content,
-    );
-  }
-
-  // 4. Wrap in layouts from innermost to outermost.
-  //    When layoutKeys are provided (parallel to layouts), emit stable
-  //    data-capstan-layout / data-capstan-outlet DOM attributes that
-  //    the client router uses as morph targets during SPA navigation.
-  for (let i = layouts.length - 1; i >= 0; i--) {
-    const layout = layouts[i]!;
-    const layoutKey = options.layoutKeys?.[i];
-
-    const outlet = layoutKey
-      ? createElement("div", { "data-capstan-outlet": layoutKey }, content)
-      : content;
-
-    const wrapped = createElement(OutletProvider, {
-      outlet,
-      children: createElement(layout.default, {}),
-    });
-
-    content = layoutKey
-      ? createElement("div", { "data-capstan-layout": layoutKey }, wrapped)
-      : wrapped;
-  }
-
-  // 5. Wrap in PageContext provider
-  const tree = createElement(
-    PageContext.Provider,
-    { value: contextValue },
     content,
+    layouts.length === 0,
+    true,
   );
-
-  // 6. When no layout provides a full document, wrap in a minimal shell so
-  //    React can generate the proper DOCTYPE and <html> structure.
-  const finalTree =
-    layouts.length > 0 ? tree : createElement(DocumentShell, null, tree);
-
-  // 7. Resolve effective component type.  Server components skip ALL
-  //    hydration — no __CAPSTAN_DATA__, no client JS.  This is even more
-  //    aggressive than hydration "none" which still embeds the data payload.
-  const componentType = options.componentType ?? pageModule.componentType;
-
-  // 8. Resolve effective hydration mode.  The explicit option takes
-  //    precedence; otherwise fall back to the page module's export, then
-  //    the default "full" mode.
-  const hydrationMode: HydrationMode =
-    options.hydration ?? pageModule.hydration ?? "full";
-
-  // 9. Build serialised data payload, escaped for safe script embedding
-  const serializedData = escapeJsonForScript(
-    JSON.stringify({ loaderData, params, auth: contextValue.auth }),
-  );
-
-  // 10. Build renderToReadableStream options based on component type and hydration mode.
-  //    Server components: pure HTML, zero client JS, no data embedding
-  //    Client components / default:
-  //    - "full"   : inject data + load client module immediately (default)
-  //    - "visible": inject data + lazy-load client when root scrolls into view
-  //    - "none"   : pure server render, zero client JS
-  const streamOptions: Parameters<typeof renderToReadableStream>[1] =
-    componentType === "server"
-      ? {}
-      : hydrationMode === "none"
-        ? {}
-        : hydrationMode === "visible"
-          ? {
-              bootstrapScriptContent: [
-                `window.__CAPSTAN_DATA__ = ${serializedData}`,
-                `(function(){`,
-                `var o=new IntersectionObserver(function(e){`,
-                `if(e[0].isIntersecting){o.disconnect();import('/_capstan/client.js');}`,
-                `});`,
-                `o.observe(document.getElementById('capstan-root'));`,
-                `})();`,
-              ].join(""),
-            }
-          : {
-              // "full" — original behaviour
-              bootstrapScriptContent: `window.__CAPSTAN_DATA__ = ${serializedData}`,
-              bootstrapModules: ["/_capstan/client.js"],
-            };
-
-  // 11. Render to a ReadableStream with hydration bootstrap
+  const streamOptions = buildStreamOptions(options, loaderData);
   const stream = await renderToReadableStream(finalTree, streamOptions) as ReactDOMStream;
 
   return { stream, allReady: stream.allReady, loaderData, statusCode: 200 };
@@ -217,60 +274,58 @@ export async function renderPartialStream(
     loaderData = await pageModule.loader(loaderArgs);
   }
 
-  const contextValue = { loaderData, params, auth: loaderArgs.ctx.auth };
-
-  // Render page component
-  let content: ReactElement = createElement(pageModule.default, {});
-
-  // Suspense / ErrorBoundary wrapping
-  if (options.loadingComponent) {
-    content = createElement(
-      Suspense,
-      { fallback: createElement(options.loadingComponent) },
-      content,
-    );
-  }
-  if (options.errorComponent) {
-    content = createElement(
-      ErrorBoundary,
-      {
-        fallback: (error: Error, reset: () => void) =>
-          createElement(options.errorComponent!, { error, reset }),
+  let renderError: Error | null = null;
+  const tree = buildPageTree(
+    options,
+    loaderData,
+    buildPageContent(options),
+    false,
+    false,
+  );
+  let stream: ReadableStream<Uint8Array>;
+  try {
+    stream = await renderToReadableStream(tree, {
+      onError(error) {
+        if (renderError === null) {
+          renderError = error instanceof Error ? error : new Error(String(error));
+        }
       },
-      content,
+    });
+  } catch (error) {
+    renderError = error instanceof Error ? error : new Error(String(error));
+    if (!options.errorComponent) {
+      throw renderError;
+    }
+
+    const fallbackTree = buildPageTree(
+      options,
+      loaderData,
+      buildErrorFallbackContent(options, renderError),
+      false,
+      false,
+    );
+    return {
+      html: await collectRenderedStream(
+        await renderToReadableStream(fallbackTree),
+      ),
+      loaderData,
+      statusCode: 200,
+    };
+  }
+  let html = await collectRenderedStream(stream);
+
+  if (renderError && options.errorComponent) {
+    const fallbackTree = buildPageTree(
+      options,
+      loaderData,
+      buildErrorFallbackContent(options, renderError),
+      false,
+      false,
+    );
+    html = await collectRenderedStream(
+      await renderToReadableStream(fallbackTree),
     );
   }
-
-  // Wrap in layouts (same as full render but without document shell)
-  for (let i = layouts.length - 1; i >= 0; i--) {
-    const layout = layouts[i]!;
-    const layoutKey = options.layoutKeys?.[i];
-    const outlet = layoutKey
-      ? createElement("div", { "data-capstan-outlet": layoutKey }, content)
-      : content;
-    const wrapped = createElement(OutletProvider, {
-      outlet,
-      children: createElement(layout.default, {}),
-    });
-    content = layoutKey
-      ? createElement("div", { "data-capstan-layout": layoutKey }, wrapped)
-      : wrapped;
-  }
-
-  // Wrap in PageContext but NOT in DocumentShell
-  const tree = createElement(PageContext.Provider, { value: contextValue }, content);
-
-  // Render to string — no hydration bootstrap for partial renders
-  const stream = await renderToReadableStream(tree);
-  const reader = stream.getReader();
-  const decoder = new TextDecoder();
-  let html = "";
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    html += decoder.decode(value, { stream: true });
-  }
-  html += decoder.decode();
 
   return { html, loaderData, statusCode: 200 };
 }
@@ -284,19 +339,72 @@ export async function renderPartialStream(
 export async function renderPage(
   options: RenderPageOptions,
 ): Promise<RenderResult> {
-  const { stream, loaderData, statusCode } = await renderPageStream(options);
-
-  const reader = stream.getReader();
-  const decoder = new TextDecoder();
-  let html = "";
-
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    html += decoder.decode(value, { stream: true });
+  const { pageModule, loaderArgs } = options;
+  let loaderData: unknown = null;
+  if (pageModule.loader) {
+    loaderData = await pageModule.loader(loaderArgs);
   }
-  // Flush any remaining bytes
-  html += decoder.decode();
 
-  return { html, loaderData, statusCode };
+  let renderError: Error | null = null;
+  const tree = buildPageTree(
+    options,
+    loaderData,
+    buildPageContent(options),
+    options.layouts.length === 0,
+    true,
+  );
+  let stream: ReadableStream<Uint8Array>;
+  try {
+    stream = await renderToReadableStream(tree, {
+      ...buildStreamOptions(options, loaderData),
+      onError(error) {
+        if (renderError === null) {
+          renderError = error instanceof Error ? error : new Error(String(error));
+        }
+      },
+    });
+  } catch (error) {
+    renderError = error instanceof Error ? error : new Error(String(error));
+    if (!options.errorComponent) {
+      throw renderError;
+    }
+
+    const fallbackTree = buildPageTree(
+      options,
+      loaderData,
+      buildErrorFallbackContent(options, renderError),
+      options.layouts.length === 0,
+      true,
+    );
+    return {
+      html: await collectRenderedStream(
+        await renderToReadableStream(
+          fallbackTree,
+          buildStreamOptions(options, loaderData),
+        ),
+      ),
+      loaderData,
+      statusCode: 200,
+    };
+  }
+
+  let html = await collectRenderedStream(stream);
+
+  if (renderError && options.errorComponent) {
+    const fallbackTree = buildPageTree(
+      options,
+      loaderData,
+      buildErrorFallbackContent(options, renderError),
+      options.layouts.length === 0,
+      true,
+    );
+    html = await collectRenderedStream(
+      await renderToReadableStream(
+        fallbackTree,
+        buildStreamOptions(options, loaderData),
+      ),
+    );
+  }
+
+  return { html, loaderData, statusCode: 200 };
 }

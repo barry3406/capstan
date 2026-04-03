@@ -1,5 +1,6 @@
 import { getManifest } from "./manifest.js";
 import { initRouter, getRouter } from "./router.js";
+import { isClientNavigableHref } from "./href.js";
 
 /**
  * Bootstrap the client-side router.
@@ -39,11 +40,7 @@ export function bootstrapClient(): void {
 
     // Skip external, hash-only, and download links
     if (
-      href.startsWith("http") ||
-      href.startsWith("//") ||
-      href.startsWith("#") ||
-      href.startsWith("mailto:") ||
-      href.startsWith("tel:") ||
+      !isClientNavigableHref(href) ||
       anchor.hasAttribute("download") ||
       anchor.getAttribute("target") === "_blank"
     ) {

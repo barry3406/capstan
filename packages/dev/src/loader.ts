@@ -16,6 +16,7 @@ interface CachedModule {
  * the file's current mtime is compared and the cache is reused when unchanged.
  */
 const moduleCache = new Map<string, CachedModule>();
+const virtualModuleRegistry = new Map<string, Record<string, unknown>>();
 
 /**
  * Monotonically increasing generation counter bumped on explicit cache
@@ -36,6 +37,11 @@ let cacheGeneration = 0;
 export async function loadRouteModule(
   filePath: string,
 ): Promise<Record<string, unknown>> {
+  const virtualModule = virtualModuleRegistry.get(filePath);
+  if (virtualModule) {
+    return virtualModule;
+  }
+
   const fileStat = await stat(filePath);
   const cached = moduleCache.get(filePath);
   if (cached && cached.mtimeMs === fileStat.mtimeMs) {
@@ -63,6 +69,30 @@ export function invalidateModuleCache(filePath?: string): void {
   // Bump generation so that a subsequent import of the same file with the
   // same mtime still gets a unique URL, avoiding stale Node ESM cache hits.
   cacheGeneration++;
+}
+
+export function registerVirtualRouteModule(
+  filePath: string,
+  mod: Record<string, unknown>,
+): void {
+  virtualModuleRegistry.set(filePath, mod);
+}
+
+export function registerVirtualRouteModules(
+  modules: Record<string, Record<string, unknown>>,
+): void {
+  for (const [filePath, mod] of Object.entries(modules)) {
+    virtualModuleRegistry.set(filePath, mod);
+  }
+}
+
+export function clearVirtualRouteModules(filePath?: string): void {
+  if (filePath) {
+    virtualModuleRegistry.delete(filePath);
+    return;
+  }
+
+  virtualModuleRegistry.clear();
 }
 
 /**
@@ -121,6 +151,7 @@ export async function loadApiHandlers(filePath: string): Promise<{
 export async function loadPageModule(filePath: string): Promise<{
   default?: unknown;
   loader?: unknown;
+  hydration?: unknown;
   renderMode?: unknown;
   revalidate?: unknown;
   cacheTags?: unknown;
@@ -132,6 +163,7 @@ export async function loadPageModule(filePath: string): Promise<{
   const result: {
     default?: unknown;
     loader?: unknown;
+    hydration?: unknown;
     renderMode?: unknown;
     revalidate?: unknown;
     cacheTags?: unknown;
@@ -141,6 +173,7 @@ export async function loadPageModule(filePath: string): Promise<{
 
   if (mod["default"] !== undefined) result.default = mod["default"];
   if (mod["loader"] !== undefined) result.loader = mod["loader"];
+  if (mod["hydration"] !== undefined) result.hydration = mod["hydration"];
   if (mod["renderMode"] !== undefined) result.renderMode = mod["renderMode"];
   if (mod["revalidate"] !== undefined) result.revalidate = mod["revalidate"];
   if (mod["cacheTags"] !== undefined) result.cacheTags = mod["cacheTags"];
@@ -176,14 +209,17 @@ export const loadErrorModule = loadBoundaryModule;
  */
 export async function loadLayoutModule(filePath: string): Promise<{
   default?: unknown;
+  metadata?: unknown;
 }> {
   const mod = await loadRouteModule(filePath);
 
   const result: {
     default?: unknown;
+    metadata?: unknown;
   } = {};
 
   if (mod["default"] !== undefined) result.default = mod["default"];
+  if (mod["metadata"] !== undefined) result.metadata = mod["metadata"];
 
   return result;
 }

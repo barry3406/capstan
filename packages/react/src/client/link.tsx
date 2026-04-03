@@ -3,6 +3,7 @@ import type { ReactElement, AnchorHTMLAttributes } from "react";
 import type { PrefetchStrategy } from "./types.js";
 import { getRouter } from "./router.js";
 import { getPrefetchManager } from "./prefetch.js";
+import { isClientNavigableHref } from "./href.js";
 
 export interface LinkProps extends AnchorHTMLAttributes<HTMLAnchorElement> {
   /** URL to navigate to. */
@@ -54,7 +55,7 @@ export function Link({
     }
 
     // Only intercept same-origin, non-hash links
-    if (href.startsWith("http") || href.startsWith("//") || href.startsWith("#")) {
+    if (!isClientNavigableHref(href)) {
       return;
     }
 

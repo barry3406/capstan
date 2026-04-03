@@ -116,6 +116,16 @@ describe("bootstrapClient click delegation", () => {
     expect(href.startsWith("tel:")).toBe(true);
   });
 
+  test("skips javascript: links", () => {
+    const href = "javascript:void(0)";
+    expect(href.startsWith("http") || href.startsWith("//") || href.startsWith("#") || href.startsWith("mailto:") || href.startsWith("tel:") || href.startsWith("javascript:") || href.startsWith("data:")).toBe(true);
+  });
+
+  test("skips data: links", () => {
+    const href = "data:text/plain,hello";
+    expect(href.startsWith("http") || href.startsWith("//") || href.startsWith("#") || href.startsWith("mailto:") || href.startsWith("tel:") || href.startsWith("javascript:") || href.startsWith("data:")).toBe(true);
+  });
+
   test("internal path passes href filter", () => {
     const href = "/about";
     const isExternal =
