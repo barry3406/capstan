@@ -32,7 +32,7 @@
     },
     "packages/agent": {
       "name": "@zauso-ai/capstan-agent",
-      "version": "1.0.0-beta.7",
+      "version": "1.0.0-beta.8",
       "dependencies": {
         "@modelcontextprotocol/sdk": "^1.0.0",
       },
@@ -45,31 +45,31 @@
     },
     "packages/ai": {
       "name": "@zauso-ai/capstan-ai",
-      "version": "1.0.0-beta.7",
+      "version": "1.0.0-beta.8",
     },
     "packages/auth": {
       "name": "@zauso-ai/capstan-auth",
-      "version": "1.0.0-beta.7",
+      "version": "1.0.0-beta.8",
     },
     "packages/cli": {
       "name": "@zauso-ai/capstan-cli",
-      "version": "1.0.0-beta.7",
+      "version": "1.0.0-beta.8",
       "bin": {
         "capstan": "./dist/index.js",
       },
       "dependencies": {
-        "@zauso-ai/capstan-agent": "1.0.0-beta.7",
-        "@zauso-ai/capstan-core": "1.0.0-beta.7",
-        "@zauso-ai/capstan-db": "1.0.0-beta.7",
-        "@zauso-ai/capstan-dev": "1.0.0-beta.7",
-        "@zauso-ai/capstan-router": "1.0.0-beta.7",
+        "@zauso-ai/capstan-agent": "1.0.0-beta.8",
+        "@zauso-ai/capstan-core": "1.0.0-beta.8",
+        "@zauso-ai/capstan-db": "1.0.0-beta.8",
+        "@zauso-ai/capstan-dev": "1.0.0-beta.8",
+        "@zauso-ai/capstan-router": "1.0.0-beta.8",
         "picocolors": "^1.1.1",
         "tsx": "^4.19.0",
       },
     },
     "packages/core": {
       "name": "@zauso-ai/capstan-core",
-      "version": "1.0.0-beta.7",
+      "version": "1.0.0-beta.8",
       "dependencies": {
         "hono": "^4.0.0",
         "zod": "^4.0.0",
@@ -83,7 +83,7 @@
     },
     "packages/create-capstan": {
       "name": "create-capstan-app",
-      "version": "1.0.0-beta.7",
+      "version": "1.0.0-beta.8",
       "bin": "dist/index.js",
       "dependencies": {
         "@clack/prompts": "^1.1.0",
@@ -92,7 +92,7 @@
     },
     "packages/db": {
       "name": "@zauso-ai/capstan-db",
-      "version": "1.0.0-beta.7",
+      "version": "1.0.0-beta.8",
       "peerDependencies": {
         "better-sqlite3": ">=9.0.0",
         "drizzle-orm": ">=0.44.0",
@@ -108,12 +108,12 @@
     },
     "packages/dev": {
       "name": "@zauso-ai/capstan-dev",
-      "version": "1.0.0-beta.7",
+      "version": "1.0.0-beta.8",
       "dependencies": {
-        "@zauso-ai/capstan-agent": "1.0.0-beta.7",
-        "@zauso-ai/capstan-auth": "1.0.0-beta.7",
-        "@zauso-ai/capstan-core": "1.0.0-beta.7",
-        "@zauso-ai/capstan-router": "1.0.0-beta.7",
+        "@zauso-ai/capstan-agent": "1.0.0-beta.8",
+        "@zauso-ai/capstan-auth": "1.0.0-beta.8",
+        "@zauso-ai/capstan-core": "1.0.0-beta.8",
+        "@zauso-ai/capstan-router": "1.0.0-beta.8",
         "hono": "^4.0.0",
         "tsx": "^4.0.0",
       },
@@ -128,7 +128,7 @@
     },
     "packages/react": {
       "name": "@zauso-ai/capstan-react",
-      "version": "1.0.0-beta.7",
+      "version": "1.0.0-beta.8",
       "peerDependencies": {
         "react": "^19.0.0",
         "react-dom": "^19.0.0",
@@ -136,7 +136,7 @@
     },
     "packages/router": {
       "name": "@zauso-ai/capstan-router",
-      "version": "1.0.0-beta.7",
+      "version": "1.0.0-beta.8",
     },
   },
   "packages": {

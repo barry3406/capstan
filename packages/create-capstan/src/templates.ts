@@ -2,7 +2,7 @@
 // Template strings for generated Capstan projects
 // ---------------------------------------------------------------------------
 
-const CAPSTAN_PACKAGE_RANGE = "^1.0.0-beta.7";
+const CAPSTAN_PACKAGE_RANGE = "^1.0.0-beta.8";
 
 export function packageJson(
   projectName: string,

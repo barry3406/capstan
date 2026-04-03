@@ -150,7 +150,7 @@ async function loadCliGeneratedRuntimeDeps(): Promise<Record<string, string>> {
 
   return {
     "@zauso-ai/capstan-dev":
-      cliPackageJson.dependencies?.["@zauso-ai/capstan-dev"] ?? "^1.0.0-beta.7",
+      cliPackageJson.dependencies?.["@zauso-ai/capstan-dev"] ?? "^1.0.0-beta.8",
     picocolors: cliPackageJson.dependencies?.picocolors ?? "^1.1.1",
   };
 }

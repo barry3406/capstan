@@ -539,7 +539,7 @@ Detailed guides live in the [`docs/`](docs/) directory:
 
 ## 🧑‍💻 Contributing
 
-Capstan is in active beta (`v1.0.0-beta.7`). Contributions are welcome!
+Capstan is in active beta (`v1.0.0-beta.8`). Contributions are welcome!
 
 ```bash
 git clone https://github.com/barry3406/capstan.git

@@ -535,7 +535,7 @@ bunx capstan verify --deployment --target vercel-edge
 
 ## 🧑‍💻 参与贡献
 
-Capstan 目前处于 Beta 阶段（`v1.0.0-beta.7`），欢迎贡献！
+Capstan 目前处于 Beta 阶段（`v1.0.0-beta.8`），欢迎贡献！
 
 ```bash
 git clone https://github.com/barry3406/capstan.git

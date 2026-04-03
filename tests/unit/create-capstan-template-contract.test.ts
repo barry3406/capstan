@@ -57,9 +57,9 @@ describe("create-capstan scaffold contract", () => {
       dependencies: Record<string, string>;
     };
 
-    expect(pkg.dependencies["@zauso-ai/capstan-cli"]).toBe("^1.0.0-beta.7");
-    expect(pkg.dependencies["@zauso-ai/capstan-auth"]).toBe("^1.0.0-beta.7");
-    expect(pkg.dependencies["@zauso-ai/capstan-db"]).toBe("^1.0.0-beta.7");
+    expect(pkg.dependencies["@zauso-ai/capstan-cli"]).toBe("^1.0.0-beta.8");
+    expect(pkg.dependencies["@zauso-ai/capstan-auth"]).toBe("^1.0.0-beta.8");
+    expect(pkg.dependencies["@zauso-ai/capstan-db"]).toBe("^1.0.0-beta.8");
   });
 
   it("renders a friendlier blank starter page with actionable Capstan links", () => {

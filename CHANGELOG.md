@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.0.0-beta.8] - 2026-04-04
+
+### Added
+- Friendlier `create-capstan-app` onboarding with richer template and deployment prompts
+- Stronger scaffolded landing page and a generated `AGENTS.md` that teaches coding agents the Capstan golden path
+- Publish contract test coverage to ensure public workspace packages ship built `dist/` artifacts
+
+### Fixed
+- `@zauso-ai/capstan-ai` and `@zauso-ai/capstan-cron` package tarballs now include compiled `dist/` output
+- Scaffolded project dependencies and docs now point at the latest beta line consistently
+
 ## [1.0.0-beta.7] - 2026-04-03
 
 ### Added

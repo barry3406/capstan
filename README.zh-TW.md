@@ -514,7 +514,7 @@ Capstan 目前包含 12 個工作區套件：
 
 ## 🧑‍💻 參與貢獻
 
-Capstan 目前為 `v1.0.0-beta.7`。歡迎參與貢獻！
+Capstan 目前為 `v1.0.0-beta.8`。歡迎參與貢獻！
 
 ```bash
 git clone https://github.com/barry3406/capstan.git

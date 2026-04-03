@@ -1,6 +1,6 @@
 {
   "name": "@zauso-ai/capstan-cli",
-  "version": "1.0.0-beta.7",
+  "version": "1.0.0-beta.8",
   "type": "module",
   "bin": {
     "capstan": "./dist/index.js"
@@ -12,14 +12,14 @@
     "dev": "tsx src/index.ts"
   },
   "dependencies": {
-    "@zauso-ai/capstan-ai": "1.0.0-beta.7",
-    "@zauso-ai/capstan-agent": "1.0.0-beta.7",
-    "@zauso-ai/capstan-auth": "1.0.0-beta.7",
-    "@zauso-ai/capstan-core": "1.0.0-beta.7",
-    "@zauso-ai/capstan-db": "1.0.0-beta.7",
-    "@zauso-ai/capstan-dev": "1.0.0-beta.7",
-    "@zauso-ai/capstan-ops": "1.0.0-beta.7",
-    "@zauso-ai/capstan-router": "1.0.0-beta.7",
+    "@zauso-ai/capstan-ai": "1.0.0-beta.8",
+    "@zauso-ai/capstan-agent": "1.0.0-beta.8",
+    "@zauso-ai/capstan-auth": "1.0.0-beta.8",
+    "@zauso-ai/capstan-core": "1.0.0-beta.8",
+    "@zauso-ai/capstan-db": "1.0.0-beta.8",
+    "@zauso-ai/capstan-dev": "1.0.0-beta.8",
+    "@zauso-ai/capstan-ops": "1.0.0-beta.8",
+    "@zauso-ai/capstan-router": "1.0.0-beta.8",
     "picocolors": "^1.1.1",
     "tsx": "^4.19.0"
   },
