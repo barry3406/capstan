@@ -37,9 +37,12 @@ function buildRunRecord(
     updatedAt: now,
     iterations: 0,
     toolCalls: 0,
+    taskCalls: 0,
     maxIterations: 10,
     toolNames: [],
+    taskNames: [],
     artifactIds: [],
+    taskIds: [],
     sandbox: {
       driver: "local",
       mode: "test",

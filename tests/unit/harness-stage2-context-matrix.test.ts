@@ -45,9 +45,12 @@ function createRun(
     updatedAt: stamp,
     iterations: 2,
     toolCalls: 1,
+    taskCalls: 0,
     maxIterations: 10,
     toolNames: ["lookup"],
+    taskNames: [],
     artifactIds: [],
+    taskIds: [],
     sandbox: {
       driver: "local",
       mode: "local",

@@ -1,3 +1,5 @@
+import type { CapstanPageContext } from "../types.js";
+
 /**
  * Client-side router type definitions.
  *
@@ -53,6 +55,8 @@ export interface NavigationPayload {
   html?: string;
   /** Loader data for the target page. */
   loaderData: unknown;
+  /** Auth snapshot for the target page. */
+  auth?: CapstanPageContext["auth"];
   /** Page metadata (title, description, links, etc.). */
   metadata?: ClientMetadata;
   /** Whether the page is a server or client component. */
@@ -117,5 +121,6 @@ export interface NavigateEventDetail {
   url: string;
   loaderData: unknown;
   params: Record<string, string>;
+  auth?: CapstanPageContext["auth"];
   metadata?: ClientMetadata;
 }

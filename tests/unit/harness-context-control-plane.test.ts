@@ -3,6 +3,13 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
+import {
+  createGrant,
+  createHarnessGrantAuthorizer,
+  grantContextActions,
+  grantMemoryActions,
+  grantSummaryActions,
+} from "@zauso-ai/capstan-auth";
 import { createHarness, openHarnessRuntime } from "@zauso-ai/capstan-ai";
 import type {
   LLMMessage,
@@ -41,6 +48,10 @@ async function createTempDir(): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "capstan-harness-context-control-"));
   tempDirs.push(dir);
   return dir;
+}
+
+function createGrantAuthorizer(grants: ReadonlyArray<string | Record<string, unknown>>) {
+  return createHarnessGrantAuthorizer(grants);
 }
 
 describe("openHarnessRuntime context control plane", () => {
@@ -237,5 +248,117 @@ describe("openHarnessRuntime context control plane", () => {
     expect(pausedSummary?.status).toBe("paused");
     expect(pausedContext.sessionMemory?.status).toBe("paused");
     expect(pausedContext.summary?.status).toBe("paused");
+  });
+
+  it("requires matching run-scoped grants for context, summary, and memory reads", async () => {
+    const rootDir = await createTempDir();
+    const harness = await createHarness({
+      llm: mockLLM([
+        JSON.stringify({ tool: "report", arguments: {} }),
+        "done",
+      ]),
+      runtime: { rootDir },
+      context: {
+        enabled: true,
+        autoPromoteObservations: true,
+        autoPromoteSummaries: true,
+      },
+      verify: { enabled: false },
+    });
+
+    const result = await harness.run({
+      goal: "restricted context reads",
+      tools: [
+        {
+          name: "report",
+          description: "creates a report artifact",
+          async execute() {
+            return { status: "ok", body: "report body" };
+          },
+        },
+      ],
+    });
+
+    const deniedControlPlane = await openHarnessRuntime({
+      rootDir,
+      authorize: createGrantAuthorizer([
+        ...grantContextActions("other-run"),
+        ...grantSummaryActions("other-run"),
+        ...grantMemoryActions(["read"], { runId: "other-run" }),
+      ]),
+    });
+
+    await expect(
+      deniedControlPlane.assembleContext(result.runId, {
+        query: "restricted",
+      }),
+    ).rejects.toThrow("Harness access denied for context:read");
+    await expect(deniedControlPlane.getLatestSummary(result.runId)).rejects.toThrow(
+      "Harness access denied for summary:read",
+    );
+    await expect(deniedControlPlane.getSessionMemory(result.runId)).rejects.toThrow(
+      "Harness access denied for memory:read",
+    );
+
+    const authorizedControlPlane = await openHarnessRuntime({
+      rootDir,
+      authorize: createGrantAuthorizer([
+        ...grantContextActions(result.runId),
+        ...grantSummaryActions(result.runId),
+        ...grantMemoryActions(["read"], { runId: result.runId }),
+      ]),
+    });
+
+    const assembled = await authorizedControlPlane.assembleContext(result.runId, {
+      query: "restricted",
+      maxTokens: 1_500,
+    });
+    expect(assembled.runId).toBe(result.runId);
+    expect((await authorizedControlPlane.getLatestSummary(result.runId))?.runId).toBe(
+      result.runId,
+    );
+    expect((await authorizedControlPlane.getSessionMemory(result.runId))?.runId).toBe(
+      result.runId,
+    );
+  });
+
+  it("filters global summary listings and recallMemory by run scope", async () => {
+    const rootDir = await createTempDir();
+    const harness = await createHarness({
+      llm: mockLLM([
+        "first done",
+        "second done",
+      ]),
+      runtime: { rootDir },
+      context: {
+        enabled: true,
+        autoPromoteObservations: true,
+        autoPromoteSummaries: true,
+      },
+      verify: { enabled: false },
+    });
+
+    const first = await harness.run({ goal: "first restricted run" });
+    const second = await harness.run({ goal: "second restricted run" });
+
+    const controlPlane = await openHarnessRuntime({
+      rootDir,
+      authorize: createGrantAuthorizer([
+        createGrant("summary", "list"),
+        ...grantSummaryActions(first.runId),
+        ...grantMemoryActions(["read"], { runId: first.runId }),
+      ]),
+    });
+
+    const summaries = await controlPlane.listSummaries();
+    expect(summaries.map((summary) => summary.runId)).toEqual([first.runId]);
+
+    const memories = await controlPlane.recallMemory({
+      query: "restricted run",
+      minScore: 0,
+      limit: 10,
+    });
+    expect(memories.every((memory) => memory.runId === first.runId)).toBe(true);
+    expect(memories.some((memory) => memory.runId === second.runId)).toBe(false);
   });
 });

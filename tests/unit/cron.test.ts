@@ -201,6 +201,56 @@ describe("capstan-cron", () => {
     expect(runner.getJobs()[0]!.status).toBe("idle");
   });
 
+  it("createBunCronRunner falls back to the deterministic runner when timers are mocked", () => {
+    const runner = createBunCronRunner();
+    const id = runner.add({
+      name: "mocked-timer-job",
+      pattern: "* * * * *",
+      handler: async () => {},
+    });
+
+    expect(id).toBe("cron_1");
+    runner.start();
+    expect(pendingTimers()).toHaveLength(1);
+    runner.stop();
+  });
+
+  it("createCronRunner invokes job cleanup hooks when jobs stop or are removed", async () => {
+    let stopCalls = 0;
+    const runner = createCronRunner();
+
+    const removedId = runner.add({
+      name: "removed-job",
+      pattern: "* * * * *",
+      handler: async () => {},
+      onStop: async () => {
+        stopCalls++;
+      },
+    });
+
+    const stoppedId = runner.add({
+      name: "stopped-job",
+      pattern: "* * * * *",
+      handler: async () => {},
+      onStop: async () => {
+        stopCalls++;
+      },
+    });
+
+    expect(runner.remove(removedId)).toBe(true);
+    await Promise.resolve();
+    expect(stopCalls).toBe(1);
+
+    runner.start();
+    runner.stop();
+    await Promise.resolve();
+    expect(stopCalls).toBe(2);
+
+    expect(runner.remove(stoppedId)).toBe(true);
+    await Promise.resolve();
+    expect(stopCalls).toBe(3);
+  });
+
   it("createAgentCron runs a harness-backed agent loop and forwards the result", async () => {
     let capturedResult: unknown;
 
@@ -237,5 +287,180 @@ describe("capstan-cron", () => {
       result: "done",
       iterations: 1,
     });
+  });
+
+  it("createAgentCron submits runs into a provided harness runtime with cron trigger metadata", async () => {
+    const startCalls: Array<{
+      config: Record<string, unknown>;
+      options: Record<string, unknown> | undefined;
+    }> = [];
+    let queuedRunId = "";
+    let resultMeta: Record<string, unknown> | undefined;
+
+    const harness = {
+      async startRun(
+        config: Record<string, unknown>,
+        options?: Record<string, unknown>,
+      ) {
+        startCalls.push({ config, options });
+        return {
+          runId: "harness-run-cron",
+          result: Promise.resolve({
+            status: "completed",
+            result: "from-runtime",
+            iterations: 3,
+          }),
+        };
+      },
+      async destroy() {
+        throw new Error("external harness should not be destroyed by cron");
+      },
+    };
+
+    const job = createAgentCron({
+      cron: "0 */2 * * *",
+      name: "runtime-backed-cron",
+      timezone: "Asia/Shanghai",
+      goal: () => "Summarize the latest status",
+      run: {
+        about: ["project", "capstan"],
+        maxIterations: 7,
+        systemPrompt: "Stay concise.",
+      },
+      runtime: {
+        harness,
+      },
+      triggerMetadata: {
+        shard: "cn-east",
+      },
+      onQueued(meta) {
+        queuedRunId = meta.runId;
+      },
+      onResult(_result, meta) {
+        resultMeta = meta as Record<string, unknown>;
+      },
+    });
+
+    await job.handler();
+
+    expect(startCalls).toHaveLength(1);
+    expect(startCalls[0]!.config).toMatchObject({
+      goal: "Summarize the latest status",
+      about: ["project", "capstan"],
+      maxIterations: 7,
+      systemPrompt: "Stay concise.",
+    });
+    expect(startCalls[0]!.options).toMatchObject({
+      trigger: {
+        type: "cron",
+        source: "runtime-backed-cron",
+        schedule: {
+          name: "runtime-backed-cron",
+          pattern: "0 */2 * * *",
+          timezone: "Asia/Shanghai",
+        },
+        metadata: {
+          shard: "cn-east",
+        },
+      },
+    });
+    expect(
+      ((startCalls[0]!.options?.trigger as Record<string, unknown>).metadata as Record<string, unknown>)
+        .tickId,
+    ).toEqual(expect.any(String));
+    expect(queuedRunId).toBe("harness-run-cron");
+    expect(resultMeta).toMatchObject({
+      runId: "harness-run-cron",
+      trigger: {
+        type: "cron",
+        source: "runtime-backed-cron",
+      },
+    });
+  });
+
+  it("createAgentCron reuses a factory-created harness until the job stops", async () => {
+    let factoryCalls = 0;
+    let destroyCalls = 0;
+    let runCount = 0;
+
+    const sharedHarness = {
+      async startRun() {
+        runCount++;
+        return {
+          runId: `shared-run-${runCount}`,
+          result: Promise.resolve({
+            status: "completed",
+            result: runCount,
+            iterations: 1,
+          }),
+        };
+      },
+      async destroy() {
+        destroyCalls++;
+      },
+    };
+
+    const job = createAgentCron({
+      cron: "*/10 * * * *",
+      name: "shared-runtime-cron",
+      goal: "noop",
+      runtime: {
+        async createHarness() {
+          factoryCalls++;
+          return sharedHarness;
+        },
+        reuseHarness: true,
+      },
+    });
+
+    await job.handler();
+    await job.handler();
+
+    expect(factoryCalls).toBe(1);
+    expect(destroyCalls).toBe(0);
+    await job.onStop?.();
+    expect(destroyCalls).toBe(1);
+    await job.onStop?.();
+    expect(destroyCalls).toBe(1);
+  });
+
+  it("createAgentCron can create and dispose harnesses per tick when reuseHarness is false", async () => {
+    let factoryCalls = 0;
+    let destroyCalls = 0;
+
+    const job = createAgentCron({
+      cron: "*/15 * * * *",
+      name: "ephemeral-runtime-cron",
+      goal: "noop",
+      runtime: {
+        async createHarness() {
+          factoryCalls++;
+          return {
+            async startRun() {
+              return {
+                runId: `ephemeral-run-${factoryCalls}`,
+                result: Promise.resolve({
+                  status: "completed",
+                  result: "ok",
+                  iterations: 1,
+                }),
+              };
+            },
+            async destroy() {
+              destroyCalls++;
+            },
+          };
+        },
+        reuseHarness: false,
+      },
+    });
+
+    await job.handler();
+    await job.handler();
+
+    expect(factoryCalls).toBe(2);
+    expect(destroyCalls).toBe(2);
+    await job.onStop?.();
+    expect(destroyCalls).toBe(2);
   });
 });

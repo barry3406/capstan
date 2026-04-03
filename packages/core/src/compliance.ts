@@ -27,6 +27,16 @@ export interface AuditEntry {
     type: string;
     userId?: string;
     agentId?: string;
+    actor?: {
+      kind: string;
+      id: string;
+      displayName?: string;
+    };
+    grants?: Array<{
+      resource: string;
+      action: string;
+      scope?: Record<string, string>;
+    }>;
   };
   input: unknown;
   output: unknown;

@@ -125,6 +125,23 @@ function mergeDependencyMaps(
   return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
+function sortStringRecord(
+  value: Record<string, string> | undefined,
+): Record<string, string> | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  return Object.fromEntries(
+    Object.entries(value).sort(([left], [right]) => {
+      if (left === right) {
+        return 0;
+      }
+      return left < right ? -1 : 1;
+    }),
+  ) as Record<string, string>;
+}
+
 async function loadCliGeneratedRuntimeDeps(): Promise<Record<string, string>> {
   const raw = await readFile(CLI_PACKAGE_JSON_URL, "utf-8");
   const cliPackageJson = JSON.parse(raw) as {
@@ -318,70 +335,27 @@ function createPlatformTargetContract(
 export function createDeployTargetContract(
   buildTarget: BuildTarget,
 ): DeployTargetContract {
-  const nodeStandalone: NodeStandaloneTargetContract = {
-    outputDir: "dist/standalone",
-    packageJson: "dist/standalone/package.json",
-    installCommand: "npm install --omit=dev",
-    startCommand: "node dist/_capstan_server.js",
+  return createTargetContracts("dist/standalone", buildTarget);
+}
+
+export function createProjectRootDeployTargetContract(): DeployTargetContract {
+  return {
+    nodeStandalone: {
+      outputDir: "dist",
+      packageJson: "package.json",
+      installCommand: "npm install --omit=dev",
+      startCommand: "capstan start",
+    },
   };
-
-  const contracts: DeployTargetContract = {
-    nodeStandalone,
-  };
-
-  if (buildTarget === "docker" || buildTarget === "fly") {
-    contracts.docker = createDockerContract("dist/standalone");
-  }
-  if (buildTarget === "vercel-node") {
-    contracts.vercelNode = createPlatformTargetContract(buildTarget, "dist/standalone");
-  }
-  if (buildTarget === "vercel-edge") {
-    contracts.vercelEdge = createPlatformTargetContract(buildTarget, "dist/standalone");
-  }
-  if (buildTarget === "cloudflare") {
-    contracts.cloudflare = createPlatformTargetContract(buildTarget, "dist/standalone");
-  }
-  if (buildTarget === "fly") {
-    contracts.fly = createPlatformTargetContract(buildTarget, "dist/standalone");
-  }
-
-  return contracts;
 }
 
 export function createStandaloneDeployManifest(
   manifest: DeployManifest,
   buildTarget: BuildTarget,
 ): DeployManifest {
-  const nodeStandalone: NodeStandaloneTargetContract = {
-    outputDir: ".",
-    packageJson: "package.json",
-    installCommand: "npm install --omit=dev",
-    startCommand: "node dist/_capstan_server.js",
-  };
-
-  const targets: DeployTargetContract = {
-    nodeStandalone,
-  };
-
-  if (buildTarget === "docker" || buildTarget === "fly") {
-    targets.docker = createDockerContract(".");
-  }
-  if (buildTarget === "vercel-node") {
-    targets.vercelNode = createPlatformTargetContract(buildTarget, ".");
-  }
-  if (buildTarget === "vercel-edge") {
-    targets.vercelEdge = createPlatformTargetContract(buildTarget, ".");
-  }
-  if (buildTarget === "cloudflare") {
-    targets.cloudflare = createPlatformTargetContract(buildTarget, ".");
-  }
-  if (buildTarget === "fly") {
-    targets.fly = createPlatformTargetContract(buildTarget, ".");
-  }
-
   return {
     ...manifest,
-    targets,
+    targets: createTargetContracts(".", buildTarget),
   };
 }
 
@@ -395,6 +369,7 @@ export async function createStandalonePackageJson(options: {
     cloneStringRecord(projectPackageJson?.dependencies),
     generatedRuntimeDeps,
   );
+  const sortedRuntimeDependencies = sortStringRecord(runtimeDependencies);
 
   const standalonePackageJson = {
     name: `${projectPackageJson?.name ?? appName}-standalone`,
@@ -410,7 +385,7 @@ export async function createStandalonePackageJson(options: {
     scripts: {
       start: "node ./dist/_capstan_server.js",
     },
-    ...(runtimeDependencies ? { dependencies: runtimeDependencies } : {}),
+    ...(sortedRuntimeDependencies ? { dependencies: sortedRuntimeDependencies } : {}),
     ...(projectPackageJson?.packageManager
       ? { packageManager: projectPackageJson.packageManager }
       : {}),
@@ -1075,4 +1050,38 @@ export function shouldEmitPortableRuntimeBundle(buildTarget: BuildTarget): boole
 
 export function getPortableRuntimeRootDir(): string {
   return PORTABLE_RUNTIME_ROOT;
+}
+
+function createTargetContracts(
+  baseDir: string,
+  buildTarget: BuildTarget,
+): DeployTargetContract {
+  const nodeStandalone: NodeStandaloneTargetContract = {
+    outputDir: baseDir,
+    packageJson: `${baseDir === "." ? "" : `${baseDir}/`}package.json`.replace(/^\//, ""),
+    installCommand: "npm install --omit=dev",
+    startCommand: "node dist/_capstan_server.js",
+  };
+
+  const contracts: DeployTargetContract = {
+    nodeStandalone,
+  };
+
+  if (buildTarget === "docker" || buildTarget === "fly") {
+    contracts.docker = createDockerContract(baseDir);
+  }
+  if (buildTarget === "vercel-node") {
+    contracts.vercelNode = createPlatformTargetContract(buildTarget, baseDir);
+  }
+  if (buildTarget === "vercel-edge") {
+    contracts.vercelEdge = createPlatformTargetContract(buildTarget, baseDir);
+  }
+  if (buildTarget === "cloudflare") {
+    contracts.cloudflare = createPlatformTargetContract(buildTarget, baseDir);
+  }
+  if (buildTarget === "fly") {
+    contracts.fly = createPlatformTargetContract(buildTarget, baseDir);
+  }
+
+  return contracts;
 }

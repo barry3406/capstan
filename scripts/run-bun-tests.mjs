@@ -26,7 +26,10 @@ function collectTestFiles(rootDir) {
   return files.sort();
 }
 
-const testFiles = collectTestFiles(join(process.cwd(), "tests"));
+const cliTestFiles = process.argv.slice(2);
+const testFiles = cliTestFiles.length > 0
+  ? cliTestFiles
+  : collectTestFiles(join(process.cwd(), "tests"));
 
 if (testFiles.length === 0) {
   console.error("[capstan] No test files found under tests/.");

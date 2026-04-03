@@ -1,0 +1,44 @@
+{
+  "name": "@zauso-ai/capstan-ops",
+  "version": "1.0.0-beta.7",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.8.0"
+  },
+  "description": "Semantic operations and observability kernel for Capstan — events, incidents, health, querying, and persistence",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/barry3406/capstan.git",
+    "directory": "packages/ops"
+  },
+  "license": "MIT",
+  "author": "barry3406",
+  "homepage": "https://github.com/barry3406/capstan",
+  "keywords": [
+    "capstan",
+    "observability",
+    "ops",
+    "incidents",
+    "telemetry",
+    "typescript"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}

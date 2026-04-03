@@ -7,7 +7,7 @@ import { createElement } from "react";
 import type { ReactElement } from "react";
 
 import { detectCSSMode, buildCSS } from "@zauso-ai/capstan-dev";
-import { watchStyles } from "@zauso-ai/capstan-dev";
+import { watchRoutes, watchStyles } from "@zauso-ai/capstan-dev";
 import { renderPage } from "@zauso-ai/capstan-react";
 import type {
   PageModule,
@@ -387,6 +387,64 @@ describe("watchStyles", () => {
     activeWatcher.close();
     expect(() => activeWatcher!.close()).not.toThrow();
     activeWatcher = null;
+  });
+});
+
+describe("watchRoutes", () => {
+  let activeWatcher: { close: () => void } | null = null;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "route-watch-"));
+  });
+
+  afterEach(async () => {
+    if (activeWatcher) {
+      try {
+        activeWatcher.close();
+      } catch {}
+      activeWatcher = null;
+    }
+    await rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  });
+
+  it("triggers callback for immediate .tsx route writes even if fs.watch misses the first event", async () => {
+    const routesDir = join(tempDir, "routes");
+    await mkdir(routesDir, { recursive: true });
+    await writeFile(join(routesDir, "index.page.tsx"), "export default function Page(){ return null; }");
+
+    let resolveCallback: (file?: string) => void;
+    const callbackPromise = new Promise<string | undefined>((resolve) => {
+      resolveCallback = resolve;
+    });
+
+    activeWatcher = watchRoutes(routesDir, (changedFile) => {
+      resolveCallback(changedFile);
+    });
+
+    await writeFile(join(routesDir, "index.page.tsx"), "export default function Page(){ return 'updated'; }");
+
+    const result = await Promise.race([
+      callbackPromise,
+      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 800)),
+    ]);
+
+    expect(result).not.toBe("timeout");
+    expect(String(result)).toContain("index.page.tsx");
+  });
+
+  it("does not trigger callback for non-route extensions", async () => {
+    const routesDir = join(tempDir, "routes");
+    await mkdir(routesDir, { recursive: true });
+
+    const callback = mock(() => {});
+    activeWatcher = watchRoutes(routesDir, callback);
+
+    await writeFile(join(routesDir, "README.md"), "# docs");
+    await writeFile(join(routesDir, "notes.txt"), "ignore");
+
+    await new Promise((resolve) => setTimeout(resolve, 450));
+
+    expect(callback).not.toHaveBeenCalled();
   });
 });
 

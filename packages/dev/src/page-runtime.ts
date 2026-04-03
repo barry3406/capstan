@@ -1,5 +1,6 @@
 import {
   createStrategy,
+  normalizePagePath,
   mergeMetadata,
   renderPage,
   renderPageStream,
@@ -16,6 +17,11 @@ import type {
   RenderStrategyResult,
 } from "@zauso-ai/capstan-react";
 import type { NavigationPayload } from "@zauso-ai/capstan-react/client";
+import {
+  createPageRuntimeDiagnostics,
+  runtimeDiagnosticsHeaders,
+  type RuntimeDiagnostic,
+} from "./runtime-diagnostics.js";
 
 export interface PageRuntimePageModule extends PageModule {}
 
@@ -39,6 +45,7 @@ export interface PageRuntimeOptions {
   strategyFactory?: (mode: RenderMode, opts?: Parameters<typeof createStrategy>[1]) => RenderStrategy;
   navHeaderName?: string;
   metadataChain?: unknown[];
+  diagnostics?: RuntimeDiagnostic[];
 }
 
 export interface PageRuntimeBaseResult {
@@ -49,6 +56,7 @@ export interface PageRuntimeBaseResult {
   componentType: "server" | "client";
   renderMode: RenderMode;
   metadata?: NavigationPayload["metadata"];
+  diagnostics?: RuntimeDiagnostic[];
 }
 
 export interface PageRuntimeNavigationResult extends PageRuntimeBaseResult {
@@ -221,12 +229,13 @@ function buildNavigationPayload(
   loaderData: unknown,
   html?: string,
 ): NavigationPayload {
-  const url = new URL(options.request.url).pathname;
+  const url = normalizePagePath(options.request.url);
   const layoutKey = options.layoutKeys?.at(-1) ?? "/";
   const payload: NavigationPayload = {
     url,
     layoutKey,
     loaderData,
+    auth: options.loaderArgs.ctx.auth,
     componentType: normalizeComponentType(options.componentType ?? options.pageModule.componentType),
   };
 
@@ -246,15 +255,17 @@ function buildBaseResult(
   options: PageRuntimeOptions,
   metadata: unknown,
   statusCode: number,
-): Pick<PageRuntimeBaseResult, "url" | "statusCode" | "headers" | "componentType" | "renderMode" | "metadata"> {
+  diagnostics: RuntimeDiagnostic[],
+): Pick<PageRuntimeBaseResult, "url" | "statusCode" | "headers" | "componentType" | "renderMode" | "metadata" | "diagnostics"> {
   const normalizedMetadata = normalizeMetadata(metadata);
   return {
-    url: new URL(options.request.url).pathname,
+    url: normalizePagePath(options.request.url),
     statusCode,
-    headers: {},
+    headers: runtimeDiagnosticsHeaders(diagnostics),
     componentType: normalizeComponentType(options.componentType ?? options.pageModule.componentType),
     renderMode: normalizeRenderMode(options.renderMode ?? options.pageModule.renderMode),
     ...(normalizedMetadata ? { metadata: normalizedMetadata } : {}),
+    ...(diagnostics.length > 0 ? { diagnostics } : {}),
   };
 }
 
@@ -276,19 +287,33 @@ export async function runPageRuntime(options: PageRuntimeOptions): Promise<PageR
   const navHeaderName = options.navHeaderName ?? "X-Capstan-Nav";
   const isNavigationRequest = options.request.headers.get(navHeaderName) === "1";
   const statusCode = options.statusCode ?? 200;
+  const requestPath = normalizePagePath(options.request.url);
 
   if (isNavigationRequest) {
     if (componentType === "server") {
       const partial = await renderPartialStream(renderOptions);
       const payload = buildNavigationPayload(options, metadata, partial.loaderData, partial.html);
       const body = JSON.stringify(payload);
+      const diagnostics = createPageRuntimeDiagnostics(
+        {
+          requestUrl: options.request.url,
+          renderMode,
+          effectiveRenderMode: renderMode,
+          transport,
+          componentType,
+          isNavigationRequest,
+          statusCode,
+        },
+        options.diagnostics,
+      );
 
       return {
         kind: "navigation",
-        ...buildBaseResult(options, metadata, statusCode),
+        ...buildBaseResult(options, metadata, statusCode, diagnostics),
         headers: {
           "content-type": "application/json; charset=utf-8",
           "cache-control": "no-store",
+          ...runtimeDiagnosticsHeaders(diagnostics),
         },
         body,
         payload,
@@ -304,13 +329,26 @@ export async function runPageRuntime(options: PageRuntimeOptions): Promise<PageR
 
     const payload = buildNavigationPayload(options, metadata, loaderData);
     const body = JSON.stringify(payload);
+    const diagnostics = createPageRuntimeDiagnostics(
+      {
+        requestUrl: options.request.url,
+        renderMode,
+        effectiveRenderMode: renderMode,
+        transport,
+        componentType,
+        isNavigationRequest,
+        statusCode,
+      },
+      options.diagnostics,
+    );
 
     return {
       kind: "navigation",
-      ...buildBaseResult(options, metadata, statusCode),
+      ...buildBaseResult(options, metadata, statusCode, diagnostics),
       headers: {
         "content-type": "application/json; charset=utf-8",
         "cache-control": "no-store",
+        ...runtimeDiagnosticsHeaders(diagnostics),
       },
       body,
       payload,
@@ -324,20 +362,36 @@ export async function runPageRuntime(options: PageRuntimeOptions): Promise<PageR
     const strategy = strategyFactory(renderMode, options.strategyOptions);
     const strategyContext = {
       options: renderOptions,
-      url: new URL(options.request.url).pathname,
+      url: requestPath,
       ...(options.pageModule.revalidate !== undefined ? { revalidate: options.pageModule.revalidate } : {}),
       ...(options.pageModule.cacheTags !== undefined ? { cacheTags: options.pageModule.cacheTags } : {}),
     } satisfies Parameters<RenderStrategy["render"]>[0];
     const rendered = await strategy.render(strategyContext);
+    const diagnostics = createPageRuntimeDiagnostics(
+      {
+        requestUrl: options.request.url,
+        renderMode,
+        effectiveRenderMode: renderMode,
+        transport,
+        componentType,
+        isNavigationRequest,
+        statusCode: options.statusCode ?? rendered.statusCode,
+        ...(rendered.cacheStatus !== undefined
+          ? { cacheStatus: rendered.cacheStatus }
+          : {}),
+      },
+      options.diagnostics,
+    );
 
     if (transport === "stream") {
       const wrapped = createStreamFromText(rendered.html);
       return {
         kind: "document",
         transport: "stream",
-        ...buildBaseResult(options, metadata, options.statusCode ?? rendered.statusCode),
+        ...buildBaseResult(options, metadata, options.statusCode ?? rendered.statusCode, diagnostics),
         headers: {
           "content-type": "text/html; charset=utf-8",
+          ...runtimeDiagnosticsHeaders(diagnostics),
         },
         stream: wrapped.stream,
         allReady: wrapped.allReady,
@@ -349,9 +403,10 @@ export async function runPageRuntime(options: PageRuntimeOptions): Promise<PageR
     return {
       kind: "document",
       transport: "html",
-      ...buildBaseResult(options, metadata, options.statusCode ?? rendered.statusCode),
+      ...buildBaseResult(options, metadata, options.statusCode ?? rendered.statusCode, diagnostics),
       headers: {
         "content-type": "text/html; charset=utf-8",
+        ...runtimeDiagnosticsHeaders(diagnostics),
       },
       body: rendered.html,
       html: rendered.html,
@@ -362,12 +417,25 @@ export async function runPageRuntime(options: PageRuntimeOptions): Promise<PageR
 
   if (transport === "stream") {
     const rendered = await renderPageStream(renderOptions);
+    const diagnostics = createPageRuntimeDiagnostics(
+      {
+        requestUrl: options.request.url,
+        renderMode,
+        effectiveRenderMode: renderMode,
+        transport,
+        componentType,
+        isNavigationRequest,
+        statusCode,
+      },
+      options.diagnostics,
+    );
     return {
       kind: "document",
       transport: "stream",
-      ...buildBaseResult(options, metadata, statusCode),
+      ...buildBaseResult(options, metadata, statusCode, diagnostics),
       headers: {
         "content-type": "text/html; charset=utf-8",
+        ...runtimeDiagnosticsHeaders(diagnostics),
       },
       stream: rendered.stream,
       allReady: rendered.allReady,
@@ -376,12 +444,25 @@ export async function runPageRuntime(options: PageRuntimeOptions): Promise<PageR
   }
 
   const rendered = await renderPage(renderOptions);
+  const diagnostics = createPageRuntimeDiagnostics(
+    {
+      requestUrl: options.request.url,
+      renderMode,
+      effectiveRenderMode: renderMode,
+      transport,
+      componentType,
+      isNavigationRequest,
+      statusCode,
+    },
+    options.diagnostics,
+  );
   return {
     kind: "document",
     transport: "html",
-    ...buildBaseResult(options, metadata, statusCode),
+    ...buildBaseResult(options, metadata, statusCode, diagnostics),
     headers: {
       "content-type": "text/html; charset=utf-8",
+      ...runtimeDiagnosticsHeaders(diagnostics),
     },
     body: rendered.html,
     html: rendered.html,

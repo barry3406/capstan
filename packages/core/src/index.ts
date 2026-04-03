@@ -8,6 +8,22 @@ export { defineConfig, env } from "./config.js";
 export { createCapstanApp } from "./server.js";
 export { createContext } from "./context.js";
 export {
+  createCapstanOpsContext,
+  createCapstanOpsRuntime,
+  createRequestIdentity,
+} from "./ops.js";
+export type {
+  CapstanOpsConfig,
+  CapstanOpsContext,
+  CapstanOpsEvent,
+  CapstanHealthSnapshot,
+  CapstanOpsIncident,
+  CapstanOpsQuery,
+  CapstanOpsRuntime,
+  CapstanOpsSink,
+  CapstanOpsStore,
+} from "./ops.js";
+export {
   createApproval,
   getApproval,
   listApprovals,
@@ -22,16 +38,22 @@ export type { PendingApproval } from "./approval.js";
 export type { CapstanApp } from "./server.js";
 
 export type {
-  APIDefinition,
-  APIHandlerInput,
-  CapstanAuthContext,
-  CapstanConfig,
-  CapstanContext,
-  HttpMethod,
-  MiddlewareDefinition,
-  PolicyCheckResult,
-  PolicyDefinition,
-  PolicyEffect,
+    APIDefinition,
+    APIHandlerInput,
+    CapstanActorIdentity,
+    CapstanAuthContext,
+    CapstanAuthEnvelope,
+    CapstanAuthGrant,
+    CapstanConfig,
+    CapstanContext,
+    CapstanCredentialProof,
+    CapstanDelegationLink,
+    CapstanExecutionIdentity,
+    HttpMethod,
+    MiddlewareDefinition,
+    PolicyCheckResult,
+    PolicyDefinition,
+    PolicyEffect,
   RouteMetadata,
 } from "./types.js";
 
@@ -75,11 +97,11 @@ export { setRateLimitStore } from "./ratelimit.js";
 export { CircuitBreaker, CircuitOpenError } from "./circuit-breaker.js";
 export type { CircuitBreakerConfig, CircuitState } from "./circuit-breaker.js";
 
-export type { VerifyReport, VerifyDiagnostic, VerifyStep } from "./verify.js";
+export type { VerifyReport, VerifyDiagnostic, VerifyStep } from "./verify-types.js";
 export { renderRuntimeVerifyText } from "./verify-render.js";
 export async function verifyCapstanApp(
   ...args: Parameters<typeof import("./verify.js").verifyCapstanApp>
-): Promise<import("./verify.js").VerifyReport> {
+): Promise<import("./verify-types.js").VerifyReport> {
   const mod = await import("./verify.js");
   return mod.verifyCapstanApp(...args);
 }
@@ -95,6 +117,7 @@ export {
   cacheSet,
   cacheGet,
   cacheInvalidateTag,
+  cacheInvalidatePath,
   cacheInvalidate,
   cacheClear,
   cached,
@@ -106,8 +129,16 @@ export {
   responseCacheGet,
   responseCacheSet,
   responseCacheInvalidateTag,
+  responseCacheInvalidatePath,
   responseCacheInvalidate,
   responseCacheClear,
   setResponseCacheStore,
 } from "./response-cache.js";
 export type { ResponseCacheEntry } from "./response-cache.js";
+
+export {
+  normalizeCacheTag,
+  normalizeCacheTags,
+  normalizeCachePath,
+  createPageCacheKey,
+} from "./cache-utils.js";

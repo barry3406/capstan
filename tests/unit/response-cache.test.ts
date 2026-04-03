@@ -3,6 +3,7 @@ import {
   responseCacheGet,
   responseCacheSet,
   responseCacheInvalidateTag,
+  responseCacheInvalidatePath,
   responseCacheInvalidate,
   responseCacheClear,
   setResponseCacheStore,
@@ -74,6 +75,14 @@ describe("responseCacheSet + responseCacheGet", () => {
     expect(result!.entry.headers).toEqual({ "x-custom": "value" });
     expect(result!.entry.revalidateAfter).toBe(entry.revalidateAfter);
     expect(result!.entry.createdAt).toBe(entry.createdAt);
+  });
+
+  test("tags are normalized and deduplicated on write", async () => {
+    await responseCacheSet("page:/tags", makeEntry({ tags: ["  x  ", "x", "y", ""] }));
+
+    const result = await responseCacheGet("page:/tags");
+    expect(result).toBeDefined();
+    expect(result!.entry.tags).toEqual(["x", "y"]);
   });
 
   test("returns undefined for missing key", async () => {
@@ -178,6 +187,12 @@ describe("responseCacheInvalidateTag", () => {
     expect(await responseCacheInvalidateTag("ghost")).toBe(0);
   });
 
+  test("trims tag input before invalidating", async () => {
+    await responseCacheSet("trimmed", makeEntry({ tags: ["topic"] }));
+    expect(await responseCacheInvalidateTag("  topic  ")).toBe(1);
+    expect(await responseCacheGet("trimmed")).toBeUndefined();
+  });
+
   test("invalidating one tag does not affect entries with other tags only", async () => {
     await responseCacheSet("safe", makeEntry({ tags: ["keep"] }));
     await responseCacheSet("gone", makeEntry({ tags: ["kill"] }));
@@ -210,6 +225,15 @@ describe("responseCacheInvalidateTag", () => {
     expect(await responseCacheGet("a")).toBeUndefined();
     expect(await responseCacheGet("b")).toBeUndefined();
     expect(await responseCacheGet("c")).toBeUndefined();
+  });
+
+  test("falls back to store scanning when the in-memory tag index is empty", async () => {
+    const store = new MemoryStore<ResponseCacheEntry>();
+    await store.set("page:/remote", makeEntry({ tags: ["remote"] }));
+    setResponseCacheStore(store);
+
+    expect(await responseCacheInvalidateTag("remote")).toBe(1);
+    expect(await responseCacheGet("page:/remote")).toBeUndefined();
   });
 });
 
@@ -249,6 +273,21 @@ describe("responseCacheInvalidate", () => {
 
     // Tag should now reference the new entry
     expect(await responseCacheInvalidateTag("t")).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// responseCacheInvalidatePath
+// ---------------------------------------------------------------------------
+
+describe("responseCacheInvalidatePath", () => {
+  test("normalizes full URLs before invalidating page cache entries", async () => {
+    await responseCacheSet("page:/docs", makeEntry({ tags: ["docs"] }));
+
+    expect(
+      await responseCacheInvalidatePath("https://example.com/docs?preview=1#top"),
+    ).toBe(true);
+    expect(await responseCacheGet("page:/docs")).toBeUndefined();
   });
 });
 

@@ -15,6 +15,10 @@ npm run build
 # Run the full repository suite (all tests/**/*.test.ts)
 npm test
 
+# Run the committed benchmark suite and enforce performance budgets
+npm run perf
+npm run perf:check
+
 
 # Dev server
 npm run dev
@@ -44,11 +48,12 @@ bunx create-capstan-app
 - `@zauso-ai/capstan-db` — data modeling, Drizzle integration, migrations, vector search, and generated CRUD route helpers
 - `@zauso-ai/capstan-auth` — human and agent auth primitives: JWT sessions, API keys, OAuth, DPoP, SPIFFE/mTLS
 - `@zauso-ai/capstan-agent` — machine surfaces and interop: capability registry, MCP, A2A, OpenAPI, LangChain, testing helpers
-- `@zauso-ai/capstan-ai` — AI toolkit plus durable harness runtime: think/generate, scoped memory primitives, agent loop, context assembly, browser/filesystem sandboxes, persisted runs
+- `@zauso-ai/capstan-ai` — AI toolkit plus durable harness runtime: think/generate, scoped memory primitives, host-driven agent loop, task fabric, context assembly, browser/filesystem sandboxes, persisted runs
 - `@zauso-ai/capstan-cron` — recurring execution for agent jobs and long-running automation
+- `@zauso-ai/capstan-ops` — semantic operations kernel: events, incidents, snapshots, SQLite persistence, querying, and CLI/operator consumption
 - `@zauso-ai/capstan-react` — human application shell: streaming SSR, selective hydration, layouts, metadata, image/font helpers, error/loading boundaries
 - `@zauso-ai/capstan-dev` — local development runtime, CSS pipeline, adapters, file watching
-- `@zauso-ai/capstan-cli` — operator and developer entry point: dev/build/start/verify plus scaffolding and operational commands
+- `@zauso-ai/capstan-cli` — operator and developer entry point: dev/build/start/verify, ops inspection commands, deployment helpers, and scaffolding
 - `create-capstan-app` — scaffolder that establishes the default project structure and generated agent guidance
 
 ### Multi-Protocol Architecture
@@ -124,4 +129,7 @@ Only update the files relevant to the change — not every file every time. The 
 
 - Full repository suite: `npm test` or `bun run test:new`
 - Targeted Bun runs: `bun test <file>` for narrow loops
+- Node contract suite: `npm run test:node`
+- Browser e2e: `npm run test:e2e -- tests/e2e/browser-flow.e2e.ts`
 - Vitest-only workflow: `npm run test:vitest`
+- Performance gate: `npm run perf:check`

@@ -1,4 +1,11 @@
-import { describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
+import {
+  MemoryStore,
+  cacheClear,
+  cacheInvalidatePath,
+  cacheInvalidateTag,
+  setCacheStore,
+} from "@zauso-ai/capstan-core";
 import { createPageFetch, PageFetchError } from "../../packages/dev/src/page-fetch.js";
 
 function makeRequest(
@@ -7,6 +14,11 @@ function makeRequest(
 ): Request {
   return new Request(url, { headers });
 }
+
+beforeEach(async () => {
+  setCacheStore(new MemoryStore());
+  await cacheClear();
+});
 
 describe("createPageFetch", () => {
   test("builds URLs from the current request, merges query params, and forwards only security-relevant headers by default", async () => {
@@ -211,6 +223,134 @@ describe("createPageFetch", () => {
     await expect(client.get("/api/json")).resolves.toEqual({ ok: true, count: 3 });
     await expect(client.get("/api/text")).resolves.toBe("plain text");
     await expect(client.get("/api/empty")).resolves.toBeUndefined();
+  });
+
+  test("deduplicates concurrent GET requests and caches the successful result", async () => {
+    let calls = 0;
+    const client = createPageFetch(
+      makeRequest("https://example.com/app", {
+        authorization: "Bearer abc",
+      }),
+      {
+        fetchImpl: async (request: Request): Promise<Response> => {
+          calls++;
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          return Response.json({
+            url: request.url,
+            call: calls,
+          });
+        },
+      },
+    );
+
+    const [first, second] = await Promise.all([
+      client.get<{ url: string; call: number }>("/api/dedupe?foo=1"),
+      client.get<{ url: string; call: number }>("/api/dedupe?foo=1"),
+    ]);
+
+    expect(calls).toBe(1);
+    expect(first).toEqual(second);
+    expect(first.call).toBe(1);
+
+    const third = await client.get<{ url: string; call: number }>("/api/dedupe?foo=1");
+    expect(calls).toBe(1);
+    expect(third).toEqual(first);
+  });
+
+  test("does not persist responses that opt out of caching", async () => {
+    let calls = 0;
+    const client = createPageFetch(
+      makeRequest("https://example.com/app"),
+      {
+        fetchImpl: async (): Promise<Response> => {
+          calls++;
+          return new Response(JSON.stringify({ call: calls }), {
+            headers: {
+              "content-type": "application/json",
+              "cache-control": "no-store",
+            },
+          });
+        },
+      },
+    );
+
+    const first = await client.get<{ call: number }>("/api/no-store");
+    const second = await client.get<{ call: number }>("/api/no-store");
+
+    expect(first.call).toBe(1);
+    expect(second.call).toBe(2);
+    expect(calls).toBe(2);
+  });
+
+  test("reuses shared GET cache across page fetch clients and invalidates by path", async () => {
+    let calls = 0;
+    const fetchImpl = async (): Promise<Response> => {
+      calls++;
+      return new Response(JSON.stringify({ call: calls }), {
+        headers: {
+          "content-type": "application/json",
+          "cache-control": "max-age=60",
+        },
+      });
+    };
+
+    const firstClient = createPageFetch(
+      makeRequest("https://example.com/app/projects"),
+      { fetchImpl },
+    );
+    const secondClient = createPageFetch(
+      makeRequest("https://example.com/app/dashboard"),
+      { fetchImpl },
+    );
+
+    expect(await firstClient.get<{ call: number }>("/api/projects")).toEqual({ call: 1 });
+    expect(await secondClient.get<{ call: number }>("/api/projects")).toEqual({ call: 1 });
+    expect(calls).toBe(1);
+
+    await cacheInvalidatePath("/api/projects");
+    const thirdClient = createPageFetch(
+      makeRequest("https://example.com/app/reports"),
+      { fetchImpl },
+    );
+
+    expect(await thirdClient.get<{ call: number }>("/api/projects")).toEqual({ call: 2 });
+    expect(calls).toBe(2);
+  });
+
+  test("propagates shared cache tags so invalidating a tag evicts cached fetch payloads", async () => {
+    let calls = 0;
+    const fetchImpl = async (): Promise<Response> => {
+      calls++;
+      return new Response(JSON.stringify({ call: calls }), {
+        headers: {
+          "content-type": "application/json",
+          "cache-control": "max-age=120",
+          "x-capstan-cache-tags": "team:ops, project:atlas",
+        },
+      });
+    };
+
+    const firstClient = createPageFetch(
+      makeRequest("https://example.com/app/ops"),
+      { fetchImpl },
+    );
+    const secondClient = createPageFetch(
+      makeRequest("https://example.com/app/ops/settings"),
+      { fetchImpl },
+    );
+
+    expect(await firstClient.get<{ call: number }>("/api/ops")).toEqual({ call: 1 });
+    expect(await secondClient.get<{ call: number }>("/api/ops")).toEqual({ call: 1 });
+    expect(calls).toBe(1);
+
+    await cacheInvalidateTag("team:ops");
+    const thirdClient = createPageFetch(
+      makeRequest("https://example.com/app/ops/overview"),
+      { fetchImpl },
+    );
+
+    expect(await thirdClient.get<{ call: number }>("/api/ops")).toEqual({ call: 2 });
+    expect(calls).toBe(2);
   });
 
   test("throws an informative error for non-ok JSON responses", async () => {

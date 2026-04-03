@@ -7,6 +7,7 @@ import type {
   AgentRunResult,
   MemoryScope,
 } from "../types.js";
+import type { AgentTaskRecord } from "../task/types.js";
 
 // ---------------------------------------------------------------------------
 // Browser sandbox config
@@ -90,9 +91,14 @@ export interface HarnessEvent {
     | "pause_requested"
     | "cancel_requested"
     | "approval_required"
+    | "approval_approved"
+    | "approval_canceled"
+    | "approval_denied"
     | "artifact_created"
     | "tool_call"
     | "tool_result"
+    | "task_call"
+    | "task_result"
     | "verify_pass"
     | "verify_fail"
     | "summary_created"
@@ -215,6 +221,8 @@ export type HarnessRunEventType =
   | "run_resumed"
   | "tool_call"
   | "tool_result"
+  | "task_call"
+  | "task_result"
   | "verify_pass"
   | "verify_fail"
   | "artifact_created"
@@ -226,6 +234,9 @@ export type HarnessRunEventType =
   | "cancel_requested"
   | "run_canceled"
   | "approval_required"
+  | "approval_approved"
+  | "approval_canceled"
+  | "approval_denied"
   | "run_completed"
   | "run_max_iterations"
   | "run_failed";
@@ -236,6 +247,8 @@ export interface HarnessRuntimePaths {
   eventsDir: string;
   globalEventsPath: string;
   artifactsDir: string;
+  tasksDir: string;
+  approvalsDir: string;
   checkpointsDir: string;
   summariesDir: string;
   sessionMemoryDir: string;
@@ -249,6 +262,28 @@ export type HarnessMemoryKind =
   | "summary"
   | "observation"
   | "artifact";
+
+export type HarnessApprovalKind = "tool" | "task";
+
+export type HarnessApprovalStatus = "pending" | "approved" | "denied" | "canceled";
+
+export interface HarnessPendingApproval {
+  id: string;
+  kind: HarnessApprovalKind;
+  tool: string;
+  args: unknown;
+  reason: string;
+  requestedAt: string;
+  status?: HarnessApprovalStatus | undefined;
+  resolvedAt?: string | undefined;
+  resolutionNote?: string | undefined;
+}
+
+export interface HarnessApprovalRecord extends HarnessPendingApproval {
+  runId: string;
+  updatedAt: string;
+  resolvedBy?: Record<string, unknown> | undefined;
+}
 
 export type HarnessContextBlockKind =
   | "instructions"
@@ -387,6 +422,61 @@ export interface HarnessContextAssembleOptions {
   maxArtifacts?: number;
 }
 
+export type HarnessAuthorizedAction =
+  | "run:start"
+  | "run:list"
+  | "run:read"
+  | "run:pause"
+  | "run:cancel"
+  | "run:resume"
+  | "run:replay"
+  | "approval:list"
+  | "approval:read"
+  | "event:list"
+  | "event:read"
+  | "artifact:read"
+  | "task:read"
+  | "checkpoint:read"
+  | "summary:list"
+  | "summary:read"
+  | "memory:read"
+  | "memory:write"
+  | "context:read"
+  | "approval:approve"
+  | "approval:deny"
+  | "runtime_paths:read";
+
+export interface HarnessAccessContext {
+  subject?: unknown;
+  metadata?: Record<string, unknown>;
+}
+
+export interface HarnessAuthorizationRequest {
+  action: HarnessAuthorizedAction;
+  runId?: string;
+  run?: HarnessRunRecord;
+  access?: HarnessAccessContext;
+  detail?: Record<string, unknown>;
+}
+
+export interface HarnessAuthorizationDecision {
+  allowed: boolean;
+  reason?: string;
+}
+
+export type HarnessAuthorizationHook = (
+  request: HarnessAuthorizationRequest,
+) =>
+  | HarnessAuthorizationDecision
+  | boolean
+  | void
+  | Promise<HarnessAuthorizationDecision | boolean | void>;
+
+export interface HarnessControlPlaneOptions {
+  rootDir?: string;
+  authorize?: HarnessAuthorizationHook;
+}
+
 export interface HarnessRuntimeStore {
   readonly paths: HarnessRuntimePaths;
   initialize(): Promise<void>;
@@ -397,6 +487,20 @@ export interface HarnessRuntimeStore {
   getEvents(runId?: string): Promise<HarnessRunEventRecord[]>;
   writeArtifact(runId: string, input: HarnessArtifactInput): Promise<HarnessArtifactRecord>;
   getArtifacts(runId: string): Promise<HarnessArtifactRecord[]>;
+  persistTask(task: HarnessTaskRecord): Promise<void>;
+  patchTask(
+    runId: string,
+    taskId: string,
+    patch: Partial<Omit<HarnessTaskRecord, "id" | "runId" | "createdAt">>,
+  ): Promise<HarnessTaskRecord>;
+  getTasks(runId: string): Promise<HarnessTaskRecord[]>;
+  persistApproval(record: HarnessApprovalRecord): Promise<void>;
+  getApproval(approvalId: string): Promise<HarnessApprovalRecord | undefined>;
+  listApprovals(runId?: string): Promise<HarnessApprovalRecord[]>;
+  patchApproval(
+    approvalId: string,
+    patch: Partial<Omit<HarnessApprovalRecord, "id" | "runId" | "requestedAt">>,
+  ): Promise<HarnessApprovalRecord>;
   persistCheckpoint(
     runId: string,
     checkpoint: AgentLoopCheckpoint,
@@ -438,9 +542,12 @@ export interface HarnessRunRecord {
   updatedAt: string;
   iterations: number;
   toolCalls: number;
+  taskCalls: number;
   maxIterations: number;
   toolNames: string[];
+  taskNames: string[];
   artifactIds: string[];
+  taskIds: string[];
   sandbox: {
     driver: string;
     mode: string;
@@ -451,15 +558,13 @@ export interface HarnessRunRecord {
   };
   result?: unknown | undefined;
   error?: string | undefined;
-  pendingApproval?: {
-    tool: string;
-    args: unknown;
-    reason: string;
-    requestedAt: string;
-  } | undefined;
+  pendingApprovalId?: string | undefined;
+  pendingApproval?: HarnessPendingApproval | undefined;
   checkpointUpdatedAt?: string | undefined;
   contextUpdatedAt?: string | undefined;
   latestSummaryId?: string | undefined;
+  trigger?: HarnessRunTrigger | undefined;
+  metadata?: Record<string, unknown> | undefined;
   control?: {
     pauseRequestedAt?: string;
     cancelRequestedAt?: string;
@@ -487,6 +592,10 @@ export interface HarnessArtifactRecord {
   metadata?: Record<string, unknown>;
 }
 
+export type HarnessTaskStatus = AgentTaskRecord["status"];
+
+export interface HarnessTaskRecord extends AgentTaskRecord {}
+
 export interface HarnessReplayReport {
   runId: string;
   consistent: boolean;
@@ -497,6 +606,8 @@ export interface HarnessReplayReport {
   storedIterations?: number;
   derivedToolCalls: number;
   storedToolCalls?: number;
+  derivedTaskCalls: number;
+  storedTaskCalls?: number;
   derivedArtifactCount: number;
   storedArtifactCount?: number;
 }
@@ -523,6 +634,12 @@ export interface HarnessSandboxContext {
 export interface HarnessResumeOptions {
   runConfig?: AgentRunConfig;
   approvePendingTool?: boolean;
+  access?: HarnessAccessContext;
+}
+
+export interface HarnessApprovalResolutionOptions {
+  access?: HarnessAccessContext;
+  note?: string;
 }
 
 export interface HarnessSandboxDriver {
@@ -544,6 +661,12 @@ export type HarnessToolPolicyFn = (ctx: {
   args: unknown;
 }) => Promise<{ allowed: boolean; reason?: string }>;
 
+export type HarnessTaskPolicyFn = (ctx: {
+  runId: string;
+  task: string;
+  args: unknown;
+}) => Promise<{ allowed: boolean; reason?: string }>;
+
 export interface HarnessRuntimeConfig {
   /** Root directory under which .capstan/harness/ is persisted (default: process.cwd()) */
   rootDir?: string;
@@ -555,6 +678,30 @@ export interface HarnessRuntimeConfig {
   storeFactory?: (rootDir: string) => HarnessRuntimeStore;
   /** Optional policy hook that can block tool calls and force approval_required */
   beforeToolCall?: HarnessToolPolicyFn;
+  /** Optional policy hook that can block task calls and force approval_required */
+  beforeTaskCall?: HarnessTaskPolicyFn;
+  /** Optional authorization hook for external run/control-plane actions */
+  authorize?: HarnessAuthorizationHook;
+}
+
+export interface HarnessRunTrigger {
+  type: string;
+  source: string;
+  firedAt: string;
+  schedule?:
+    | {
+        name: string;
+        pattern: string;
+        timezone?: string;
+      }
+    | undefined;
+  metadata?: Record<string, unknown> | undefined;
+}
+
+export interface HarnessRunStartOptions {
+  trigger?: HarnessRunTrigger;
+  metadata?: Record<string, unknown>;
+  access?: HarnessAccessContext;
 }
 
 export interface HarnessRunResult extends AgentRunResult {
@@ -609,80 +756,126 @@ export interface HarnessConfig {
 
 export interface Harness {
   /** Start a run and return its id immediately for external control */
-  startRun(config: AgentRunConfig): Promise<HarnessRunHandle>;
+  startRun(config: AgentRunConfig, options?: HarnessRunStartOptions): Promise<HarnessRunHandle>;
   /** Run an agent loop with harness sandbox tools */
-  run(config: AgentRunConfig): Promise<HarnessRunResult>;
+  run(config: AgentRunConfig, options?: HarnessRunStartOptions): Promise<HarnessRunResult>;
   /** Request cooperative pause for a running run */
-  pauseRun(runId: string): Promise<HarnessRunRecord>;
+  pauseRun(runId: string, access?: HarnessAccessContext): Promise<HarnessRunRecord>;
   /** Request cooperative cancellation or synchronously cancel a paused/blocked run */
-  cancelRun(runId: string): Promise<HarnessRunRecord>;
+  cancelRun(runId: string, access?: HarnessAccessContext): Promise<HarnessRunRecord>;
   /** Resume a paused or approval-blocked run */
   resumeRun(runId: string, options?: HarnessResumeOptions): Promise<HarnessRunResult>;
+  /** Read one persisted approval record */
+  getApproval(
+    approvalId: string,
+    access?: HarnessAccessContext,
+  ): Promise<HarnessApprovalRecord | undefined>;
+  /** List persisted approvals, optionally scoped to one run */
+  listApprovals(runId?: string, access?: HarnessAccessContext): Promise<HarnessApprovalRecord[]>;
+  /** Mark the pending approval for a run as approved */
+  approveRun(
+    runId: string,
+    options?: HarnessApprovalResolutionOptions,
+  ): Promise<HarnessApprovalRecord>;
+  /** Deny the pending approval for a run and cancel the blocked run */
+  denyRun(
+    runId: string,
+    options?: HarnessApprovalResolutionOptions,
+  ): Promise<HarnessApprovalRecord>;
   /** Get a persisted run record */
-  getRun(runId: string): Promise<HarnessRunRecord | undefined>;
+  getRun(runId: string, access?: HarnessAccessContext): Promise<HarnessRunRecord | undefined>;
   /** List persisted runs */
-  listRuns(): Promise<HarnessRunRecord[]>;
+  listRuns(access?: HarnessAccessContext): Promise<HarnessRunRecord[]>;
   /** Read persisted runtime events */
-  getEvents(runId?: string): Promise<HarnessRunEventRecord[]>;
+  getEvents(runId?: string, access?: HarnessAccessContext): Promise<HarnessRunEventRecord[]>;
   /** Read persisted artifacts for a run */
-  getArtifacts(runId: string): Promise<HarnessArtifactRecord[]>;
+  getArtifacts(runId: string, access?: HarnessAccessContext): Promise<HarnessArtifactRecord[]>;
+  /** Read persisted task records for a run */
+  getTasks(runId: string, access?: HarnessAccessContext): Promise<HarnessTaskRecord[]>;
   /** Read the persisted loop checkpoint for a run */
-  getCheckpoint(runId: string): Promise<AgentLoopCheckpoint | undefined>;
+  getCheckpoint(runId: string, access?: HarnessAccessContext): Promise<AgentLoopCheckpoint | undefined>;
   /** Read the latest structured session memory for a run */
-  getSessionMemory(runId: string): Promise<HarnessSessionMemoryRecord | undefined>;
+  getSessionMemory(
+    runId: string,
+    access?: HarnessAccessContext,
+  ): Promise<HarnessSessionMemoryRecord | undefined>;
   /** Read the latest persisted summary for a run */
-  getLatestSummary(runId: string): Promise<HarnessSummaryRecord | undefined>;
+  getLatestSummary(runId: string, access?: HarnessAccessContext): Promise<HarnessSummaryRecord | undefined>;
   /** List persisted summaries */
-  listSummaries(runId?: string): Promise<HarnessSummaryRecord[]>;
+  listSummaries(runId?: string, access?: HarnessAccessContext): Promise<HarnessSummaryRecord[]>;
   /** Persist a long-term memory entry */
-  rememberMemory(input: HarnessMemoryInput): Promise<HarnessMemoryRecord>;
+  rememberMemory(input: HarnessMemoryInput, access?: HarnessAccessContext): Promise<HarnessMemoryRecord>;
   /** Query persisted long-term memory */
-  recallMemory(query: HarnessMemoryQuery): Promise<HarnessMemoryMatch[]>;
+  recallMemory(query: HarnessMemoryQuery, access?: HarnessAccessContext): Promise<HarnessMemoryMatch[]>;
   /** Assemble the runtime context package for a run */
   assembleContext(
     runId: string,
     options?: HarnessContextAssembleOptions,
+    access?: HarnessAccessContext,
   ): Promise<HarnessContextPackage>;
   /** Replay events and compare against stored run state */
-  replayRun(runId: string): Promise<HarnessReplayReport>;
+  replayRun(runId: string, access?: HarnessAccessContext): Promise<HarnessReplayReport>;
   /** Resolve runtime filesystem paths */
-  getPaths(): HarnessRuntimePaths;
+  getPaths(access?: HarnessAccessContext): HarnessRuntimePaths;
   /** Tear down the harness instance */
   destroy(): Promise<void>;
 }
 
 export interface HarnessControlPlane {
   /** Request cooperative pause for a running run */
-  pauseRun(runId: string): Promise<HarnessRunRecord>;
+  pauseRun(runId: string, access?: HarnessAccessContext): Promise<HarnessRunRecord>;
   /** Request cooperative cancellation or synchronously cancel a paused/blocked run */
-  cancelRun(runId: string): Promise<HarnessRunRecord>;
+  cancelRun(runId: string, access?: HarnessAccessContext): Promise<HarnessRunRecord>;
+  /** Read one persisted approval record */
+  getApproval(
+    approvalId: string,
+    access?: HarnessAccessContext,
+  ): Promise<HarnessApprovalRecord | undefined>;
+  /** List persisted approvals, optionally scoped to one run */
+  listApprovals(runId?: string, access?: HarnessAccessContext): Promise<HarnessApprovalRecord[]>;
+  /** Mark the pending approval for a run as approved */
+  approveRun(
+    runId: string,
+    options?: HarnessApprovalResolutionOptions,
+  ): Promise<HarnessApprovalRecord>;
+  /** Deny the pending approval for a run and cancel the blocked run */
+  denyRun(
+    runId: string,
+    options?: HarnessApprovalResolutionOptions,
+  ): Promise<HarnessApprovalRecord>;
   /** Get a persisted run record */
-  getRun(runId: string): Promise<HarnessRunRecord | undefined>;
+  getRun(runId: string, access?: HarnessAccessContext): Promise<HarnessRunRecord | undefined>;
   /** List persisted runs */
-  listRuns(): Promise<HarnessRunRecord[]>;
+  listRuns(access?: HarnessAccessContext): Promise<HarnessRunRecord[]>;
   /** Read persisted runtime events */
-  getEvents(runId?: string): Promise<HarnessRunEventRecord[]>;
+  getEvents(runId?: string, access?: HarnessAccessContext): Promise<HarnessRunEventRecord[]>;
   /** Read persisted artifacts for a run */
-  getArtifacts(runId: string): Promise<HarnessArtifactRecord[]>;
+  getArtifacts(runId: string, access?: HarnessAccessContext): Promise<HarnessArtifactRecord[]>;
+  /** Read persisted task records for a run */
+  getTasks(runId: string, access?: HarnessAccessContext): Promise<HarnessTaskRecord[]>;
   /** Read the persisted loop checkpoint for a run */
-  getCheckpoint(runId: string): Promise<AgentLoopCheckpoint | undefined>;
+  getCheckpoint(runId: string, access?: HarnessAccessContext): Promise<AgentLoopCheckpoint | undefined>;
   /** Read the latest structured session memory for a run */
-  getSessionMemory(runId: string): Promise<HarnessSessionMemoryRecord | undefined>;
+  getSessionMemory(
+    runId: string,
+    access?: HarnessAccessContext,
+  ): Promise<HarnessSessionMemoryRecord | undefined>;
   /** Read the latest persisted summary for a run */
-  getLatestSummary(runId: string): Promise<HarnessSummaryRecord | undefined>;
+  getLatestSummary(runId: string, access?: HarnessAccessContext): Promise<HarnessSummaryRecord | undefined>;
   /** List persisted summaries */
-  listSummaries(runId?: string): Promise<HarnessSummaryRecord[]>;
+  listSummaries(runId?: string, access?: HarnessAccessContext): Promise<HarnessSummaryRecord[]>;
   /** Query persisted long-term memory */
-  recallMemory(query: HarnessMemoryQuery): Promise<HarnessMemoryMatch[]>;
+  recallMemory(query: HarnessMemoryQuery, access?: HarnessAccessContext): Promise<HarnessMemoryMatch[]>;
   /** Assemble the runtime context package for a run */
   assembleContext(
     runId: string,
     options?: HarnessContextAssembleOptions,
+    access?: HarnessAccessContext,
   ): Promise<HarnessContextPackage>;
   /** Replay events and compare against stored run state */
-  replayRun(runId: string): Promise<HarnessReplayReport>;
+  replayRun(runId: string, access?: HarnessAccessContext): Promise<HarnessReplayReport>;
   /** Resolve runtime filesystem paths */
-  getPaths(): HarnessRuntimePaths;
+  getPaths(access?: HarnessAccessContext): HarnessRuntimePaths;
 }
 
 export interface HarnessRunCheckpointRecord {

@@ -2,18 +2,13 @@
  * Shared href guards for client-side navigation and prefetching.
  */
 
-const SAFE_SCHEME_RE = /^[a-zA-Z][a-zA-Z\d+.-]*:/;
+import { normalizeClientNavigationUrl } from "./navigation-url.js";
 
 export function isClientNavigableHref(href: string): boolean {
-  if (href === "") return true;
-  if (href.startsWith("#") || href.startsWith("//")) return false;
-  if (href.startsWith("http://") || href.startsWith("https://")) return false;
-  if (href.startsWith("mailto:") || href.startsWith("tel:")) return false;
-  if (SAFE_SCHEME_RE.test(href)) return false;
-  return true;
+  return normalizeClientNavigationUrl(href) !== null;
 }
 
 export function isPrefetchableHref(href: string): boolean {
   if (href === "") return false;
-  return isClientNavigableHref(href);
+  return normalizeClientNavigationUrl(href) !== null;
 }

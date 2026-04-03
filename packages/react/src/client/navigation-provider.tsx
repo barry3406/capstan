@@ -1,6 +1,7 @@
 import { createElement, useEffect, useState, useCallback } from "react";
 import type { ReactNode, ReactElement } from "react";
 import { PageContext } from "../loader.js";
+import type { CapstanPageContext } from "../types.js";
 import type { NavigateEventDetail, RouterState } from "./types.js";
 import { getRouter } from "./router.js";
 
@@ -24,16 +25,9 @@ export function NavigationProvider({
   children: ReactNode;
   initialLoaderData?: unknown;
   initialParams?: Record<string, string>;
-  initialAuth?: {
-    isAuthenticated: boolean;
-    type: "human" | "agent" | "anonymous" | "workload";
-  };
+  initialAuth?: CapstanPageContext["auth"];
 }): ReactElement {
-  const [contextValue, setContextValue] = useState<{
-    loaderData: unknown;
-    params: Record<string, string>;
-    auth: { isAuthenticated: boolean; type: "human" | "agent" | "anonymous" | "workload" };
-  }>({
+  const [contextValue, setContextValue] = useState<CapstanPageContext>({
     loaderData: initialLoaderData ?? null,
     params: initialParams ?? {},
     auth: initialAuth ?? { isAuthenticated: false, type: "anonymous" as const },
@@ -52,6 +46,7 @@ export function NavigationProvider({
         ...prev,
         loaderData: detail.loaderData,
         params: detail.params,
+        auth: detail.auth ?? prev.auth,
       }));
     }
 

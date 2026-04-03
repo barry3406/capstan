@@ -9,6 +9,9 @@ import {
   OutletProvider,
   useAuth,
   useParams,
+  normalizePagePath,
+  invalidatePagePath,
+  invalidatePageTag,
 } from "@zauso-ai/capstan-react";
 import type { CapstanPageContext, LoaderArgs } from "@zauso-ai/capstan-react";
 
@@ -211,5 +214,14 @@ describe("useParams", () => {
       createElement(PageContext.Provider, { value: ctx }, createElement(ParamReader)),
     );
     expect(html).toContain("hello-world-99");
+  });
+});
+
+describe("render strategy exports", () => {
+  it("exposes cache invalidation helpers on the public react entrypoint", () => {
+    expect(typeof normalizePagePath).toBe("function");
+    expect(typeof invalidatePagePath).toBe("function");
+    expect(typeof invalidatePageTag).toBe("function");
+    expect(normalizePagePath("https://example.com/docs?draft=1#intro")).toBe("/docs");
   });
 });

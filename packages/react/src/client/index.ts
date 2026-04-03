@@ -9,12 +9,27 @@ export { getManifest, matchRoute, findSharedLayout } from "./manifest.js";
 export type { ClientRouteManifest } from "./manifest.js";
 export { getPrefetchManager, PrefetchManager } from "./prefetch.js";
 export {
+  normalizeClientNavigationUrl,
+} from "./navigation-url.js";
+export type { NormalizedNavigationUrl } from "./navigation-url.js";
+export {
+  buildHistoryState,
+  readHistoryEntryState,
+  writeHistoryState,
+} from "./history.js";
+export type { HistoryStateRecord } from "./history.js";
+export {
+  captureScrollPosition,
   generateScrollKey,
   setCurrentScrollKey,
   saveScrollPosition,
   restoreScrollPosition,
+  restoreScrollSnapshot,
   scrollToTop,
 } from "./scroll.js";
+export type { ScrollSnapshot } from "./scroll.js";
+export { NavigationTransactionStack } from "./transaction.js";
+export type { NavigationTransaction, StableViewState } from "./transaction.js";
 export { withViewTransition } from "./transition.js";
 
 // Re-export types used by consumers

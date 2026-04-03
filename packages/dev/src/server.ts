@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { matchRoute, scanRoutes } from "@zauso-ai/capstan-router";
+import { createRouteScanCache, matchRoute, scanRoutes } from "@zauso-ai/capstan-router";
 import type { RouteManifest, RouteEntry } from "@zauso-ai/capstan-router";
 import { toJSONSchema } from "zod";
 import {
@@ -14,12 +14,14 @@ import {
   csrfProtection,
   enforcePolicies,
   mountApprovalRoutes,
+  createCapstanOpsContext,
 } from "@zauso-ai/capstan-core";
 import type {
   APIDefinition,
   HttpMethod,
   CapstanContext,
   CapstanAuthContext,
+  CapstanOpsContext,
   PolicyDefinition,
 } from "@zauso-ai/capstan-core";
 
@@ -30,6 +32,7 @@ import type { PageRuntimeOptions } from "./page-runtime.js";
 import { loadRouteMiddlewares, composeRouteMiddlewares } from "./route-middleware.js";
 import { watchRoutes, watchStyles } from "./watcher.js";
 import { printStartupBanner } from "./printer.js";
+import { resolveProjectOpsConfig } from "./ops-sink.js";
 import type {
   DevServerConfig,
   DevServerInstance,
@@ -450,6 +453,7 @@ async function enforceRoutePolicy(
         input: args.input,
         policy: policyName,
         reason,
+        ctx: args.ctx,
       });
 
       return new Response(
@@ -502,6 +506,7 @@ async function enforceRoutePolicy(
       input: args.input,
       policy: policyName,
       reason: result.reason ?? "This action requires approval",
+      ctx: args.ctx,
     });
 
     return new Response(
@@ -525,8 +530,15 @@ async function enforceRoutePolicy(
 // Route registration
 // ---------------------------------------------------------------------------
 
-/** Hono env type that declares the capstanAuth variable. */
-type HonoEnv = { Variables: { capstanAuth: CapstanAuthContext } };
+/** Hono env type that declares runtime-attached Capstan variables. */
+type HonoEnv = {
+  Variables: {
+    capstanAuth: CapstanAuthContext;
+    capstanOps?: CapstanOpsContext;
+    capstanRequestId?: string;
+    capstanTraceId?: string;
+  };
+};
 
 let _agentPkg: {
   generateA2AAgentCard: (
@@ -565,11 +577,24 @@ export async function buildRuntimeApp(
   config: RuntimeAppConfig,
 ): Promise<RuntimeAppBuild> {
   const manifest = config.manifest;
+  const opsConfig = resolveProjectOpsConfig(config.ops, {
+    rootDir: config.rootDir,
+    ...(config.appName ? { appName: config.appName } : {}),
+    environment: config.mode ?? "development",
+    source: config.mode === "production" ? "runtime:prod" : "runtime:dev",
+  });
+  const ops = createCapstanOpsContext(opsConfig);
 
   const app = new Hono<HonoEnv>();
 
   // Global middleware ---------------------------------------------------------
-  app.use("*", createRequestLogger());
+  if (ops) {
+    app.use("*", async (c, next) => {
+      c.set("capstanOps", ops);
+      await next();
+    });
+  }
+  app.use("*", createRequestLogger({ ops }));
   if (config.corsOptions !== false) {
     app.use("*", cors(config.corsOptions));
   }
@@ -760,7 +785,7 @@ export async function buildRuntimeApp(
 
       app[honoMethod](route.urlPattern, async (c) => {
         const ctx = createContext(c);
-
+        const startTime = Date.now();
         const executeHandler = async (): Promise<Response> => {
           // Parse input from query string (GET) or request body (others).
           let input: unknown;
@@ -796,23 +821,87 @@ export async function buildRuntimeApp(
             }
           }
 
-          if (isAPIDefinition(handler)) {
-            const params = c.req.param() as Record<string, string>;
-            const result = await handler.handler({ input, ctx, params });
-            return c.json(result as object);
+          const params = c.req.param() as Record<string, string>;
+
+          if (ops && isAPIDefinition(handler)) {
+            await ops.recordCapabilityInvocation({
+              ...(ctx.requestId !== undefined ? { requestId: ctx.requestId } : {}),
+              ...(ctx.traceId !== undefined ? { traceId: ctx.traceId } : {}),
+              phase: "start",
+              data: {
+                method,
+                path: route.urlPattern,
+                ...(handler.capability !== undefined
+                  ? { capability: handler.capability }
+                  : {}),
+                ...(handler.resource !== undefined
+                  ? { resource: handler.resource }
+                  : {}),
+              },
+            });
           }
 
-          // If the export is a plain function rather than an APIDefinition,
-          // invoke it directly with a similar signature.
-          if (typeof handler === "function") {
-            const params = c.req.param() as Record<string, string>;
-            const result = await (
-              handler as (args: { input: unknown; ctx: CapstanContext; params: Record<string, string> }) => Promise<unknown>
-            )({ input, ctx, params });
-            return c.json(result as object);
-          }
+          try {
+            if (isAPIDefinition(handler)) {
+              const result = await handler.handler({ input, ctx, params });
+              if (ops) {
+                await ops.recordCapabilityInvocation({
+                  ...(ctx.requestId !== undefined ? { requestId: ctx.requestId } : {}),
+                  ...(ctx.traceId !== undefined ? { traceId: ctx.traceId } : {}),
+                  phase: "end",
+                  data: {
+                    method,
+                    path: route.urlPattern,
+                    ...(handler.capability !== undefined
+                      ? { capability: handler.capability }
+                      : {}),
+                    ...(handler.resource !== undefined
+                      ? { resource: handler.resource }
+                      : {}),
+                    status: 200,
+                    durationMs: Date.now() - startTime,
+                    outcome: "success",
+                  },
+                });
+              }
+              return c.json(result as object);
+            }
 
-          return c.json({ error: "Invalid handler export" }, 500);
+            // If the export is a plain function rather than an APIDefinition,
+            // invoke it directly with a similar signature.
+            if (typeof handler === "function") {
+              const result = await (
+                handler as (args: { input: unknown; ctx: CapstanContext; params: Record<string, string> }) => Promise<unknown>
+              )({ input, ctx, params });
+              return c.json(result as object);
+            }
+
+            return c.json({ error: "Invalid handler export" }, 500);
+          } catch (err) {
+            if (ops && isAPIDefinition(handler)) {
+              await ops.recordCapabilityInvocation({
+                ...(ctx.requestId !== undefined ? { requestId: ctx.requestId } : {}),
+                ...(ctx.traceId !== undefined ? { traceId: ctx.traceId } : {}),
+                phase: "end",
+                incidentFingerprint: `capability:${method}:${route.urlPattern}:5xx`,
+                data: {
+                  method,
+                  path: route.urlPattern,
+                  ...(handler.capability !== undefined
+                    ? { capability: handler.capability }
+                    : {}),
+                  ...(handler.resource !== undefined
+                    ? { resource: handler.resource }
+                    : {}),
+                  status: 500,
+                  durationMs: Date.now() - startTime,
+                  outcome: "failure",
+                },
+              });
+            }
+
+            throw err;
+          }
         };
 
         try {
@@ -1140,6 +1229,27 @@ export async function buildRuntimeApp(
 
   mountApprovalRoutes(app, handlerRegistry);
 
+  if (ops) {
+    const mode: "development" | "production" =
+      config.port !== undefined ? "development" : "production";
+    const healthSnapshotInput: Parameters<CapstanOpsContext["recordHealthSnapshot"]>[0] = {
+      appName: config.appName ?? "capstan-app",
+      routeCount: routeRegistry.length,
+      apiRouteCount,
+      pageRouteCount,
+      approvalCount: 0,
+      mode,
+      ...(config.policyRegistry !== undefined
+        ? { policyCount: config.policyRegistry.size }
+        : {}),
+      ...(config.ops?.recentWindowMs !== undefined
+        ? { recentWindowMs: config.ops.recentWindowMs }
+        : {}),
+      ...(config.auth?.session ? { notes: ["session-auth-enabled"] } : {}),
+    };
+    void ops.recordHealthSnapshot(healthSnapshotInput).catch(() => void 0);
+  }
+
   // --- Runtime client assets -------------------------------------------------
 
   app.get("/_capstan/client.js", () => {
@@ -1440,7 +1550,8 @@ export async function createDevServer(
 
   // --- Initial route scan ---------------------------------------------------
 
-  let manifest = await scanRoutes(routesDir);
+  const routeScanCache = createRouteScanCache();
+  let manifest = await scanRoutes(routesDir, { cache: routeScanCache });
   let { app, apiRouteCount, pageRouteCount, routeRegistry } = await buildRuntimeApp({
     ...config,
     manifest,
@@ -1529,7 +1640,7 @@ export async function createDevServer(
       console.log("[capstan] Routes changed, rebuilding...");
       // Invalidate only the changed file so unchanged modules stay cached.
       invalidateModuleCache(changedFile);
-      manifest = await scanRoutes(routesDir);
+      manifest = await scanRoutes(routesDir, { cache: routeScanCache });
       const rebuilt = await buildRuntimeApp({
         ...config,
         manifest,

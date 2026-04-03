@@ -9,6 +9,7 @@ import {
   createPortableRuntimeManifestModuleSource,
   createPortableRuntimeModulesModuleSource,
   createProjectDeploymentFiles,
+  createProjectRootDeployTargetContract,
   createProjectEnvExample,
   createProjectFlyToml,
   createProjectDockerIgnore,
@@ -64,6 +65,17 @@ describe("deploy target helpers", () => {
         packageJson: "dist/standalone/package.json",
         installCommand: "npm install --omit=dev",
         startCommand: "node dist/_capstan_server.js",
+      },
+    });
+  });
+
+  it("creates a root deployment contract for plain builds without a target override", () => {
+    expect(createProjectRootDeployTargetContract()).toEqual({
+      nodeStandalone: {
+        outputDir: "dist",
+        packageJson: "package.json",
+        installCommand: "npm install --omit=dev",
+        startCommand: "capstan start",
       },
     });
   });
@@ -126,6 +138,30 @@ describe("deploy target helpers", () => {
     expect(packageJson.dependencies.picocolors).toBeTruthy();
     expect(packageJson.engines).toEqual({ node: ">=20" });
     expect(packageJson.packageManager).toBe("npm@10.9.0");
+  });
+
+  it("sorts standalone runtime dependencies deterministically", async () => {
+    const packageJson = JSON.parse(
+      await createStandalonePackageJson({
+        projectPackageJson: {
+          name: "fixture-app",
+          dependencies: {
+            zeta: "^1.0.0",
+            alpha: "^2.0.0",
+          },
+        },
+        appName: "Fixture App",
+      }),
+    ) as {
+      dependencies: Record<string, string>;
+    };
+
+    expect(Object.keys(packageJson.dependencies)).toEqual([
+      "@zauso-ai/capstan-dev",
+      "alpha",
+      "picocolors",
+      "zeta",
+    ]);
   });
 
   it("rewrites deploy target metadata when the manifest is copied into a standalone root", () => {

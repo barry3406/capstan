@@ -412,6 +412,10 @@ capstan dev --port 4000     # Custom port
 capstan build               # Production build (tsc + manifests + deploy contract + server entry)
 capstan start               # Run production server
 capstan verify --json       # AI TDD: structured diagnostics for auto-fix
+capstan ops:events          # Inspect structured runtime events from .capstan/ops/ops.db
+capstan ops:incidents       # Inspect open/resolved incidents
+capstan ops:health          # Inspect the latest health summary
+capstan ops:tail            # Tail the latest events and incidents
 capstan add model <name>    # Scaffold a model
 capstan add api <name>      # Scaffold API routes
 capstan add page <name>     # Scaffold a page
@@ -1147,6 +1151,18 @@ const result = await client.callTool("createTicket", { title: "Bug" });
 
 \`capstan verify --json\` includes step 8: **cross-protocol** — validates that HTTP, MCP, A2A, and OpenAPI surfaces all expose consistent schemas and capabilities.
 
+### Semantic Ops Inspection
+
+Capstan also writes structured runtime operations data to \`.capstan/ops/ops.db\`
+in development and portable runtime builds. Use the CLI to inspect it:
+
+\`\`\`bash
+capstan ops:events
+capstan ops:incidents
+capstan ops:health
+capstan ops:tail
+\`\`\`
+
 ## Verification — AI TDD Self-Loop
 
 After every code change, run:
@@ -1459,6 +1475,15 @@ await harness.destroy();
 
 \`\`\`typescript
 import { createCronRunner, createAgentCron } from "@zauso-ai/capstan-cron";
+import { createHarness } from "@zauso-ai/capstan-ai";
+
+const harness = await createHarness({
+  llm: openaiProvider({ apiKey: process.env.OPENAI_API_KEY! }),
+  sandbox: {
+    browser: { engine: "camoufox", platform: "jd", accountId: "price-monitor-01" },
+    fs: { rootDir: "./workspace" },
+  },
+});
 
 const runner = createCronRunner();
 
@@ -1466,12 +1491,8 @@ runner.add(createAgentCron({
   cron: "0 */2 * * *",
   name: "price-monitor",
   goal: "Refresh the pricing report",
-  llm: openaiProvider({ apiKey: process.env.OPENAI_API_KEY! }),
-  harnessConfig: {
-    sandbox: {
-      browser: { engine: "camoufox", platform: "jd", accountId: "price-monitor-01" },
-      fs: { rootDir: "./workspace" },
-    },
+  runtime: {
+    harness,
   },
 }));
 

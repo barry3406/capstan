@@ -50,11 +50,12 @@ function extractKey(
   ctx: CapstanContext,
   keyBy: RateLimitConfig["keyBy"],
 ): string {
+  const actorId = ctx.auth.actor?.id ?? ctx.auth.envelope?.actor.id;
   switch (keyBy) {
     case "userId":
-      return ctx.auth.userId ?? extractIp(request);
+      return ctx.auth.userId ?? actorId ?? extractIp(request);
     case "apiKey":
-      return ctx.auth.agentId ?? extractIp(request);
+      return ctx.auth.agentId ?? actorId ?? extractIp(request);
     case "ip":
     default:
       return extractIp(request);

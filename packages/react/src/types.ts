@@ -112,6 +112,66 @@ export interface LoaderArgs {
       userId?: string;
       role?: string;
       email?: string;
+      agentId?: string;
+      agentName?: string;
+      permissions?: string[];
+      actor?: {
+        kind: "user" | "agent" | "workload" | "system" | "anonymous";
+        id: string;
+        displayName?: string;
+        role?: string;
+        email?: string;
+        claims?: Record<string, unknown>;
+      };
+      credential?: {
+        kind:
+          | "session"
+          | "oauth"
+          | "api_key"
+          | "mtls"
+          | "dpop"
+          | "run_token"
+          | "approval_token"
+          | "anonymous";
+        subjectId: string;
+        presentedAt: string;
+        expiresAt?: string;
+        metadata?: Record<string, unknown>;
+      };
+      execution?: {
+        kind:
+          | "request"
+          | "run"
+          | "tool_call"
+          | "approval"
+          | "schedule"
+          | "release"
+          | "mcp_invocation";
+        id: string;
+        parentId?: string;
+        metadata?: Record<string, unknown>;
+      };
+      delegation?: Array<{
+        from: { kind: string; id: string };
+        to: { kind: string; id: string };
+        reason: string;
+        issuedAt: string;
+        metadata?: Record<string, unknown>;
+      }>;
+      grants?: Array<{
+        resource: string;
+        action: string;
+        scope?: Record<string, string>;
+        effect?: "allow" | "deny";
+        expiresAt?: string;
+      }>;
+      envelope?: {
+        actor: NonNullable<LoaderArgs["ctx"]["auth"]["actor"]>;
+        credential: NonNullable<LoaderArgs["ctx"]["auth"]["credential"]>;
+        execution?: NonNullable<LoaderArgs["ctx"]["auth"]["execution"]>;
+        delegation: NonNullable<LoaderArgs["ctx"]["auth"]["delegation"]>;
+        grants: NonNullable<LoaderArgs["ctx"]["auth"]["grants"]>;
+      };
     };
   };
   /** In-process fetch to call API routes without HTTP round-trip */

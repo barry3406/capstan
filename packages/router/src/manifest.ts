@@ -30,12 +30,5 @@ export function generateRouteManifest(
     }
   }
 
-  // Sort for deterministic output
-  apiRoutes.sort((a, b) => {
-    const pathCmp = a.path.localeCompare(b.path);
-    if (pathCmp !== 0) return pathCmp;
-    return a.method.localeCompare(b.method);
-  });
-
   return { apiRoutes };
 }

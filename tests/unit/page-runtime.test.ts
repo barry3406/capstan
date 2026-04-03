@@ -297,6 +297,78 @@ describe("runPageRuntime", () => {
     expect(result.body).toBe("<html>cached page</html>");
   });
 
+  it("passes a normalized request pathname to the strategy layer", async () => {
+    const request = new Request("http://localhost/projects/alpha?draft=1#section");
+    let capturedUrl = "";
+    let capturedTags: unknown;
+    let capturedRevalidate: unknown;
+
+    const result = await runPageRuntime({
+      pageModule: makePageModule({
+        renderMode: "isr",
+        revalidate: 30,
+        cacheTags: ["projects", " alpha "],
+      }),
+      layouts: [],
+      params: {},
+      request,
+      loaderArgs: { ...makeLoaderArgs(), request },
+      strategyFactory: () => ({
+        render: async (ctx) => {
+          capturedUrl = ctx.url;
+          capturedTags = ctx.cacheTags;
+          capturedRevalidate = ctx.revalidate;
+          return {
+            html: "<html>normalized runtime</html>",
+            loaderData: null,
+            statusCode: 200,
+            cacheStatus: "HIT",
+          };
+        },
+      }),
+    });
+
+    expect(capturedUrl).toBe("/projects/alpha");
+    expect(capturedTags).toEqual(["projects", " alpha "]);
+    expect(capturedRevalidate).toBe(30);
+    expect(result.kind).toBe("document");
+    expect(result.url).toBe("/projects/alpha");
+  });
+
+  it("uses the normalized pathname for SSG file resolution even with query strings", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "page-runtime-ssg-query-"));
+    try {
+      const staticDir = join(tempDir, "static");
+      await mkdir(join(staticDir, "docs"), { recursive: true });
+      await writeFile(join(staticDir, "docs", "index.html"), "<html>docs static</html>", "utf-8");
+
+      const request = new Request("http://localhost/docs?lang=zh#overview");
+      const result = await runPageRuntime({
+        pageModule: makePageModule({
+          renderMode: "ssg",
+          default: () => {
+            throw new Error("the SSG cache hit should not render the component");
+          },
+        }),
+        layouts: [],
+        params: {},
+        request,
+        loaderArgs: { ...makeLoaderArgs(), request },
+        strategyOptions: { staticDir },
+      });
+
+      expect(result.kind).toBe("document");
+      if (result.kind !== "document" || result.transport !== "html") {
+        throw new Error("Expected html document result");
+      }
+      expect(result.url).toBe("/docs");
+      expect(result.cacheStatus).toBe("HIT");
+      expect(result.body).toBe("<html>docs static</html>");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("wraps cached html in a stream when SSG or ISR pages request stream transport", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "page-runtime-stream-cache-"));
     try {

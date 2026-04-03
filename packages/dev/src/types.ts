@@ -1,4 +1,5 @@
 import type { AgentCredential } from "@zauso-ai/capstan-auth";
+import type { RuntimeDiagnostic } from "./runtime-diagnostics.js";
 
 export interface DevServerConfig {
   /** Root directory of the Capstan app (contains app/ directory) */
@@ -26,6 +27,8 @@ export interface DevServerConfig {
       headerName?: string;
     };
   };
+  /** Optional semantic ops integration. Defaults to a project sink backed by .capstan/ops/ops.db when enabled. */
+  ops?: import("@zauso-ai/capstan-core").CapstanOpsConfig;
 }
 
 export interface RuntimeRouteRegistryEntry {
@@ -76,10 +79,16 @@ export interface RuntimeAppConfig extends DevServerConfig {
 }
 
 export interface RuntimeAppBuild {
-  app: import("hono").Hono<{ Variables: { capstanAuth: import("@zauso-ai/capstan-core").CapstanAuthContext } }>;
+  app: import("hono").Hono<{ Variables: {
+    capstanAuth: import("@zauso-ai/capstan-core").CapstanAuthContext;
+    capstanOps?: import("@zauso-ai/capstan-core").CapstanOpsContext;
+    capstanRequestId?: string;
+    capstanTraceId?: string;
+  } }>;
   apiRouteCount: number;
   pageRouteCount: number;
   routeRegistry: RuntimeRouteRegistryEntry[];
+  diagnostics?: RuntimeDiagnostic[];
 }
 
 export interface DevServerInstance {

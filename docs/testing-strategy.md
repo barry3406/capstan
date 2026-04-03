@@ -51,6 +51,7 @@ Typical targets:
 
 - scaffold or verify commands over fixture apps
 - runtime contract agreement across HTTP, MCP, A2A, and manifests
+- semantic ops persistence across runtime, SQLite store, and CLI projections
 - harness lifecycle behavior across persistence boundaries
 - generated surface projections over real runtime state
 - build and release commands over fixture apps
@@ -123,6 +124,31 @@ Current default posture:
 - snapshots: versioned golden files for diagnostics, manifests, and generated
   projections
 
+## Performance Benchmarks
+
+Capstan keeps a committed benchmark suite under `benchmarks/`.
+
+Purpose:
+
+- protect hot paths that can regress without changing public APIs
+- make framework performance budgets explicit and reviewable
+- fail CI when measured latency drifts beyond committed thresholds
+
+Current benchmark gates cover:
+
+- React SSR render hot paths
+- page runtime document and navigation payload generation
+- route scanning and route matching on a synthetic mid-sized app tree
+- in-memory runtime request handling for document, navigation, and scoped
+  not-found responses
+
+Working rules:
+
+- benchmark scenarios should stay deterministic and synthetic
+- scenarios should isolate framework overhead, not network conditions
+- every committed scenario must have a budget
+- budget changes should be reviewed like any other runtime contract
+
 ## Coverage By Kernel
 
 ### Contract
@@ -160,6 +186,7 @@ Required coverage:
 - top-level attention inbox and grouped queue-lane behavior
 - task/resource/route drill-down continuity and breadcrumb behavior
 - generated control-plane discovery, execution, and error contracts
+- semantic ops event, incident, and health views over real runtime state
 
 Release gate:
 

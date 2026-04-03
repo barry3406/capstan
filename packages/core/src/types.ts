@@ -1,6 +1,76 @@
 import type { Context as HonoContext } from "hono";
 import type { z } from "zod";
 import type { ComplianceConfig } from "./compliance.js";
+import type { CapstanOpsConfig, CapstanOpsContext } from "./ops.js";
+
+export interface CapstanAuthGrant {
+  resource: string;
+  action: string;
+  scope?: Record<string, string>;
+  effect?: "allow" | "deny";
+  expiresAt?: string;
+}
+
+export interface CapstanActorIdentity {
+  kind: "user" | "agent" | "workload" | "system" | "anonymous";
+  id: string;
+  displayName?: string;
+  role?: string;
+  email?: string;
+  claims?: Record<string, unknown>;
+}
+
+export interface CapstanCredentialProof {
+  kind:
+    | "session"
+    | "oauth"
+    | "api_key"
+    | "mtls"
+    | "dpop"
+    | "run_token"
+    | "approval_token"
+    | "anonymous";
+  subjectId: string;
+  presentedAt: string;
+  expiresAt?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface CapstanExecutionIdentity {
+  kind:
+    | "request"
+    | "run"
+    | "tool_call"
+    | "approval"
+    | "schedule"
+    | "release"
+    | "mcp_invocation";
+  id: string;
+  parentId?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface CapstanDelegationLink {
+  from: {
+    kind: CapstanActorIdentity["kind"] | CapstanExecutionIdentity["kind"];
+    id: string;
+  };
+  to: {
+    kind: CapstanActorIdentity["kind"] | CapstanExecutionIdentity["kind"];
+    id: string;
+  };
+  reason: string;
+  issuedAt: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface CapstanAuthEnvelope {
+  actor: CapstanActorIdentity;
+  credential: CapstanCredentialProof;
+  execution?: CapstanExecutionIdentity;
+  delegation: CapstanDelegationLink[];
+  grants: CapstanAuthGrant[];
+}
 
 /** Authentication context attached to every request. */
 export interface CapstanAuthContext {
@@ -12,6 +82,15 @@ export interface CapstanAuthContext {
   agentId?: string;
   agentName?: string;
   permissions?: string[];
+  actor?: CapstanActorIdentity;
+  credential?: CapstanCredentialProof;
+  execution?: CapstanExecutionIdentity;
+  delegation?: CapstanDelegationLink[];
+  grants?: CapstanAuthGrant[];
+  envelope?: CapstanAuthEnvelope;
+  dpopThumbprint?: string;
+  spiffeId?: string;
+  certFingerprint?: string;
 }
 
 /** Per-request context threaded through handlers, middleware, and policies. */
@@ -20,6 +99,9 @@ export interface CapstanContext {
   request: Request;
   env: Record<string, string | undefined>;
   honoCtx: HonoContext;
+  requestId?: string;
+  traceId?: string;
+  ops?: CapstanOpsContext;
 }
 
 export type HttpMethod = "GET" | "POST" | "PUT" | "DELETE" | "PATCH";
@@ -105,6 +187,7 @@ export interface CapstanConfig {
     host?: string;
   };
   plugins?: Array<{ name: string; version?: string; setup: (ctx: unknown) => void | Promise<void> }>;
+  ops?: CapstanOpsConfig;
 }
 
 /** Route metadata for the agent manifest system. */

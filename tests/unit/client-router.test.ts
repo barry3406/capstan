@@ -169,6 +169,20 @@ function installHeadMock(): {
   };
 }
 
+function createDeferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (error?: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (error?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 afterAll(() => {
   // Restore real fetch + remove browser globals so later tests are unaffected
   (globalThis as Record<string, unknown>)["fetch"] = originalFetch;
@@ -774,6 +788,90 @@ describe("CapstanRouter", () => {
     router.destroy();
   });
 
+  test("navigate includes auth in CustomEvent when present", async () => {
+    mockFetchResponses.push({
+      url: "/about",
+      payload: {
+        url: "/about",
+        layoutKey: "/",
+        loaderData: null,
+        componentType: "server",
+        auth: {
+          isAuthenticated: true,
+          type: "human",
+          userId: "user-42",
+          permissions: ["projects:read"],
+        },
+      },
+    });
+
+    let eventDetail: Record<string, unknown> = {};
+    const origDispatch = window.dispatchEvent;
+    (window as Record<string, unknown>)["dispatchEvent"] = (e: Event) => {
+      if (e.type === "capstan:navigate") {
+        eventDetail = (e as CustomEvent).detail as Record<string, unknown>;
+      }
+      return true;
+    };
+
+    const router = new CapstanRouter(manifest);
+    await router.navigate("/about");
+
+    expect(eventDetail["auth"]).toEqual({
+      isAuthenticated: true,
+      type: "human",
+      userId: "user-42",
+      permissions: ["projects:read"],
+    });
+
+    (window as Record<string, unknown>)["dispatchEvent"] = origDispatch;
+    router.destroy();
+  });
+
+  test("navigate rejects malformed auth payloads and falls back to full reload", async () => {
+    const origLocation = window.location;
+    let locationChanged = false;
+    Object.defineProperty(window, "location", {
+      value: {
+        ...origLocation,
+        get href() { return "/"; },
+        set href(_: string) { locationChanged = true; },
+        pathname: "/",
+      },
+      writable: true,
+      configurable: true,
+    });
+
+    (globalThis as Record<string, unknown>)["fetch"] = async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        url: "/about",
+        layoutKey: "/",
+        componentType: "server",
+        loaderData: null,
+        auth: "bad-auth",
+      }),
+    });
+
+    const router = new CapstanRouter(manifest);
+    try {
+      await router.navigate("/about");
+
+      expect(locationChanged).toBe(true);
+      expect(router.state.status).toBe("error");
+      expect(router.state.error?.message).toContain("auth must be an object");
+    } finally {
+      Object.defineProperty(window, "location", {
+        value: origLocation,
+        writable: true,
+        configurable: true,
+      });
+      router.destroy();
+      mockFetchForNav();
+    }
+  });
+
   // ------- morphOutlet -------
 
   test("morphOutlet falls back to innerHTML when no idiomorph", async () => {
@@ -1076,6 +1174,16 @@ describe("CapstanRouter", () => {
     router.destroy();
   });
 
+  test("constructor takes ownership of scroll restoration and destroy restores it", () => {
+    (history as Record<string, unknown>)["scrollRestoration"] = "auto";
+
+    const router = new CapstanRouter(manifest);
+    expect((history as Record<string, unknown>)["scrollRestoration"]).toBe("manual");
+
+    router.destroy();
+    expect((history as Record<string, unknown>)["scrollRestoration"]).toBe("auto");
+  });
+
   test("navigate with state merges custom state into history", async () => {
     mockFetchResponses.push({
       url: "/about",
@@ -1089,6 +1197,397 @@ describe("CapstanRouter", () => {
     const state = lastEntry?.state as Record<string, unknown>;
     expect(state["from"]).toBe("home");
     expect(state["__capstanKey"]).toBeDefined();
+    router.destroy();
+  });
+
+  test("constructor preserves existing history state while normalizing capstan fields", () => {
+    history.replaceState({ fromServer: true, __capstanKey: "existing-key" }, "", "/");
+
+    const router = new CapstanRouter(manifest);
+    const state = history.state as Record<string, unknown>;
+
+    expect(state["fromServer"]).toBe(true);
+    expect(state["__capstanKey"]).toBe("existing-key");
+    expect(state["__capstanUrl"]).toBe("/");
+    router.destroy();
+  });
+
+  test("navigate ignores non-object custom history state instead of spreading it", async () => {
+    mockFetchResponses.push({
+      url: "/about",
+      payload: { url: "/about", layoutKey: "/", loaderData: null, componentType: "server" },
+    });
+
+    const router = new CapstanRouter(manifest);
+    await router.navigate("/about", { state: "bad-state" as unknown });
+
+    const lastEntry = historyStack[historyStack.length - 1];
+    const state = lastEntry?.state as Record<string, unknown>;
+    expect(state["__capstanUrl"]).toBe("/about");
+    expect(state["__capstanKey"]).toBeDefined();
+    expect(state["0"]).toBeUndefined();
+    router.destroy();
+  });
+
+  test("failed noCache navigation reuses the last cached payload instead of hard reloading", async () => {
+    const router = new CapstanRouter(manifest);
+    const origLocation = window.location;
+    const origDispatch = window.dispatchEvent;
+    let locationChanged = false;
+    let eventDetail: Record<string, unknown> | null = null;
+
+    (window as Record<string, unknown>)["dispatchEvent"] = (event: Event) => {
+      if (event.type === "capstan:navigate") {
+        eventDetail = (event as CustomEvent).detail as Record<string, unknown>;
+      }
+      return true;
+    };
+
+    mockFetchResponses.push({
+      url: "/about",
+      payload: {
+        url: "/about",
+        layoutKey: "/",
+        loaderData: { version: "stale" },
+        componentType: "server",
+      },
+    });
+
+    await router.prefetch("/about");
+
+    Object.defineProperty(window, "location", {
+      value: {
+        ...origLocation,
+        get href() { return "/"; },
+        set href(_: string) { locationChanged = true; },
+        pathname: "/",
+      },
+      writable: true,
+      configurable: true,
+    });
+
+    (globalThis as Record<string, unknown>)["fetch"] = async () => ({
+      ok: false,
+      status: 500,
+      statusText: "Internal Server Error",
+    });
+
+    await router.navigate("/about", { noCache: true });
+
+    expect(locationChanged).toBe(false);
+    expect(router.state.status).toBe("idle");
+    expect(router.state.url).toBe("/about");
+    expect(eventDetail?.["loaderData"]).toEqual({ version: "stale" });
+
+    let fetchCount = 0;
+    (globalThis as Record<string, unknown>)["fetch"] = async (
+      input: string | URL | Request,
+      init?: RequestInit,
+    ) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      fetchCount++;
+      if (url.endsWith("/")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            url: "/",
+            layoutKey: "/",
+            loaderData: null,
+            componentType: "server",
+          }),
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          url: "/about",
+          layoutKey: "/",
+          loaderData: { version: "fresh" },
+          componentType: "server",
+        }),
+      };
+    };
+
+    await router.navigate("/", { replace: true });
+    await router.navigate("/about", { noCache: true });
+
+    expect(fetchCount).toBe(2);
+    expect(eventDetail?.["loaderData"]).toEqual({ version: "fresh" });
+
+    (window as Record<string, unknown>)["dispatchEvent"] = origDispatch;
+    Object.defineProperty(window, "location", {
+      value: origLocation,
+      writable: true,
+      configurable: true,
+    });
+    mockFetchForNav();
+    router.destroy();
+  });
+
+  test("navigation failure after head sync restores the last stable head state", async () => {
+    const head = installHeadMock();
+    const origDispatch = window.dispatchEvent;
+    const origLocation = window.location;
+    let locationChanged = false;
+
+    mockFetchResponses.push({
+      url: "/about",
+      payload: {
+        url: "/about",
+        layoutKey: "/",
+        loaderData: null,
+        componentType: "server",
+        metadata: {
+          title: "About Us",
+          description: "About page",
+        },
+      },
+    });
+    mockFetchResponses.push({
+      url: "/posts/1",
+      payload: {
+        url: "/posts/1",
+        layoutKey: "/",
+        loaderData: null,
+        componentType: "client",
+        metadata: {
+          title: "Broken Post",
+          description: "Broken page",
+        },
+      },
+    });
+
+    const router = new CapstanRouter(manifest);
+
+    try {
+      await router.navigate("/about");
+      expect(document.title).toBe("About Us");
+      expect(head.find("meta", { name: "description", content: "About page" })).toBeDefined();
+
+      Object.defineProperty(window, "location", {
+        value: {
+          ...origLocation,
+          get href() { return "/about"; },
+          set href(_: string) { locationChanged = true; },
+          pathname: "/about",
+        },
+        writable: true,
+        configurable: true,
+      });
+
+      (window as Record<string, unknown>)["dispatchEvent"] = (event: Event) => {
+        if (event.type === "capstan:navigate") {
+          throw new Error("listener failed");
+        }
+        return true;
+      };
+
+      await router.navigate("/posts/1");
+
+      expect(locationChanged).toBe(true);
+      expect(router.state.status).toBe("error");
+      expect(router.state.url).toBe("/about");
+      expect(document.title).toBe("About Us");
+      expect(head.find("meta", { name: "description", content: "About page" })).toBeDefined();
+      expect(head.find("meta", { name: "description", content: "Broken page" })).toBeUndefined();
+    } finally {
+      (window as Record<string, unknown>)["dispatchEvent"] = origDispatch;
+      Object.defineProperty(window, "location", {
+        value: origLocation,
+        writable: true,
+        configurable: true,
+      });
+      head.restore();
+      router.destroy();
+    }
+  });
+
+  test("popstate restores saved scroll position for the target history entry", async () => {
+    mockFetchResponses.push({
+      url: "/about",
+      payload: { url: "/about", layoutKey: "/", loaderData: null, componentType: "server" },
+    });
+    mockFetchResponses.push({
+      url: "/",
+      payload: { url: "/", layoutKey: "/", loaderData: null, componentType: "server" },
+    });
+
+    const router = new CapstanRouter(manifest);
+    const rootState = history.state as Record<string, string>;
+    const rootKey = rootState["__capstanKey"];
+
+    await router.navigate("/about");
+
+    sessionStorage.setItem(
+      `__capstan_scroll_${rootKey}`,
+      JSON.stringify({ x: 0, y: 140 }),
+    );
+
+    let restoredY = -1;
+    const origScrollTo = window.scrollTo;
+    (window as Record<string, unknown>)["scrollTo"] = (_x: number, y: number) => {
+      restoredY = y;
+    };
+
+    for (const fn of [...popstateListeners]) {
+      fn({ state: { __capstanUrl: "/", __capstanKey: rootKey } } as unknown as PopStateEvent);
+    }
+
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(restoredY).toBe(140);
+
+    (window as Record<string, unknown>)["scrollTo"] = origScrollTo;
+    router.destroy();
+  });
+
+  test("popstate navigation failure restores the stable view without forcing a hard reload", async () => {
+    mockFetchResponses.push({
+      url: "/about",
+      payload: {
+        url: "/about",
+        layoutKey: "/",
+        loaderData: { section: "about" },
+        componentType: "server",
+        metadata: { title: "About Stable" },
+      },
+    });
+
+    const router = new CapstanRouter(manifest);
+    const origLocation = window.location;
+    let locationChanged = false;
+
+    await router.navigate("/about");
+
+    Object.defineProperty(window, "location", {
+      value: {
+        ...origLocation,
+        get href() { return "/about"; },
+        set href(_: string) { locationChanged = true; },
+        pathname: "/about",
+      },
+      writable: true,
+      configurable: true,
+    });
+
+    (globalThis as Record<string, unknown>)["fetch"] = async () => ({
+      ok: false,
+      status: 503,
+      statusText: "Service Unavailable",
+    });
+
+    for (const fn of [...popstateListeners]) {
+      fn({ state: { __capstanUrl: "/", __capstanKey: "root-key" } } as unknown as PopStateEvent);
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(locationChanged).toBe(false);
+    expect(router.state.status).toBe("error");
+    expect(router.state.url).toBe("/about");
+    expect(document.title).toBe("About Stable");
+
+    Object.defineProperty(window, "location", {
+      value: origLocation,
+      writable: true,
+      configurable: true,
+    });
+    mockFetchForNav();
+    router.destroy();
+  });
+
+  test("new navigate aborts an in-flight popstate navigation before it can win", async () => {
+    const aboutDeferred = createDeferred<NavigationPayload>();
+    const origFetch = globalThis.fetch;
+    const origLocation = window.location;
+    let locationChanged = false;
+
+    Object.defineProperty(window, "location", {
+      value: {
+        ...origLocation,
+        get href() { return "/"; },
+        set href(_: string) { locationChanged = true; },
+        pathname: "/",
+      },
+      writable: true,
+      configurable: true,
+    });
+
+    (globalThis as Record<string, unknown>)["fetch"] = async (
+      input: string | URL | Request,
+      init?: RequestInit,
+    ) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+
+      if (url.endsWith("/about")) {
+        return await new Promise((resolve, reject) => {
+          const signal = init?.signal;
+          const abort = () => {
+            const error = new Error("Aborted");
+            error.name = "AbortError";
+            reject(error);
+          };
+
+          if (signal?.aborted) {
+            abort();
+            return;
+          }
+
+          signal?.addEventListener("abort", abort, { once: true });
+          void aboutDeferred.promise.then((payload) => {
+            resolve({
+              ok: true,
+              status: 200,
+              json: async () => payload,
+            });
+          });
+        });
+      }
+
+      if (url.endsWith("/posts/1")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            url: "/posts/1",
+            layoutKey: "/",
+            loaderData: { id: 1 },
+            componentType: "client",
+          }),
+        };
+      }
+
+      return { ok: false, status: 404, statusText: "Not Found" };
+    };
+
+    const router = new CapstanRouter(manifest);
+
+    for (const fn of [...popstateListeners]) {
+      fn({ state: { __capstanUrl: "/about", __capstanKey: "about-key" } } as unknown as PopStateEvent);
+    }
+
+    await Promise.resolve();
+    await router.navigate("/posts/1");
+    aboutDeferred.resolve({
+      url: "/about",
+      layoutKey: "/",
+      loaderData: null,
+      componentType: "server",
+    });
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(router.state.url).toBe("/posts/1");
+    expect(locationChanged).toBe(false);
+    expect(historyStack[historyStack.length - 1]?.url).toBe("/posts/1");
+
+    (globalThis as Record<string, unknown>)["fetch"] = origFetch;
+    Object.defineProperty(window, "location", {
+      value: origLocation,
+      writable: true,
+      configurable: true,
+    });
     router.destroy();
   });
 

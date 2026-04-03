@@ -1,4 +1,10 @@
 import type { Context, MiddlewareHandler } from "hono";
+import type { CapstanContext } from "./types.js";
+import { createRequestIdentity } from "./ops.js";
+
+export interface RequestLoggerOptions {
+  ops?: CapstanContext["ops"];
+}
 
 // ---------------------------------------------------------------------------
 // Log Level
@@ -26,17 +32,6 @@ function resolveLogLevel(): LogLevel {
 }
 
 // ---------------------------------------------------------------------------
-// Request ID
-// ---------------------------------------------------------------------------
-
-function generateRequestId(): string {
-  return crypto.randomUUID();
-}
-
-// ---------------------------------------------------------------------------
-// Structured log entry
-// ---------------------------------------------------------------------------
-
 interface RequestLogEntry {
   ts: string;
   reqId: string;
@@ -84,16 +79,31 @@ function shouldLogCompletion(
  * - `warn`   -- only log 4xx/5xx responses
  * - `error`  -- only log 5xx responses
  */
-export function createRequestLogger(): MiddlewareHandler {
+export function createRequestLogger(options: RequestLoggerOptions = {}): MiddlewareHandler {
   return async (c: Context, next: () => Promise<void>) => {
     const level = resolveLogLevel();
-    const reqId = generateRequestId();
+    const requestHeaderId = c.req.header("x-request-id");
+    const traceHeaderId = c.req.header("x-trace-id");
+    const currentRequestId = c.get("capstanRequestId") as string | undefined;
+    const currentTraceId = c.get("capstanTraceId") as string | undefined;
+    const requestIdentity = createRequestIdentity({
+      ...(requestHeaderId ? { requestHeaderId } : {}),
+      ...(traceHeaderId ? { traceHeaderId } : {}),
+      ...(currentRequestId ? { requestId: currentRequestId } : {}),
+      ...(currentTraceId ? { traceId: currentTraceId } : {}),
+    });
+    const reqId = requestIdentity.requestId;
+    const traceId = requestIdentity.traceId;
     const method = c.req.method;
     const path = c.req.path;
     const start = performance.now();
+    const ops = options.ops ?? (c.get("capstanOps") as CapstanContext["ops"] | undefined);
 
     // Set the request ID header early so downstream middleware can read it.
     c.header("X-Request-Id", reqId);
+    c.header("X-Trace-Id", traceId);
+    c.set("capstanRequestId", reqId);
+    c.set("capstanTraceId", traceId);
 
     // debug: log request start
     if (level === "debug") {
@@ -107,10 +117,53 @@ export function createRequestLogger(): MiddlewareHandler {
       console.log(JSON.stringify(entry));
     }
 
-    await next();
+    if (ops) {
+      await ops.recordRequestStart({
+        requestId: reqId,
+        traceId,
+        data: {
+          method,
+          path,
+          ...(c.req.header("user-agent")
+            ? { userAgent: c.req.header("user-agent") as string }
+            : {}),
+        },
+      });
+    }
+
+    try {
+      await next();
+    } catch (error) {
+      if (ops) {
+        await ops.recordRequestEnd({
+          requestId: reqId,
+          traceId,
+          data: {
+            method,
+            path,
+            status: 500,
+            durationMs: Math.round(performance.now() - start),
+          },
+        });
+      }
+      throw error;
+    }
 
     const ms = Math.round(performance.now() - start);
     const status = c.res.status;
+
+    if (ops) {
+      await ops.recordRequestEnd({
+        requestId: reqId,
+        traceId,
+        data: {
+          method,
+          path,
+          status,
+          durationMs: ms,
+        },
+      });
+    }
 
     if (shouldLogCompletion(level, status)) {
       const entry: RequestLogEntry = {

@@ -258,6 +258,7 @@ describe("createHarness recovery matrix", () => {
       "approval_required",
       "summary_created",
       "memory_stored",
+      "approval_canceled",
       "run_canceled",
       "summary_created",
       "memory_stored",
@@ -340,7 +341,7 @@ describe("createHarness recovery matrix", () => {
 
     const eventsBefore = await harness.getEvents(blocked.runId);
     await expect(harness.resumeRun(blocked.runId)).rejects.toThrow(
-      `Harness run ${blocked.runId} requires approvePendingTool=true before it can resume`,
+      `Harness run ${blocked.runId} requires an approved pending approval or approvePendingTool=true before it can resume`,
     );
     expect((await harness.getRun(blocked.runId))?.status).toBe("approval_required");
     expect(await harness.getEvents(blocked.runId)).toEqual(eventsBefore);
@@ -519,6 +520,7 @@ describe("createHarness recovery matrix", () => {
       "approval_required",
       "summary_created",
       "memory_stored",
+      "approval_approved",
       "run_resumed",
       "cancel_requested",
       "run_canceled",

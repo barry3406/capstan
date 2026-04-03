@@ -1,5 +1,10 @@
 import type { KeyValueStore } from "./store.js";
 import { MemoryStore } from "./store.js";
+import {
+  CacheTagIndex,
+  createPageCacheKey,
+  normalizeCacheTags,
+} from "./cache-utils.js";
 
 export interface ResponseCacheEntry {
   html: string;
@@ -12,7 +17,36 @@ export interface ResponseCacheEntry {
 }
 
 let store: KeyValueStore<ResponseCacheEntry> = new MemoryStore();
-let tagIndex = new Map<string, Set<string>>();
+const tagIndex = new CacheTagIndex();
+
+async function findKeysForTag(tag: string): Promise<string[]> {
+  const keys = await store.keys();
+  const matches: string[] = [];
+
+  for (const key of keys) {
+    const entry = await store.get(key);
+    if (entry?.tags.includes(tag)) {
+      matches.push(key);
+    }
+  }
+
+  return matches;
+}
+
+async function invalidateKeys(keys: readonly string[]): Promise<number> {
+  let count = 0;
+
+  for (const key of keys) {
+    const deleted = await store.delete(key);
+    if (!deleted) {
+      continue;
+    }
+    tagIndex.unregister(key);
+    count++;
+  }
+
+  return count;
+}
 
 /**
  * Swap the underlying store.  Also resets the in-memory tag index because
@@ -20,7 +54,7 @@ let tagIndex = new Map<string, Set<string>>();
  */
 export function setResponseCacheStore(s: KeyValueStore<ResponseCacheEntry>): void {
   store = s;
-  tagIndex = new Map();
+  tagIndex.clear();
 }
 
 export async function responseCacheGet(
@@ -43,47 +77,43 @@ export async function responseCacheSet(
   entry: ResponseCacheEntry,
   opts?: { ttlMs?: number },
 ): Promise<void> {
+  const normalizedEntry: ResponseCacheEntry = {
+    ...entry,
+    tags: normalizeCacheTags(entry.tags),
+  };
+
   // Write to the store first — if this fails, the tag index stays consistent
   // with whatever was previously stored.
-  await store.set(key, entry, opts?.ttlMs);
+  await store.set(key, normalizedEntry, opts?.ttlMs);
 
   // Clean up old tag references AFTER the write succeeds, then register
   // the new entry's tags.  Both operations are synchronous so no other
   // code can interleave between them.
-  removeKeyFromTagIndex(key);
-  for (const tag of entry.tags) {
-    let keys = tagIndex.get(tag);
-    if (!keys) {
-      keys = new Set();
-      tagIndex.set(tag, keys);
-    }
-    keys.add(key);
-  }
+  tagIndex.register(key, normalizedEntry.tags);
 }
 
 export async function responseCacheInvalidateTag(tag: string): Promise<number> {
-  const keys = tagIndex.get(tag);
-  if (!keys || keys.size === 0) return 0;
-
-  let count = 0;
-  for (const key of keys) {
-    if (await store.delete(key)) {
-      // Also remove this key from any *other* tags it belongs to,
-      // so the index stays consistent.
-      removeKeyFromTagIndex(key);
-      count++;
-    }
+  const count = await tagIndex.invalidateTag(tag, (key) => store.delete(key));
+  if (count > 0) {
+    return count;
   }
-  // The tag set itself may already be empty after removeKeyFromTagIndex
-  // cleaned it up, but ensure it's gone.
-  tagIndex.delete(tag);
-  return count;
+
+  const normalizedTag = normalizeCacheTags([tag])[0];
+  if (!normalizedTag) {
+    return 0;
+  }
+
+  return invalidateKeys(await findKeysForTag(normalizedTag));
+}
+
+export async function responseCacheInvalidatePath(url: string): Promise<boolean> {
+  return responseCacheInvalidate(createPageCacheKey(url));
 }
 
 export async function responseCacheInvalidate(key: string): Promise<boolean> {
   const deleted = await store.delete(key);
   if (deleted) {
-    removeKeyFromTagIndex(key);
+    tagIndex.unregister(key);
   }
   return deleted;
 }
@@ -91,16 +121,4 @@ export async function responseCacheInvalidate(key: string): Promise<boolean> {
 export async function responseCacheClear(): Promise<void> {
   await store.clear();
   tagIndex.clear();
-}
-
-// ── internal ──────────────────────────────────────────────────────────────
-
-/**
- * Remove a key from every tag set in the index.  Cleans up empty tag sets.
- */
-function removeKeyFromTagIndex(key: string): void {
-  for (const [tag, keys] of tagIndex) {
-    keys.delete(key);
-    if (keys.size === 0) tagIndex.delete(tag);
-  }
 }

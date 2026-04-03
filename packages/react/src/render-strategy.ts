@@ -26,9 +26,14 @@ interface ResponseCacheFacade {
       tags: string[];
     },
   ): Promise<void>;
+  responseCacheInvalidate?(key: string): Promise<boolean>;
+  responseCacheInvalidateTag?(tag: string): Promise<number>;
+  cacheInvalidatePath?(url: string): Promise<boolean>;
+  cacheInvalidateTag?(tag: string): Promise<number>;
 }
 
 let _responseCache: ResponseCacheFacade | null = null;
+const inFlightRevalidations = new Map<string, Promise<void>>();
 
 function joinPath(...segments: string[]): string {
   const normalized = segments
@@ -70,6 +75,100 @@ async function getResponseCache(): Promise<ResponseCacheFacade | null> {
   }
 }
 
+/**
+ * Page-level caches are keyed by pathname only. Query strings and hashes are
+ * intentionally ignored so SSR, SSG, ISR, and invalidation APIs all target the
+ * same document entry for a route.
+ */
+export function normalizePagePath(url: string): string {
+  const raw = typeof url === "string" ? url.trim() : "";
+  if (raw === "") return "/";
+
+  let pathname: string;
+  if (raw.startsWith("/")) {
+    pathname = raw.split("?")[0]!.split("#")[0]!;
+  } else {
+    try {
+      pathname = new URL(raw, "http://capstan.local").pathname;
+    } catch {
+      pathname = raw.split("?")[0]!.split("#")[0]!;
+    }
+  }
+
+  if (pathname === "") return "/";
+  const normalized = pathname.replace(/\/{2,}/g, "/");
+  return normalized.startsWith("/") ? normalized : `/${normalized}`;
+}
+
+export function createPageCacheKey(url: string): string {
+  return `page:${normalizePagePath(url)}`;
+}
+
+function normalizeCacheTags(tags: readonly string[] | undefined): string[] {
+  if (!tags) return [];
+
+  const normalized = new Set<string>();
+  for (const tag of tags) {
+    if (typeof tag !== "string") continue;
+    const trimmed = tag.trim();
+    if (trimmed !== "") {
+      normalized.add(trimmed);
+    }
+  }
+
+  return Array.from(normalized);
+}
+
+function normalizeRevalidateSeconds(revalidate: number | undefined): number | undefined {
+  if (revalidate === undefined) return undefined;
+  if (!Number.isFinite(revalidate) || revalidate < 0) {
+    return 0;
+  }
+  return revalidate;
+}
+
+function resolveRevalidateAfter(revalidate: number | undefined, now: number): number | null | undefined {
+  const normalized = normalizeRevalidateSeconds(revalidate);
+  if (normalized === undefined) return undefined;
+  return now + normalized * 1000;
+}
+
+export async function invalidatePagePath(url: string): Promise<boolean> {
+  const cache = await getResponseCache();
+  const cacheKey = createPageCacheKey(url);
+  inFlightRevalidations.delete(cacheKey);
+
+  if (cache?.cacheInvalidatePath) {
+    return cache.cacheInvalidatePath(url);
+  }
+
+  if (!cache?.responseCacheInvalidate) {
+    return false;
+  }
+
+  return cache.responseCacheInvalidate(cacheKey);
+}
+
+export async function invalidatePageTag(tag: string): Promise<number> {
+  const normalizedTag = typeof tag === "string" ? tag.trim() : "";
+  if (normalizedTag === "") {
+    return 0;
+  }
+
+  const cache = await getResponseCache();
+  inFlightRevalidations.clear();
+
+  if (cache?.cacheInvalidateTag) {
+    return cache.cacheInvalidateTag(normalizedTag);
+  }
+
+  if (!cache?.responseCacheInvalidateTag) {
+    return 0;
+  }
+
+  return cache.responseCacheInvalidateTag(normalizedTag);
+}
+
 export interface RenderStrategyContext {
   options: RenderPageOptions;
   url: string;
@@ -107,7 +206,7 @@ export class ISRStrategy implements RenderStrategy {
 
   async render(ctx: RenderStrategyContext): Promise<RenderStrategyResult> {
     const cache = await getResponseCache();
-    const cacheKey = `page:${ctx.url}`;
+    const cacheKey = createPageCacheKey(ctx.url);
 
     if (cache) {
       const cached = await cache.responseCacheGet(cacheKey);
@@ -122,16 +221,7 @@ export class ISRStrategy implements RenderStrategy {
       }
 
       if (cached?.stale) {
-        // Fire-and-forget background revalidation — log failures so
-        // operators can diagnose issues rather than silently serving stale
-        // content forever.
-        this.revalidateInBackground(ctx, cacheKey, cache).catch((err) => {
-          // eslint-disable-next-line no-console
-          console.error(
-            `[capstan] ISR background revalidation failed for ${cacheKey}:`,
-            err instanceof Error ? err.message : err,
-          );
-        });
+        this.scheduleRevalidation(ctx, cacheKey, cache);
         return {
           html: cached.entry.html,
           loaderData: null,
@@ -151,12 +241,36 @@ export class ISRStrategy implements RenderStrategy {
         headers: {},
         statusCode: result.statusCode,
         createdAt: now,
-        revalidateAfter: now + ctx.revalidate * 1000,
-        tags: ctx.cacheTags ?? [],
+        revalidateAfter: resolveRevalidateAfter(ctx.revalidate, now) ?? null,
+        tags: normalizeCacheTags(ctx.cacheTags),
       });
     }
 
     return { ...result, cacheStatus: "MISS" };
+  }
+
+  private scheduleRevalidation(
+    ctx: RenderStrategyContext,
+    cacheKey: string,
+    cache: ResponseCacheFacade,
+  ): void {
+    if (inFlightRevalidations.has(cacheKey)) {
+      return;
+    }
+
+    const task = this.revalidateInBackground(ctx, cacheKey, cache)
+      .catch((err) => {
+        // eslint-disable-next-line no-console
+        console.error(
+          `[capstan] ISR background revalidation failed for ${cacheKey}:`,
+          err instanceof Error ? err.message : err,
+        );
+      })
+      .finally(() => {
+        inFlightRevalidations.delete(cacheKey);
+      });
+
+    inFlightRevalidations.set(cacheKey, task);
   }
 
   private async revalidateInBackground(
@@ -171,11 +285,8 @@ export class ISRStrategy implements RenderStrategy {
       headers: {},
       statusCode: result.statusCode,
       createdAt: now,
-      // Use strict undefined check — `revalidate: 0` means "always stale"
-      // and must NOT fall through to `null` (which means "never stale").
-      revalidateAfter:
-        ctx.revalidate !== undefined ? now + ctx.revalidate * 1000 : null,
-      tags: ctx.cacheTags ?? [],
+      revalidateAfter: resolveRevalidateAfter(ctx.revalidate, now) ?? null,
+      tags: normalizeCacheTags(ctx.cacheTags),
     });
   }
 }
@@ -186,8 +297,7 @@ export class ISRStrategy implements RenderStrategy {
  *   "/about" → "<staticDir>/about/index.html"
  */
 export function urlToFilePath(url: string, staticDir: string): string {
-  // Strip query string / hash
-  const pathname = url.split("?")[0]!.split("#")[0]!;
+  const pathname = normalizePagePath(url);
   const segments = pathname.replace(/^\/+|\/+$/g, "");
   if (segments === "") return joinPath(staticDir, "index.html");
   return joinPath(staticDir, segments, "index.html");

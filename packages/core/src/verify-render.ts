@@ -1,4 +1,4 @@
-import type { VerifyReport } from "./verify.js";
+import type { VerifyReport } from "./verify-types.js";
 
 /**
  * Render a VerifyReport as human-readable text output.

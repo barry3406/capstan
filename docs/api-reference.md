@@ -227,6 +227,50 @@ function createContext(honoCtx: HonoContext): CapstanContext
 
 ---
 
+### createCapstanOpsContext(config)
+
+Create the semantic ops context used by the runtime request logger, policy
+engine, approval flow, and health snapshots.
+
+```typescript
+function createCapstanOpsContext(config?: {
+  enabled?: boolean;
+  appName?: string;
+  source?: string;
+  recentWindowMs?: number;
+  retentionLimit?: number;
+  sink?: {
+    recordEvent(event: CapstanOpsEvent): Promise<void> | void;
+    close?(): Promise<void> | void;
+  };
+}): CapstanOpsContext | undefined
+```
+
+When present on `CapstanContext`, the ops context can record request,
+capability, policy, approval, and health lifecycle events while keeping local
+queries available to the running process.
+
+---
+
+### createCapstanOpsRuntime(config)
+
+Create the in-process semantic ops runtime used by `createCapstanOpsContext()`.
+
+```typescript
+function createCapstanOpsRuntime(config?: {
+  enabled?: boolean;
+  appName?: string;
+  source?: string;
+  recentWindowMs?: number;
+  retentionLimit?: number;
+}): CapstanOpsRuntime
+```
+
+The runtime records normalized events, derives incidents, emits health
+snapshots, and can fan out those normalized events to one or more sinks.
+
+---
+
 ### Approval Functions
 
 ```typescript
@@ -724,6 +768,59 @@ function setResponseCacheStore(store: KeyValueStore<ResponseCacheEntry>): void
 
 ---
 
+## @zauso-ai/capstan-ops
+
+Semantic operations kernel used by the runtime and CLI.
+
+### createCapstanOpsRuntime(options)
+
+Create the persistent ops runtime that records events, incidents, and health
+snapshots into an `OpsStore`.
+
+```typescript
+function createCapstanOpsRuntime(options: {
+  store: OpsStore;
+  serviceName?: string;
+  environment?: string;
+}): {
+  recordEvent(input: OpsRecordEventInput): Promise<OpsEventRecord>;
+  recordIncident(input: OpsRecordIncidentInput): Promise<OpsIncidentRecord>;
+  captureSnapshot(input: OpsCaptureSnapshotInput): Promise<OpsSnapshotRecord>;
+  captureDerivedSnapshot(timestamp?: string): Promise<OpsSnapshotRecord>;
+  createOverview(): OpsOverview;
+}
+```
+
+### InMemoryOpsStore
+
+```typescript
+class InMemoryOpsStore implements OpsStore {
+  constructor(options?: {
+    retention?: OpsRetentionConfig;
+    eventRetentionMs?: number;
+    incidentRetentionMs?: number;
+    snapshotRetentionMs?: number;
+  });
+}
+```
+
+### SqliteOpsStore
+
+```typescript
+class SqliteOpsStore implements OpsStore {
+  constructor(options: {
+    path: string;
+    retention?: OpsRetentionConfig;
+  });
+}
+```
+
+Capstan dev and portable runtime builds use this store shape to persist
+structured data at `.capstan/ops/ops.db`, and the CLI inspects it with
+`ops:events`, `ops:incidents`, `ops:health`, and `ops:tail`.
+
+---
+
 ---
 
 ## @zauso-ai/capstan-agent — LLM Providers
@@ -840,6 +937,14 @@ interface AIContext {
     run(config: AgentRunConfig): Promise<AgentRunResult>;
   };
 }
+
+interface AgentRunConfig {
+  goal: string;
+  tools?: AgentTool[];
+  tasks?: AgentTask[];
+  maxIterations?: number;
+  systemPrompt?: string;
+}
 ```
 
 **Usage:**
@@ -859,6 +964,17 @@ const result = await ai.think("Classify this ticket", {
 
 // Text generation
 const summary = await ai.generate("Summarize this document...");
+```
+
+Task helpers are exported directly from `@zauso-ai/capstan-ai`:
+
+```typescript
+import {
+  createShellTask,
+  createWorkflowTask,
+  createRemoteTask,
+  createSubagentTask,
+} from "@zauso-ai/capstan-ai";
 ```
 
 ---
@@ -904,6 +1020,7 @@ interface HarnessConfig {
     maxConcurrentRuns?: number;
     driver?: HarnessSandboxDriver;
     beforeToolCall?: HarnessToolPolicyFn;
+    beforeTaskCall?: HarnessTaskPolicyFn;
   };
 }
 
@@ -933,6 +1050,7 @@ interface Harness {
   getRun(runId: string): Promise<HarnessRunRecord | undefined>;
   listRuns(): Promise<HarnessRunRecord[]>;
   getEvents(runId?: string): Promise<HarnessRunEventRecord[]>;
+  getTasks(runId: string): Promise<HarnessTaskRecord[]>;
   getArtifacts(runId: string): Promise<HarnessArtifactRecord[]>;
   getCheckpoint(runId: string): Promise<AgentLoopCheckpoint | undefined>;
   getSessionMemory(runId: string): Promise<HarnessSessionMemoryRecord | undefined>;
@@ -980,6 +1098,7 @@ await harness.destroy();
 `runtime.driver` defaults to `LocalHarnessSandboxDriver`, which creates an isolated sandbox directory per run under `.capstan/harness/sandboxes/<runId>/`. The runtime store persists:
 - `runs/` — current run records
 - `events/` + `events.ndjson` — per-run and global lifecycle event logs
+- `tasks/` — per-run task execution records used by the task fabric and control plane
 - `artifacts/` — screenshots and other persisted tool outputs
 - `checkpoints/` — resumable loop checkpoints
 - `session-memory/` — structured run-scoped working memory
@@ -987,6 +1106,26 @@ await harness.destroy();
 - `memory/` — long-term runtime memory entries used during context assembly
 
 Use `openHarnessRuntime(rootDir?)` when you need an independent control plane that can inspect paused/completed runs without a live harness instance.
+
+When you need runtime supervision with auth, the control plane also accepts an object form:
+
+```typescript
+const runtime = await openHarnessRuntime({
+  rootDir: process.cwd(),
+  authorize(request) {
+    // request.action -> "run:read" | "run:pause" | "checkpoint:read" | ...
+    // request.runId   -> optional run scope
+    // return { allowed: true } or { allowed: false, reason: "..." }
+    return { allowed: true };
+  },
+});
+```
+
+Control-plane and live harness methods now accept an optional access context as their final argument, so server routes, supervision surfaces, and CLI wrappers can pass the caller identity through to the authorizer without binding `@zauso-ai/capstan-ai` to a specific auth implementation.
+
+Task-aware runs emit `task_call` and `task_result` lifecycle events and accumulate persisted `HarnessTaskRecord` entries. This makes shell-like background work inspectable without scraping transcript text.
+
+The CLI harness commands also support local grant simulation with `--grants '<json>'` and optional `--subject '<json>'`, which is useful for testing scoped `run:*`, `artifact:read`, `checkpoint:read`, `context:read`, and `approval:approve` behavior against persisted runs.
 
 ---
 
@@ -1285,7 +1424,7 @@ When `Bun.cron` is unavailable, this falls back to `createCronRunner()`.
 
 ### createAgentCron(config)
 
-Create a cron job that bootstraps `createHarness()` and runs an agent loop on each tick.
+Create a cron job that submits scheduled runs into a harness runtime. If you do not provide a runtime, it falls back to bootstrapping `createHarness()` on demand for compatibility.
 
 ```typescript
 function createAgentCron(config: AgentCronConfig): CronJobConfig
@@ -1294,9 +1433,24 @@ interface AgentCronConfig {
   cron: string;
   name: string;
   goal: string | (() => string);
-  llm: unknown;
+  timezone?: string;
+  llm?: unknown;
   harnessConfig?: Record<string, unknown>;
-  onResult?: (result: unknown) => void;
+  run?: {
+    about?: [string, string];
+    maxIterations?: number;
+    memory?: boolean;
+    systemPrompt?: string;
+    excludeRoutes?: string[];
+  };
+  triggerMetadata?: Record<string, unknown>;
+  runtime?: {
+    harness?: { startRun(config: unknown, options?: unknown): Promise<{ runId: string; result: Promise<unknown> }> };
+    createHarness?: () => Promise<{ startRun(config: unknown, options?: unknown): Promise<{ runId: string; result: Promise<unknown> }> }>;
+    reuseHarness?: boolean;
+  };
+  onQueued?: (meta: { runId: string; trigger: unknown }) => void;
+  onResult?: (result: unknown, meta: { runId: string; trigger: unknown }) => void;
   onError?: (err: Error) => void;
 }
 ```
@@ -1305,6 +1459,15 @@ interface AgentCronConfig {
 
 ```typescript
 import { createCronRunner, createAgentCron } from "@zauso-ai/capstan-cron";
+import { createHarness } from "@zauso-ai/capstan-ai";
+
+const harness = await createHarness({
+  llm: openaiProvider({ apiKey: process.env.OPENAI_API_KEY! }),
+  sandbox: {
+    browser: { engine: "camoufox", platform: "jd", accountId: "price-monitor-01" },
+    fs: { rootDir: "./workspace" },
+  },
+});
 
 const runner = createCronRunner();
 
@@ -1312,12 +1475,8 @@ runner.add(createAgentCron({
   cron: "0 */2 * * *",
   name: "price-monitor",
   goal: "Check the storefront and refresh workspace/report.md",
-  llm: openaiProvider({ apiKey: process.env.OPENAI_API_KEY! }),
-  harnessConfig: {
-    sandbox: {
-      browser: { engine: "camoufox", platform: "jd", accountId: "price-monitor-01" },
-      fs: { rootDir: "./workspace" },
-    },
+  runtime: {
+    harness,
   },
 }));
 

@@ -89,11 +89,12 @@ Think of it as a full-stack framework built for a world where humans, coding age
 - **Shared application contract** — `defineAPI()` produces HTTP, MCP, A2A, OpenAPI, and capability metadata from one definition
 - **Policy and approval primitives** — `definePolicy()` and approval workflows keep human supervision in the same execution model as agent actions
 - **Structured verification loop** — `capstan verify --json` emits repair-oriented diagnostics for coding agents instead of ad hoc test output
-- **Durable agent runtime** — `createHarness()` provides persisted runs, checkpoints, artifacts, event streams, browser sandboxes, and filesystem sandboxes
+- **Durable agent runtime** — `createHarness()` provides persisted runs, checkpoints, task records, artifacts, event streams, browser sandboxes, and filesystem sandboxes
+- **First-class task fabric** — long-running shell, workflow, remote, and subagent work can be submitted as persisted tasks that flow back into the host turn engine
 - **Operator-facing foundations** — generated control-plane and human-surface building blocks keep supervision tied to the same runtime contracts
 - **Multi-protocol discovery and execution** — built-in manifests, MCP, A2A, and OpenAPI make capabilities legible to external agents
 - **AI toolkit (`@zauso-ai/capstan-ai`)** — `createAI()`, `think()`, `generate()`, memory, and agent loops for standalone or in-framework use
-- **Scheduled agent work (`@zauso-ai/capstan-cron`)** — cron-oriented runtime for recurring or continuous agent jobs
+- **Scheduled agent work (`@zauso-ai/capstan-cron`)** — cron trigger adapter for recurring or continuous harness/runtime runs
 - **MCP Client** — consume external MCP servers from within your handlers via `connectMCP()`
 - **Vector fields & RAG primitives** — `field.vector()`, `defineEmbedding`, and hybrid search built into the ORM
 - **LangChain integration** — use Capstan APIs as LangChain tools, or call LangChain chains from handlers
@@ -104,6 +105,7 @@ Think of it as a full-stack framework built for a world where humans, coding age
 - **OpenTelemetry cross-protocol tracing** — traces span HTTP, MCP, and A2A calls automatically
 - **Cross-protocol contract testing** — verifier step 8 checks that HTTP, MCP, A2A, and OpenAPI all agree
 - **Deployable build outputs** — `capstan build` emits explicit output contracts for Node/Docker-style deployment flows
+- **Semantic ops pipeline** — runtime request, capability, policy, approval, and health signals can be persisted to `.capstan/ops/ops.db` and inspected with `capstan ops:*`
 - **Plugin system** — `definePlugin()` to add routes, policies, and middleware; load via `plugins: []` in config
 - **Pluggable state stores** — `KeyValueStore<T>` interface with `MemoryStore` default; swap to Redis or any external backend via `setApprovalStore()`, `setRateLimitStore()`, `setDpopReplayStore()`
 - **EU AI Act compliance** — `defineCompliance()` with risk level, audit logging, and transparency; automatic `GET /capstan/audit` endpoint
@@ -492,11 +494,13 @@ bunx capstan verify --deployment --target vercel-edge
 
 Build output is explicit and machine-readable: `dist/_capstan_server.js` is the production entrypoint, `dist/deploy-manifest.json` describes the deployment contract, and static assets copied from `app/public/` are served from the root URL path in production just like they are in development. Any explicit deployment target emits `dist/standalone/` with a runtime `package.json`; target-specific files are added on top of that bundle, such as `api/index.js` + `vercel.json` for Vercel, `worker.js` + `wrangler.toml` for Cloudflare, and `fly.toml` + Docker assets for Fly.io. `capstan verify --deployment --target <target>` validates those target contracts before release.
 
+Semantic ops are now part of the default runtime loop. Development and portable runtime builds write structured events, incidents, and health snapshots to `.capstan/ops/ops.db` at the project root, and the CLI can inspect them with `capstan ops:events`, `capstan ops:incidents`, `capstan ops:health`, and `capstan ops:tail`.
+
 ---
 
 ## 📦 Packages
 
-Capstan ships 11 workspace packages:
+Capstan ships 12 workspace packages:
 
 | Package | Description |
 |---------|-------------|
@@ -505,11 +509,12 @@ Capstan ships 11 workspace packages:
 | `@zauso-ai/capstan-db` | Drizzle ORM, `defineModel`, field/relation helpers, migrations, auto CRUD, vector fields, `defineEmbedding`, hybrid search (SQLite, PostgreSQL, MySQL) |
 | `@zauso-ai/capstan-auth` | JWT sessions, API key auth, OAuth providers (Google, GitHub), DPoP (RFC 9449), SPIFFE/mTLS, token-aware rate limiting (`"human"` / `"agent"` / `"anonymous"`) |
 | `@zauso-ai/capstan-agent` | `CapabilityRegistry`, MCP server (stdio + Streamable HTTP), MCP client, A2A adapter (SSE), OpenAPI generator, LangChain integration |
-| `@zauso-ai/capstan-ai` | Standalone AI toolkit: `createAI`, `think`/`generate` (structured + streaming), scoped memory primitives, `agent.run()`, and durable `createHarness()` runtime with context assembly, control-plane inspection, and browser/fs sandboxes |
+| `@zauso-ai/capstan-ai` | Standalone AI toolkit: `createAI`, `think`/`generate` (structured + streaming), scoped memory primitives, host-driven `agent.run()` with first-class tasks, and durable `createHarness()` runtime with context assembly, control-plane inspection, persisted task records, and browser/fs sandboxes |
 | `@zauso-ai/capstan-cron` | Recurring job scheduler: `defineCron`, `createCronRunner`, `createBunCronRunner`, `createAgentCron` |
 | `@zauso-ai/capstan-react` | SSR with loaders, layouts, scoped `not-found` boundaries, automatic metadata/head management, selective hydration, ISR render strategies, `<Link>` SPA router with prefetch & View Transitions, `Image`, `defineFont`, `defineMetadata`, `ErrorBoundary` |
 | `@zauso-ai/capstan-dev` | Dev server with file watching, hot route reload, MCP/A2A endpoints |
-| `@zauso-ai/capstan-cli` | CLI: `dev`, `build`, `start`, `deploy:init`, `verify`, `add`, `mcp`, `db:*` |
+| `@zauso-ai/capstan-ops` | Semantic ops runtime: events, incidents, snapshots, queries, SQLite persistence |
+| `@zauso-ai/capstan-cli` | CLI: `dev`, `build`, `start`, `deploy:init`, `verify`, `ops:*`, `add`, `mcp`, `db:*` |
 | `create-capstan-app` | Project scaffolder (`--template blank`, `--template tickets`) |
 
 

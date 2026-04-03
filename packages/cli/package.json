@@ -14,14 +14,16 @@
   "dependencies": {
     "@zauso-ai/capstan-ai": "1.0.0-beta.7",
     "@zauso-ai/capstan-agent": "1.0.0-beta.7",
+    "@zauso-ai/capstan-auth": "1.0.0-beta.7",
     "@zauso-ai/capstan-core": "1.0.0-beta.7",
     "@zauso-ai/capstan-db": "1.0.0-beta.7",
     "@zauso-ai/capstan-dev": "1.0.0-beta.7",
+    "@zauso-ai/capstan-ops": "1.0.0-beta.7",
     "@zauso-ai/capstan-router": "1.0.0-beta.7",
     "picocolors": "^1.1.1",
     "tsx": "^4.19.0"
   },
-  "description": "CLI for Capstan — dev, build, verify, add, mcp commands",
+  "description": "CLI for Capstan — dev, build, verify, ops, add, mcp commands",
   "files": [
     "dist"
   ],

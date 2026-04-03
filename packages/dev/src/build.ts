@@ -59,6 +59,10 @@ export async function buildStaticPages(
   const pageRoutes = manifest.routes.filter((r) => r.type === "page");
 
   for (const route of pageRoutes) {
+    if (route.staticInfo?.renderMode && route.staticInfo.renderMode !== "ssg") {
+      continue;
+    }
+
     // Load the compiled page module
     let pageModule: Record<string, unknown>;
     try {

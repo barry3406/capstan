@@ -1012,6 +1012,208 @@ describe("runAgentLoop", () => {
       ),
     ).toBe(false);
   });
+
+  it("executes multiple extracted tool calls from one assistant turn before returning to the model", async () => {
+    const capturedMessages: LLMMessage[][] = [];
+    const llm = mockLLM(
+      [
+        JSON.stringify({
+          tools: [
+            { tool: "step1", arguments: { value: 1 } },
+            { tool: "step2", arguments: { value: 2 } },
+          ],
+        }),
+        "All done.",
+      ],
+      capturedMessages,
+    );
+
+    const result = await runAgentLoop(
+      llm,
+      { goal: "Run two steps in one turn" },
+      [
+        {
+          name: "step1",
+          description: "Step one",
+          async execute(args) {
+            return { out: Number(args.value) * 10 };
+          },
+        },
+        {
+          name: "step2",
+          description: "Step two",
+          async execute(args) {
+            return { out: Number(args.value) * 20 };
+          },
+        },
+      ],
+    );
+
+    expect(result.status).toBe("completed");
+    expect(result.iterations).toBe(2);
+    expect(result.toolCalls).toHaveLength(2);
+    expect(result.toolCalls.map((call) => call.tool)).toEqual(["step1", "step2"]);
+
+    const secondCall = capturedMessages[1]!;
+    expect(secondCall.filter((message) => message.content.startsWith("Tool \""))).toHaveLength(2);
+  });
+
+  it("continues after max_output_tokens using a host continuation prompt", async () => {
+    const capturedMessages: LLMMessage[][] = [];
+    let callIndex = 0;
+    const llm: LLMProvider = {
+      name: "mock",
+      async chat(messages: LLMMessage[]): Promise<LLMResponse> {
+        capturedMessages.push(messages.map((message) => ({ ...message })));
+        callIndex++;
+        if (callIndex === 1) {
+          return {
+            content: "Partial answer that hit the token limit.",
+            model: "mock-1",
+            finishReason: "max_output_tokens",
+          };
+        }
+        return {
+          content: "Completed after continuation.",
+          model: "mock-1",
+        };
+      },
+    };
+
+    const result = await runAgentLoop(llm, { goal: "Summarize the issue" }, []);
+
+    expect(result.status).toBe("completed");
+    expect(result.iterations).toBe(2);
+    expect(result.result).toBe("Completed after continuation.");
+    expect(
+      capturedMessages[1]!.some((message) =>
+        message.content.includes("Continue from exactly where you left off."),
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps parallel tool hooks deterministic even when concurrency-safe tools resolve out of order", async () => {
+    const afterOrder: string[] = [];
+    const memoryEvents: string[] = [];
+    const llm = mockLLM([
+      JSON.stringify([
+        { tool: "slow", arguments: { value: 1 } },
+        { tool: "fast", arguments: { value: 2 } },
+      ]),
+      "done",
+    ]);
+
+    const result = await runAgentLoop(
+      llm,
+      { goal: "Run safe tools in parallel" },
+      [
+        {
+          name: "slow",
+          description: "slow tool",
+          isConcurrencySafe: true,
+          async execute(args) {
+            await new Promise((resolve) => setTimeout(resolve, 20));
+            return { value: args.value };
+          },
+        },
+        {
+          name: "fast",
+          description: "fast tool",
+          isConcurrencySafe: true,
+          async execute(args) {
+            return { value: args.value };
+          },
+        },
+      ],
+      {
+        afterToolCall: async (tool) => {
+          afterOrder.push(tool);
+        },
+        onMemoryEvent: async (content) => {
+          memoryEvents.push(content);
+        },
+      },
+    );
+
+    expect(result.status).toBe("completed");
+    expect(result.toolCalls.map((call) => call.tool)).toEqual(["slow", "fast"]);
+    expect(afterOrder).toEqual(["slow", "fast"]);
+    expect(memoryEvents[0]).toContain("slow");
+    expect(memoryEvents[1]).toContain("fast");
+  });
+
+  it("resumes a blocked tool batch from the persisted pending request queue", async () => {
+    let policyCalls = 0;
+    const blocked = await runAgentLoop(
+      mockLLM([
+        JSON.stringify([
+          { tool: "first", arguments: { value: 1 } },
+          { tool: "second", arguments: { value: 2 } },
+        ]),
+      ]),
+      { goal: "Run then approve" },
+      [
+        {
+          name: "first",
+          description: "first",
+          async execute(args) {
+            return { value: args.value };
+          },
+        },
+        {
+          name: "second",
+          description: "second",
+          async execute(args) {
+            return { value: args.value };
+          },
+        },
+      ],
+      {
+        beforeToolCall: async (tool) => {
+          policyCalls++;
+          return tool === "second"
+            ? { allowed: false, reason: "second needs approval" }
+            : { allowed: true };
+        },
+      },
+    );
+
+    expect(blocked.status).toBe("approval_required");
+    expect(blocked.toolCalls).toHaveLength(1);
+    expect(blocked.pendingApproval?.tool).toBe("second");
+    expect(blocked.checkpoint?.orchestration?.pendingToolRequests?.map((request) => request.name)).toEqual([
+      "second",
+    ]);
+    expect(policyCalls).toBe(2);
+
+    const resumed = await runAgentLoop(
+      mockLLM(["done"]),
+      { goal: "Run then approve" },
+      [
+        {
+          name: "first",
+          description: "first",
+          async execute(args) {
+            return { value: args.value };
+          },
+        },
+        {
+          name: "second",
+          description: "second",
+          async execute(args) {
+            return { value: args.value };
+          },
+        },
+      ],
+      {
+        checkpoint: blocked.checkpoint,
+        resumePendingTool: true,
+      },
+    );
+
+    expect(resumed.status).toBe("completed");
+    expect(resumed.toolCalls.map((call) => call.tool)).toEqual(["first", "second"]);
+  });
 });
 
 // ---------------------------------------------------------------------------

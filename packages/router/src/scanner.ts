@@ -1,15 +1,86 @@
-import { openSync, readSync, closeSync } from "node:fs";
+import { openSync, readSync, closeSync, statSync } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
 
-import type { RouteEntry, RouteManifest, RouteType } from "./types.js";
+import type {
+  RouteDiagnostic,
+  RouteEntry,
+  RouteManifest,
+  RouteStaticInfo,
+  RouteType,
+} from "./types.js";
+import {
+  canonicalizeRouteManifest,
+  createRouteConflictError as createValidationRouteConflictError,
+} from "./validation.js";
+import { analyzeRouteFileStaticInfo } from "./static-analysis.js";
 
 function isRouteGroupSegment(segment: string): boolean {
-  return /^\([^/]+\)$/.test(segment);
+  return /^\([^()/]+\)$/.test(segment);
 }
 
 function isNotFoundFile(filename: string): boolean {
   return filename === "not-found.tsx" || filename === "not-found.page.tsx";
+}
+
+interface ComponentTypeCacheEntry {
+  signature: string;
+  componentType: "server" | "client";
+}
+
+const componentTypeCache = new Map<string, ComponentTypeCacheEntry>();
+
+interface RouteFileSnapshot {
+  relativePath: string;
+  absolutePath: string;
+  filename: string;
+  routeType: RouteType;
+  signature: string;
+}
+
+interface CachedScannedRouteFile {
+  signature: string;
+  contextSignature: string;
+  entry: RouteEntry;
+  diagnostics: RouteDiagnostic[];
+}
+
+interface RouteScanCacheState {
+  fileSignatures: Map<string, string>;
+  scannedFiles: Map<string, CachedScannedRouteFile>;
+  validationDiagnostics: RouteDiagnostic[];
+  validationRouteOrder: string[];
+  validationSignature: string;
+  manifest: RouteManifest;
+}
+
+export class RouteScanCache {
+  private states = new Map<string, RouteScanCacheState>();
+
+  get(rootDir: string): RouteScanCacheState | undefined {
+    return this.states.get(rootDir);
+  }
+
+  set(rootDir: string, state: RouteScanCacheState): void {
+    this.states.set(rootDir, state);
+  }
+
+  clear(rootDir?: string): void {
+    if (rootDir) {
+      this.states.delete(path.resolve(rootDir));
+      return;
+    }
+
+    this.states.clear();
+  }
+}
+
+export interface ScanRoutesOptions {
+  cache?: RouteScanCache;
+}
+
+export function createRouteScanCache(): RouteScanCache {
+  return new RouteScanCache();
 }
 
 /**
@@ -17,6 +88,18 @@ function isNotFoundFile(filename: string): boolean {
  * for a "use client" directive at the top of the file.
  */
 function detectComponentType(filePath: string): "server" | "client" {
+  try {
+    const stats = statSync(filePath);
+    const signature = `${stats.mtimeMs}:${stats.size}`;
+    const cached = componentTypeCache.get(filePath);
+    if (cached?.signature === signature) {
+      return cached.componentType;
+    }
+  } catch {
+    componentTypeCache.delete(filePath);
+    return "server";
+  }
+
   // Read only the first 128 bytes — enough to detect "use client" directive
   // without pulling the entire file into memory.
   let fd: number;
@@ -30,7 +113,7 @@ function detectComponentType(filePath: string): "server" | "client" {
     const bytesRead = readSync(fd, buf, 0, 128, 0);
     const head = buf.toString("utf-8", 0, bytesRead);
     const firstLine = head.split(/\r?\n/)[0]?.trim() ?? "";
-    return (
+    const componentType = (
       firstLine === '"use client"' ||
       firstLine === "'use client'" ||
       firstLine === '"use client";' ||
@@ -38,7 +121,18 @@ function detectComponentType(filePath: string): "server" | "client" {
     )
       ? "client"
       : "server";
+    try {
+      const stats = statSync(filePath);
+      componentTypeCache.set(filePath, {
+        signature: `${stats.mtimeMs}:${stats.size}`,
+        componentType,
+      });
+    } catch {
+      componentTypeCache.delete(filePath);
+    }
+    return componentType;
   } catch {
+    componentTypeCache.delete(filePath);
     return "server";
   } finally {
     closeSync(fd);
@@ -102,143 +196,292 @@ function fileToSegment(filename: string): { segment: string; params: string[]; i
 }
 
 /**
- * Convert a directory path relative to the routes root into URL segments.
- * Each directory named as a dynamic segment (e.g. `[orgId]`) is converted.
+ * Recursively walk a directory, returning all files as paths relative to the root.
  */
-function dirToSegments(relativeDir: string): { segments: string[]; params: string[] } {
-  if (relativeDir === "" || relativeDir === ".") {
+async function walkDir(dir: string): Promise<RouteFileSnapshot[]> {
+  const files: RouteFileSnapshot[] = [];
+  const stack: Array<{ absoluteDir: string; relativeDir: string }> = [
+    { absoluteDir: dir, relativeDir: "." },
+  ];
+
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (!current) {
+      continue;
+    }
+
+    let entries: import("node:fs").Dirent[];
+    try {
+      entries = await readdir(current.absoluteDir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    for (const entry of entries) {
+      const absolutePath = path.join(current.absoluteDir, entry.name);
+      const relativePath = current.relativeDir === "."
+        ? entry.name
+        : path.join(current.relativeDir, entry.name);
+
+      if (entry.isDirectory()) {
+        stack.push({
+          absoluteDir: absolutePath,
+          relativeDir: relativePath,
+        });
+        continue;
+      }
+
+      if (entry.isFile()) {
+        const routeType = classifyFile(entry.name);
+        if (!routeType) {
+          continue;
+        }
+
+        try {
+          const stats = statSync(absolutePath);
+          files.push({
+            relativePath,
+            absolutePath,
+            filename: entry.name,
+            routeType,
+            signature: `${stats.mtimeMs}:${stats.size}`,
+          });
+        } catch {
+          continue;
+        }
+      }
+    }
+  }
+
+  files.sort((left, right) => left.relativePath.localeCompare(right.relativePath));
+  return files;
+}
+
+interface DirectoryRouteContext {
+  dirInfo: {
+    segments: string[];
+    params: string[];
+  };
+  contextSignature: string;
+  layouts: string[];
+  middlewares: string[];
+  nearestLoading?: string;
+  nearestError?: string;
+  nearestNotFound?: string;
+}
+
+function normalizeRelativeDir(relativeDir: string): string {
+  return relativeDir === "" ? "." : relativeDir;
+}
+
+function getDirectoryDepth(relativeDir: string): number {
+  if (relativeDir === "." || relativeDir === "") {
+    return 0;
+  }
+
+  return relativeDir.split(path.sep).filter(Boolean).length;
+}
+
+function describeDirectorySegment(segment: string): { segments: string[]; params: string[] } {
+  if (isRouteGroupSegment(segment)) {
     return { segments: [], params: [] };
   }
 
-  const parts = relativeDir.split(path.sep);
-  const segments: string[] = [];
-  const params: string[] = [];
-
-  for (const part of parts) {
-    if (isRouteGroupSegment(part)) {
-      continue;
-    }
-
-    const catchAllMatch = part.match(/^\[\.\.\.(\w+)\]$/);
-    if (catchAllMatch) {
-      segments.push("*");
-      params.push(catchAllMatch[1]!);
-      continue;
-    }
-
-    const dynamicMatch = part.match(/^\[(\w+)\]$/);
-    if (dynamicMatch) {
-      segments.push(`:${dynamicMatch[1]}`);
-      params.push(dynamicMatch[1]!);
-      continue;
-    }
-
-    segments.push(part);
+  const catchAllMatch = segment.match(/^\[\.\.\.(\w+)\]$/);
+  if (catchAllMatch) {
+    return { segments: ["*"], params: [catchAllMatch[1]!] };
   }
 
-  return { segments, params };
-}
-
-/**
- * Collect all _layout.tsx files from the routes root down to the given directory,
- * ordered from outermost to innermost.
- */
-function collectLayouts(routesDir: string, relativeDir: string): string[] {
-  const layouts: string[] = [];
-  const parts = relativeDir === "" || relativeDir === "." ? [] : relativeDir.split(path.sep);
-
-  // Check the root directory first
-  layouts.push(path.join(routesDir, "_layout.tsx"));
-
-  // Then each nested directory
-  let current = routesDir;
-  for (const part of parts) {
-    current = path.join(current, part);
-    layouts.push(path.join(current, "_layout.tsx"));
+  const dynamicMatch = segment.match(/^\[(\w+)\]$/);
+  if (dynamicMatch) {
+    return { segments: [`:${dynamicMatch[1]}`], params: [dynamicMatch[1]!] };
   }
 
-  return layouts;
+  return { segments: [segment], params: [] };
 }
 
-/**
- * Collect all _middleware.ts files from the routes root down to the given directory,
- * ordered from outermost to innermost.
- */
-function collectMiddlewares(routesDir: string, relativeDir: string): string[] {
-  const middlewares: string[] = [];
-  const parts = relativeDir === "" || relativeDir === "." ? [] : relativeDir.split(path.sep);
-
-  middlewares.push(path.join(routesDir, "_middleware.ts"));
-
-  let current = routesDir;
-  for (const part of parts) {
-    current = path.join(current, part);
-    middlewares.push(path.join(current, "_middleware.ts"));
-  }
-
-  return middlewares;
-}
-
-/**
- * Find the nearest file with the given name by walking up from the route's
- * directory to the routes root.  Returns the first match (innermost wins).
- */
-function findNearest(
-  routesDir: string,
+function resolveDirectoryFile(
+  rootDir: string,
   relativeDir: string,
   filename: string,
   existingAbsolute: Set<string>,
 ): string | undefined {
-  const parts = relativeDir === "" || relativeDir === "." ? [] : relativeDir.split(path.sep);
-
-  // Walk from innermost to outermost
-  for (let i = parts.length; i >= 0; i--) {
-    const dir = i === 0 ? routesDir : path.join(routesDir, ...parts.slice(0, i));
-    const candidate = path.join(dir, filename);
-    if (existingAbsolute.has(candidate)) return candidate;
-  }
-  return undefined;
+  const absolutePath = path.join(rootDir, relativeDir === "." ? "" : relativeDir, filename);
+  return existingAbsolute.has(absolutePath) ? absolutePath : undefined;
 }
 
-/**
- * Recursively walk a directory, returning all files as paths relative to the root.
- */
-async function walkDir(dir: string, root: string): Promise<string[]> {
-  const files: string[] = [];
+function buildDirectoryContexts(
+  rootDir: string,
+  routeFiles: readonly RouteFileSnapshot[],
+  existingAbsolute: Set<string>,
+): Map<string, DirectoryRouteContext> {
+  const uniqueDirs = new Set<string>(["."]);
+  const signatureByPath = new Map(routeFiles.map((file) => [file.relativePath, file.signature] as const));
 
-  let entries: import("node:fs").Dirent[];
-  try {
-    entries = await readdir(dir, { withFileTypes: true });
-  } catch {
-    // Directory doesn't exist or can't be read
-    return files;
-  }
-
-  for (const entry of entries) {
-    const fullPath = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      const nested = await walkDir(fullPath, root);
-      files.push(...nested);
-    } else if (entry.isFile()) {
-      files.push(path.relative(root, fullPath));
+  for (const { relativePath } of routeFiles) {
+    let currentDir = normalizeRelativeDir(path.dirname(relativePath));
+    for (;;) {
+      uniqueDirs.add(currentDir);
+      if (currentDir === ".") {
+        break;
+      }
+      currentDir = normalizeRelativeDir(path.dirname(currentDir));
     }
   }
 
-  return files;
+  const orderedDirs = [...uniqueDirs].sort((left, right) => {
+    const depthCmp = getDirectoryDepth(left) - getDirectoryDepth(right);
+    if (depthCmp !== 0) {
+      return depthCmp;
+    }
+    return left.localeCompare(right);
+  });
+
+  const contexts = new Map<string, DirectoryRouteContext>();
+
+  for (const relativeDir of orderedDirs) {
+    const parentDir = relativeDir === "."
+      ? null
+      : normalizeRelativeDir(path.dirname(relativeDir));
+    const parent = parentDir ? contexts.get(parentDir) : undefined;
+
+    const dirInfo = (() => {
+      if (!parent || relativeDir === ".") {
+        return { segments: [] as string[], params: [] as string[] };
+      }
+
+      const segmentInfo = describeDirectorySegment(path.basename(relativeDir));
+      return {
+        segments: [...parent.dirInfo.segments, ...segmentInfo.segments],
+        params: [...parent.dirInfo.params, ...segmentInfo.params],
+      };
+    })();
+
+    const layoutPath = resolveDirectoryFile(rootDir, relativeDir, "_layout.tsx", existingAbsolute);
+    const middlewarePath = resolveDirectoryFile(rootDir, relativeDir, "_middleware.ts", existingAbsolute);
+    const loadingPath = resolveDirectoryFile(rootDir, relativeDir, "_loading.tsx", existingAbsolute);
+    const errorPath = resolveDirectoryFile(rootDir, relativeDir, "_error.tsx", existingAbsolute);
+    const notFoundPath = resolveDirectoryFile(rootDir, relativeDir, "not-found.tsx", existingAbsolute)
+      ?? resolveDirectoryFile(rootDir, relativeDir, "not-found.page.tsx", existingAbsolute);
+    const contextSignatureParts = [
+      parent?.contextSignature ?? "root",
+      relativeDir,
+      dirInfo.segments.join(","),
+      dirInfo.params.join(","),
+      layoutPath ? `${normalizeRelativeDir(path.relative(rootDir, layoutPath))}@${signatureByPath.get(normalizeRelativeDir(path.relative(rootDir, layoutPath))) ?? "missing"}` : "layout:none",
+      middlewarePath ? `${normalizeRelativeDir(path.relative(rootDir, middlewarePath))}@${signatureByPath.get(normalizeRelativeDir(path.relative(rootDir, middlewarePath))) ?? "missing"}` : "middleware:none",
+      loadingPath ? `${normalizeRelativeDir(path.relative(rootDir, loadingPath))}@${signatureByPath.get(normalizeRelativeDir(path.relative(rootDir, loadingPath))) ?? "missing"}` : "loading:none",
+      errorPath ? `${normalizeRelativeDir(path.relative(rootDir, errorPath))}@${signatureByPath.get(normalizeRelativeDir(path.relative(rootDir, errorPath))) ?? "missing"}` : "error:none",
+      notFoundPath ? `${normalizeRelativeDir(path.relative(rootDir, notFoundPath))}@${signatureByPath.get(normalizeRelativeDir(path.relative(rootDir, notFoundPath))) ?? "missing"}` : "not-found:none",
+    ];
+
+    contexts.set(relativeDir, {
+      dirInfo,
+      contextSignature: contextSignatureParts.join("|"),
+      layouts: layoutPath ? [...(parent?.layouts ?? []), layoutPath] : [...(parent?.layouts ?? [])],
+      middlewares: middlewarePath
+        ? [...(parent?.middlewares ?? []), middlewarePath]
+        : [...(parent?.middlewares ?? [])],
+      ...(loadingPath
+        ? { nearestLoading: loadingPath }
+        : parent?.nearestLoading
+          ? { nearestLoading: parent.nearestLoading }
+          : {}),
+      ...(errorPath
+        ? { nearestError: errorPath }
+        : parent?.nearestError
+          ? { nearestError: parent.nearestError }
+          : {}),
+      ...(notFoundPath
+        ? { nearestNotFound: notFoundPath }
+        : parent?.nearestNotFound
+          ? { nearestNotFound: parent.nearestNotFound }
+          : {}),
+    });
+  }
+
+  return contexts;
 }
 
-/**
- * Filter layout/middleware candidate paths to only those that actually exist as
- * files discovered during the scan.
- */
-function filterExisting(candidates: string[], existingAbsolute: Set<string>): string[] {
-  return candidates.filter((p) => existingAbsolute.has(p));
+function buildCachedManifest(
+  manifest: RouteManifest,
+  routeFiles: readonly RouteFileSnapshot[],
+  scannedFiles: Map<string, CachedScannedRouteFile>,
+  validationSignature: string,
+  validationRouteOrder: string[],
+  validationDiagnostics: RouteDiagnostic[],
+): RouteScanCacheState {
+  return {
+    fileSignatures: new Map(routeFiles.map((file) => [file.relativePath, file.signature] as const)),
+    scannedFiles,
+    validationDiagnostics,
+    validationRouteOrder,
+    validationSignature,
+    manifest,
+  };
+}
+
+function snapshotsMatchCacheState(
+  routeFiles: readonly RouteFileSnapshot[],
+  cachedState: RouteScanCacheState,
+): boolean {
+  if (routeFiles.length !== cachedState.fileSignatures.size) {
+    return false;
+  }
+
+  for (const file of routeFiles) {
+    if (cachedState.fileSignatures.get(file.relativePath) !== file.signature) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function buildStaticDiagnostics(
+  filePath: string,
+  routeType: RouteType,
+  urlPattern: string,
+  params: readonly string[],
+): {
+  staticInfo?: RouteStaticInfo;
+  diagnostics: RouteDiagnostic[];
+} {
+  return analyzeRouteFileStaticInfo(
+    filePath,
+    routeType,
+    urlPattern,
+    params.length > 0,
+  );
+}
+
+function createRouteValidationKey(route: RouteEntry): string {
+  return `${route.type}:${route.filePath}`;
+}
+
+function createRouteValidationSignature(route: RouteEntry): string {
+  return [
+    route.type,
+    route.filePath,
+    route.urlPattern,
+    route.params.join(","),
+    route.isCatchAll ? "1" : "0",
+    route.methods?.join(",") ?? "",
+    route.layouts.join(","),
+    route.middlewares.join(","),
+    route.loading ?? "",
+    route.error ?? "",
+    route.notFound ?? "",
+  ].join("|");
 }
 
 /**
  * Scan a routes directory and produce a RouteManifest describing every route file found.
  */
-export async function scanRoutes(routesDir: string): Promise<RouteManifest> {
+export async function scanRoutes(
+  routesDir: string,
+  options: ScanRoutesOptions = {},
+): Promise<RouteManifest> {
   const resolvedRoot = path.resolve(routesDir);
 
   // Verify the directory exists
@@ -247,6 +490,7 @@ export async function scanRoutes(routesDir: string): Promise<RouteManifest> {
     if (!s.isDirectory()) {
       return {
         routes: [],
+        diagnostics: [],
         scannedAt: new Date().toISOString(),
         rootDir: resolvedRoot,
       };
@@ -254,32 +498,44 @@ export async function scanRoutes(routesDir: string): Promise<RouteManifest> {
   } catch {
     return {
       routes: [],
+      diagnostics: [],
       scannedAt: new Date().toISOString(),
       rootDir: resolvedRoot,
     };
   }
 
-  const relativePaths = await walkDir(resolvedRoot, resolvedRoot);
+  const routeFiles = await walkDir(resolvedRoot);
+  const cachedState = options.cache?.get(resolvedRoot);
+  if (cachedState && snapshotsMatchCacheState(routeFiles, cachedState)) {
+    return cachedState.manifest;
+  }
 
   // Build a set of all absolute paths for existence checks
-  const absolutePathSet = new Set(relativePaths.map((rp) => path.join(resolvedRoot, rp)));
+  const absolutePathSet = new Set(routeFiles.map((file) => file.absolutePath));
+  const directoryContexts = buildDirectoryContexts(resolvedRoot, routeFiles, absolutePathSet);
 
   const routes: RouteEntry[] = [];
+  const staticDiagnostics: RouteDiagnostic[] = [];
+  const scannedFiles = new Map<string, CachedScannedRouteFile>();
 
-  for (const relPath of relativePaths) {
-    const filename = path.basename(relPath);
-    const routeType = classifyFile(filename);
-
-    if (routeType === null) {
-      // Not a recognized route file — skip
+  for (const routeFile of routeFiles) {
+    const relativeDir = path.dirname(routeFile.relativePath);
+    const absoluteFilePath = routeFile.absolutePath;
+    const directoryContext = directoryContexts.get(normalizeRelativeDir(relativeDir));
+    if (!directoryContext) {
+      throw new Error(`Missing scanner directory context for ${relativeDir}`);
+    }
+    const cached = cachedState?.scannedFiles.get(routeFile.relativePath);
+    if (cached && cached.signature === routeFile.signature && cached.contextSignature === directoryContext.contextSignature) {
+      routes.push(cached.entry);
+      staticDiagnostics.push(...cached.diagnostics);
+      scannedFiles.set(routeFile.relativePath, cached);
       continue;
     }
 
-    const relativeDir = path.dirname(relPath);
-    const absoluteFilePath = path.join(resolvedRoot, relPath);
-
     // Build URL pattern
-    const dirInfo = dirToSegments(relativeDir);
+    const { dirInfo } = directoryContext;
+    const routeType = routeFile.routeType;
 
     if (
       routeType === "layout" ||
@@ -293,7 +549,7 @@ export async function scanRoutes(routesDir: string): Promise<RouteManifest> {
       const urlParts = dirInfo.segments;
       const urlPattern = "/" + urlParts.join("/");
 
-      routes.push({
+      const entry: RouteEntry = {
         filePath: absoluteFilePath,
         type: routeType,
         urlPattern: urlPattern === "/" ? "/" : urlPattern.replace(/\/$/, ""),
@@ -301,51 +557,55 @@ export async function scanRoutes(routesDir: string): Promise<RouteManifest> {
         middlewares: [],
         params: dirInfo.params,
         isCatchAll: false,
+      };
+      const staticInfo = buildStaticDiagnostics(absoluteFilePath, routeType, entry.urlPattern, entry.params);
+      if (staticInfo.staticInfo) {
+        entry.staticInfo = staticInfo.staticInfo;
+      }
+      staticDiagnostics.push(...staticInfo.diagnostics);
+
+      routes.push(entry);
+      scannedFiles.set(routeFile.relativePath, {
+        signature: routeFile.signature,
+        contextSignature: directoryContext.contextSignature,
+        entry,
+        diagnostics: staticInfo.diagnostics,
       });
       continue;
     }
 
     if (routeType === "not-found") {
-      const layoutCandidates = collectLayouts(resolvedRoot, relativeDir);
-      const middlewareCandidates = collectMiddlewares(resolvedRoot, relativeDir);
-      const layouts = filterExisting(layoutCandidates, absolutePathSet);
-      const middlewares = filterExisting(middlewareCandidates, absolutePathSet);
-      const nearestLoading = findNearest(resolvedRoot, relativeDir, "_loading.tsx", absolutePathSet);
-      const nearestError = findNearest(resolvedRoot, relativeDir, "_error.tsx", absolutePathSet);
-      const nearestNotFound = findNearest(
-        resolvedRoot,
-        relativeDir,
-        "not-found.tsx",
-        absolutePathSet,
-      ) ?? findNearest(
-        resolvedRoot,
-        relativeDir,
-        "not-found.page.tsx",
-        absolutePathSet,
-      );
-
       const urlPattern = "/" + dirInfo.segments.join("/");
       const entry: RouteEntry = {
         filePath: absoluteFilePath,
         type: routeType,
         urlPattern: urlPattern === "/" ? "/" : urlPattern.replace(/\/$/, ""),
-        layouts,
-        middlewares,
+        layouts: directoryContext.layouts,
+        middlewares: directoryContext.middlewares,
         params: dirInfo.params,
         isCatchAll: false,
         componentType: detectComponentType(absoluteFilePath),
       };
+      const staticInfo = buildStaticDiagnostics(absoluteFilePath, routeType, entry.urlPattern, entry.params);
+      if (staticInfo.staticInfo) entry.staticInfo = staticInfo.staticInfo;
+      staticDiagnostics.push(...staticInfo.diagnostics);
 
-      if (nearestLoading) entry.loading = nearestLoading;
-      if (nearestError) entry.error = nearestError;
-      if (nearestNotFound) entry.notFound = nearestNotFound;
+      if (directoryContext.nearestLoading) entry.loading = directoryContext.nearestLoading;
+      if (directoryContext.nearestError) entry.error = directoryContext.nearestError;
+      if (directoryContext.nearestNotFound) entry.notFound = directoryContext.nearestNotFound;
 
       routes.push(entry);
+      scannedFiles.set(routeFile.relativePath, {
+        signature: routeFile.signature,
+        contextSignature: directoryContext.contextSignature,
+        entry,
+        diagnostics: staticInfo.diagnostics,
+      });
       continue;
     }
 
     // Page or API route
-    const fileInfo = fileToSegment(filename);
+    const fileInfo = fileToSegment(routeFile.filename);
     const allParams = [...dirInfo.params, ...fileInfo.params];
     const urlParts = [...dirInfo.segments];
     if (fileInfo.segment !== "") {
@@ -354,18 +614,12 @@ export async function scanRoutes(routesDir: string): Promise<RouteManifest> {
 
     const urlPattern = "/" + urlParts.join("/");
 
-    // Collect parent layouts and middlewares (only those that actually exist on disk)
-    const layoutCandidates = collectLayouts(resolvedRoot, relativeDir);
-    const middlewareCandidates = collectMiddlewares(resolvedRoot, relativeDir);
-    const layouts = filterExisting(layoutCandidates, absolutePathSet);
-    const middlewares = filterExisting(middlewareCandidates, absolutePathSet);
-
     const entry: RouteEntry = {
       filePath: absoluteFilePath,
       type: routeType,
       urlPattern: urlPattern === "/" ? "/" : urlPattern.replace(/\/$/, ""),
-      layouts,
-      middlewares,
+      layouts: directoryContext.layouts,
+      middlewares: directoryContext.middlewares,
       params: allParams,
       isCatchAll: fileInfo.isCatchAll,
     };
@@ -378,54 +632,65 @@ export async function scanRoutes(routesDir: string): Promise<RouteManifest> {
 
     if (routeType === "page") {
       entry.componentType = detectComponentType(absoluteFilePath);
-      const nearestLoading = findNearest(resolvedRoot, relativeDir, "_loading.tsx", absolutePathSet);
-      const nearestError = findNearest(resolvedRoot, relativeDir, "_error.tsx", absolutePathSet);
-      const nearestNotFound = findNearest(
-        resolvedRoot,
-        relativeDir,
-        "not-found.tsx",
-        absolutePathSet,
-      ) ?? findNearest(
-        resolvedRoot,
-        relativeDir,
-        "not-found.page.tsx",
-        absolutePathSet,
-      );
-      if (nearestLoading) entry.loading = nearestLoading;
-      if (nearestError) entry.error = nearestError;
-      if (nearestNotFound) entry.notFound = nearestNotFound;
+      if (directoryContext.nearestLoading) entry.loading = directoryContext.nearestLoading;
+      if (directoryContext.nearestError) entry.error = directoryContext.nearestError;
+      if (directoryContext.nearestNotFound) entry.notFound = directoryContext.nearestNotFound;
     }
+    const staticInfo = buildStaticDiagnostics(absoluteFilePath, routeType, entry.urlPattern, entry.params);
+    if (staticInfo.staticInfo) {
+      entry.staticInfo = staticInfo.staticInfo;
+    }
+    staticDiagnostics.push(...staticInfo.diagnostics);
 
     routes.push(entry);
+    scannedFiles.set(routeFile.relativePath, {
+      signature: routeFile.signature,
+      contextSignature: directoryContext.contextSignature,
+      entry,
+      diagnostics: staticInfo.diagnostics,
+    });
   }
 
-  // Sort for deterministic output:
-  // 1. By URL pattern alphabetically
-  // 2. By type (layout < middleware < page < api)
-  // 3. By file path as tiebreaker
-  const typeOrder: Record<RouteType, number> = {
-    layout: 0,
-    loading: 1,
-    error: 2,
-    "not-found": 3,
-    middleware: 4,
-    page: 5,
-    api: 6,
-  };
+  const validationSignature = routes
+    .map((route) => createRouteValidationSignature(route))
+    .join("\n");
+  const routeByValidationKey = new Map(
+    routes.map((route) => [createRouteValidationKey(route), route] as const),
+  );
 
-  routes.sort((a, b) => {
-    const patternCmp = a.urlPattern.localeCompare(b.urlPattern);
-    if (patternCmp !== 0) return patternCmp;
+  const reusedValidatedRoutes = cachedState && cachedState.validationSignature === validationSignature
+    ? cachedState.validationRouteOrder
+      .map((key) => routeByValidationKey.get(key))
+      .filter((route): route is RouteEntry => route !== undefined)
+    : undefined;
+  const validated = reusedValidatedRoutes && reusedValidatedRoutes.length === routes.length
+    ? {
+        routes: reusedValidatedRoutes,
+        diagnostics: cachedState!.validationDiagnostics,
+      }
+    : canonicalizeRouteManifest(routes, resolvedRoot);
+  const diagnostics = [...validated.diagnostics, ...staticDiagnostics];
+  const errorDiagnostics = diagnostics.filter((diagnostic) => diagnostic.severity === "error");
+  if (errorDiagnostics.length > 0) {
+    throw createValidationRouteConflictError(errorDiagnostics);
+  }
 
-    const typeCmp = typeOrder[a.type] - typeOrder[b.type];
-    if (typeCmp !== 0) return typeCmp;
-
-    return a.filePath.localeCompare(b.filePath);
-  });
-
-  return {
-    routes,
+  const manifest = {
+    routes: validated.routes,
+    diagnostics,
     scannedAt: new Date().toISOString(),
     rootDir: resolvedRoot,
   };
+  options.cache?.set(
+    resolvedRoot,
+    buildCachedManifest(
+      manifest,
+      routeFiles,
+      scannedFiles,
+      validationSignature,
+      validated.routes.map((route) => createRouteValidationKey(route)),
+      validated.diagnostics,
+    ),
+  );
+  return manifest;
 }

@@ -1,5 +1,49 @@
 export type RouteType = "page" | "api" | "layout" | "middleware" | "loading" | "error" | "not-found";
 
+export type RouteConflictReason =
+  | "duplicate-route"
+  | "ambiguous-route"
+  | "ambiguous-not-found"
+  | "invalid-route-pattern"
+  | "invalid-route-export";
+
+export type RouteDiagnosticSeverity = "error" | "warning";
+
+export interface RouteDiagnostic {
+  code: RouteConflictReason;
+  severity: RouteDiagnosticSeverity;
+  message: string;
+  routeType: RouteType;
+  urlPattern: string;
+  canonicalPattern: string;
+  filePaths: string[];
+  directoryDepth?: number;
+}
+
+export interface RouteConflict {
+  routeType: RouteType;
+  urlPattern: string;
+  canonicalPattern?: string;
+  filePaths: string[];
+  reason: RouteConflictReason;
+  /** Directory depth is used to distinguish scoped not-found boundaries. */
+  directoryDepth?: number;
+}
+
+export interface RouteConflictError extends Error {
+  code: "ROUTE_CONFLICT";
+  conflicts: RouteConflict[];
+  diagnostics: RouteDiagnostic[];
+}
+
+export interface RouteStaticInfo {
+  exportNames: string[];
+  hasMetadata?: boolean;
+  renderMode?: "ssr" | "ssg" | "isr" | "streaming";
+  revalidate?: number;
+  hasGenerateStaticParams?: boolean;
+}
+
 export interface RouteEntry {
   /** Absolute file path */
   filePath: string;
@@ -27,10 +71,13 @@ export interface RouteEntry {
   error?: string;
   /** Nearest not-found boundary file path for this route's scope */
   notFound?: string;
+  /** Lightweight static analysis from the route source file. */
+  staticInfo?: RouteStaticInfo;
 }
 
 export interface RouteManifest {
   routes: RouteEntry[];
+  diagnostics?: RouteDiagnostic[];
   /** Timestamp of last scan */
   scannedAt: string;
   /** Root directory that was scanned */

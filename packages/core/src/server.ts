@@ -7,8 +7,11 @@ import { createContext } from "./context.js";
 import { enforcePolicies } from "./policy.js";
 import { createApproval } from "./approval.js";
 import { mountApprovalRoutes } from "./approval-routes.js";
+import { createRequestLogger } from "./logger.js";
+import { createCapstanOpsContext, type CapstanOpsContext } from "./ops.js";
 import { recordAuditEntry, getAuditLog } from "./compliance.js";
 import type { RiskLevel } from "./compliance.js";
+import { buildAuditAuthSnapshot, hasAuthGrant } from "./authz.js";
 import { counter, histogram, serializeMetrics } from "./metrics.js";
 import type {
   APIDefinition,
@@ -24,6 +27,9 @@ import type {
 interface CapstanEnv {
   Variables: {
     capstanCtx: CapstanContext;
+    capstanOps?: CapstanOpsContext;
+    capstanRequestId?: string;
+    capstanTraceId?: string;
   };
 }
 
@@ -82,6 +88,7 @@ export async function createCapstanApp(config: CapstanConfig): Promise<CapstanAp
 
   const app = new Hono<CapstanEnv>();
   const routeRegistry: RouteMetadata[] = [];
+  const ops = createCapstanOpsContext(config.ops);
 
   /**
    * Handler registry keyed by "METHOD /path" so that approved requests can
@@ -89,7 +96,7 @@ export async function createCapstanApp(config: CapstanConfig): Promise<CapstanAp
    */
   const handlerRegistry = new Map<
     string,
-    (input: unknown, ctx: CapstanContext) => Promise<unknown>
+    (input: unknown, ctx: CapstanContext, params: Record<string, string>) => Promise<unknown>
   >();
 
   // ------------------------------------------------------------------
@@ -98,6 +105,15 @@ export async function createCapstanApp(config: CapstanConfig): Promise<CapstanAp
 
   // CORS -- allow all origins by default (production apps override via config).
   app.use("*", cors());
+
+  if (ops) {
+    app.use("*", async (c, next) => {
+      c.set("capstanOps", ops);
+      await next();
+    });
+  }
+
+  app.use("*", createRequestLogger({ ops }));
 
   // Inject CapstanContext into every request so handlers can retrieve it.
   app.use("*", async (c, next) => {
@@ -164,13 +180,14 @@ export async function createCapstanApp(config: CapstanConfig): Promise<CapstanAp
 
     // Store the handler so approved requests can re-execute it.
     const routeKey = `${method} ${path}`;
-    handlerRegistry.set(routeKey, async (input: unknown, ctx: CapstanContext) => {
-      return apiDef.handler({ input, ctx, params: {} });
+    handlerRegistry.set(routeKey, async (input: unknown, ctx: CapstanContext, params: Record<string, string>) => {
+      return apiDef.handler({ input, ctx, params });
     });
 
     // --- mount on Hono --------------------------------------------------
     const honoHandler = async (c: HonoContext<CapstanEnv>) => {
       const ctx = c.get("capstanCtx");
+      const startTime = Date.now();
 
       // Parse input once — reused by both policy enforcement and the handler.
       let input: unknown;
@@ -205,8 +222,10 @@ export async function createCapstanApp(config: CapstanConfig): Promise<CapstanAp
             method,
             path,
             input,
+            params: c.req.param() as Record<string, string>,
             policy: policies.map((p) => p.key).join(", "),
             reason,
+            ctx,
           });
           return c.json(
             {
@@ -226,25 +245,48 @@ export async function createCapstanApp(config: CapstanConfig): Promise<CapstanAp
         compliance?.auditLog === true || compliance?.riskLevel === "high";
 
       // Run handler (which already includes input/output validation)
-      const startTime = shouldAudit ? Date.now() : 0;
       try {
+        if (ops) {
+          await ops.recordCapabilityInvocation({
+            ...(ctx.requestId ? { requestId: ctx.requestId } : {}),
+            ...(ctx.traceId ? { traceId: ctx.traceId } : {}),
+            phase: "start",
+            data: {
+              method,
+              path,
+              ...(apiDef.capability ? { capability: apiDef.capability } : {}),
+              ...(apiDef.resource ? { resource: apiDef.resource } : {}),
+            },
+          });
+        }
         const params = c.req.param() as Record<string, string>;
         const result = await apiDef.handler({ input, ctx, params });
 
-        if (shouldAudit) {
-          const authBag: { type: string; userId?: string; agentId?: string } = {
-            type: ctx.auth.type,
-          };
-          if (ctx.auth.userId !== undefined) authBag.userId = ctx.auth.userId;
-          if (ctx.auth.agentId !== undefined) authBag.agentId = ctx.auth.agentId;
+        if (ops) {
+          await ops.recordCapabilityInvocation({
+            ...(ctx.requestId ? { requestId: ctx.requestId } : {}),
+            ...(ctx.traceId ? { traceId: ctx.traceId } : {}),
+            phase: "end",
+            data: {
+              method,
+              path,
+              ...(apiDef.capability ? { capability: apiDef.capability } : {}),
+              ...(apiDef.resource ? { resource: apiDef.resource } : {}),
+              status: 200,
+              durationMs: Date.now() - startTime,
+              outcome: "success",
+            },
+          });
+        }
 
+        if (shouldAudit) {
           const entry: Parameters<typeof recordAuditEntry>[0] = {
             timestamp: new Date().toISOString(),
-            requestId: crypto.randomUUID(),
+            requestId: ctx.requestId ?? crypto.randomUUID(),
             method,
             path,
             riskLevel: compliance?.riskLevel ?? ("minimal" as RiskLevel),
-            auth: authBag,
+            auth: buildAuditAuthSnapshot(ctx.auth),
             input,
             output: result,
             durationMs: Date.now() - startTime,
@@ -257,6 +299,23 @@ export async function createCapstanApp(config: CapstanConfig): Promise<CapstanAp
 
         return c.json(result as object);
       } catch (err: unknown) {
+        if (ops) {
+          await ops.recordCapabilityInvocation({
+            ...(ctx.requestId ? { requestId: ctx.requestId } : {}),
+            ...(ctx.traceId ? { traceId: ctx.traceId } : {}),
+            phase: "end",
+            data: {
+              method,
+              path,
+              ...(apiDef.capability ? { capability: apiDef.capability } : {}),
+              ...(apiDef.resource ? { resource: apiDef.resource } : {}),
+              status: 500,
+              durationMs: Date.now() - startTime,
+              outcome: "failure",
+            },
+            incidentFingerprint: `capability:${method}:${path}:5xx`,
+          });
+        }
         // Zod validation errors
         if (
           err != null &&
@@ -291,6 +350,21 @@ export async function createCapstanApp(config: CapstanConfig): Promise<CapstanAp
       path,
       honoHandler,
     );
+
+    if (ops) {
+      void ops.recordHealthSnapshot({
+        appName: config.app?.name ?? config.app?.title ?? "capstan-app",
+        mode: config.server ? "production" : "development",
+        routeCount: routeRegistry.length,
+        apiRouteCount: routeRegistry.length,
+        pageRouteCount: 0,
+        policyCount: policies?.length ?? 0,
+        approvalCount: 0,
+        ...(config.ops?.recentWindowMs !== undefined
+          ? { recentWindowMs: config.ops.recentWindowMs }
+          : {}),
+      }).catch(() => void 0);
+    }
   };
 
   // ------------------------------------------------------------------
@@ -313,9 +387,8 @@ export async function createCapstanApp(config: CapstanConfig): Promise<CapstanAp
       );
     }
 
-    const perms: string[] = auth.permissions ?? [];
     const isAdmin = auth.role === "admin";
-    const hasPermission = perms.includes("audit:read");
+    const hasPermission = hasAuthGrant(auth, { resource: "audit", action: "read" });
 
     if (!isAdmin && !hasPermission) {
       return c.json(

@@ -92,9 +92,9 @@
 ### 資料與 AI
 - **向量欄位 & RAG 原語** — `defineEmbedding` 搭配混合搜尋（語意 + 關鍵字）
 - **LangChain 整合** — 原生整合 LangChain 生態系
-- **AI 工具包（`@zauso-ai/capstan-ai`）** — 獨立 AI 工具包：`createAI()` 工廠函式（無需 Capstan 框架即可使用）、`think<T>(prompt, { schema })` 結構化推理、`generate(prompt)` 文字生成、串流變體、依 scope 隔離的 `remember()`/`recall()` / `assembleContext()` 記憶原語、`memory.about(type, id)` 實體級記憶、`agent.run()` 自編排 Agent 迴圈
+- **AI 工具包（`@zauso-ai/capstan-ai`）** — 獨立 AI 工具包：`createAI()` 工廠函式（無需 Capstan 框架即可使用）、`think<T>(prompt, { schema })` 結構化推理、`generate(prompt)` 文字生成、串流變體、依 scope 隔離的 `remember()`/`recall()` / `assembleContext()` 記憶原語、`memory.about(type, id)` 實體級記憶、帶一等 task 執行的宿主驅動 `agent.run()`
 - **Agent Harness 模式** — `createHarness()` 組合瀏覽器沙箱（Playwright 或 Camoufox kernel）、檔案系統沙箱、LLM 自我驗證與可觀測性，適合長時間運行 Agent
-- **定時 Agent 排程（`@zauso-ai/capstan-cron`）** — `defineCron()`、`createCronRunner()`、`createBunCronRunner()`、`createAgentCron()` 用於 7×24 定時任務
+- **定時 Agent 排程（`@zauso-ai/capstan-cron`）** — 作為 cron 觸發層，把定時任務提交進 harness/runtime，而不是把排程與執行揉在一起
 
 ### 前端
 - **React SSR** — 搭配 loader 的伺服器端渲染、版面配置、`Outlet`、hydration
@@ -469,6 +469,8 @@ bunx capstan verify --deployment --target vercel-edge
 
 建置輸出現在是顯式且可機器讀取的：`dist/_capstan_server.js` 是正式入口，`dist/deploy-manifest.json` 描述部署契約，而從 `app/public/` 複製出的靜態資源在正式環境也和開發環境一樣直接掛載在根路徑。只要使用顯式部署目標，Capstan 都會產生 `dist/standalone/` 與其執行時期 `package.json`；接著再疊加平台檔案，例如 Vercel 的 `api/index.js` + `vercel.json`、Cloudflare 的 `worker.js` + `wrangler.toml`、Fly.io 的 `fly.toml` 與 Docker 資產。`capstan verify --deployment --target <target>` 會在發布前驗證這些部署契約。
 
+語義化運維現在也是預設執行時閉環的一部分。開發環境與 portable runtime 建置會把結構化事件、事故與健康快照寫入專案根目錄下的 `.capstan/ops/ops.db`，而 CLI 可以直接透過 `capstan ops:events`、`capstan ops:incidents`、`capstan ops:health` 與 `capstan ops:tail` 檢查。
+
 ---
 
 ## 📚 文件
@@ -490,7 +492,7 @@ bunx capstan verify --deployment --target vercel-edge
 
 ## 📦 套件
 
-Capstan 目前包含 11 個工作區套件：
+Capstan 目前包含 12 個工作區套件：
 
 | 套件 | 說明 |
 |------|------|
@@ -499,11 +501,12 @@ Capstan 目前包含 11 個工作區套件：
 | `@zauso-ai/capstan-db` | Drizzle ORM、`defineModel`、欄位/關聯輔助函式、遷移、自動 CRUD（SQLite、PostgreSQL、MySQL） |
 | `@zauso-ai/capstan-auth` | JWT 工作階段、Agent 用 API 金鑰驗證、OAuth 提供者（Google、GitHub）、權限檢查（`"human"` / `"agent"` / `"anonymous"`） |
 | `@zauso-ai/capstan-agent` | `CapabilityRegistry`、MCP 伺服器（型別化參數）、A2A 轉接器（SSE）、OpenAPI 產生器 |
-| `@zauso-ai/capstan-ai` | 獨立 AI 工具包：`createAI`、`think`/`generate`（結構化 + 串流）、scope 化記憶原語、`agent.run()` 自編排迴圈，以及具備上下文裝配、control plane 與瀏覽器/檔案沙箱的 `createHarness()` durable runtime |
+| `@zauso-ai/capstan-ai` | 獨立 AI 工具包：`createAI`、`think`/`generate`（結構化 + 串流）、scope 化記憶原語、帶一等 task 執行的宿主驅動 `agent.run()`，以及具備上下文裝配、control plane、持久化 task record 與瀏覽器/檔案沙箱的 `createHarness()` durable runtime |
 | `@zauso-ai/capstan-cron` | 定時排程套件：`defineCron`、`createCronRunner`、`createBunCronRunner`、`createAgentCron` |
+| `@zauso-ai/capstan-ops` | 語義化運維核心：事件、事故、快照、查詢、SQLite 持久化 |
 | `@zauso-ai/capstan-react` | SSR + loader、版面配置、`Outlet`、選擇性水合、ISR 渲染策略、`<Link>` SPA 路由（預取 + View Transitions）、`Image`、`defineFont`、`defineMetadata`、`ErrorBoundary` |
 | `@zauso-ai/capstan-dev` | 開發伺服器，含檔案監看、即時路由重新載入、MCP/A2A 端點 |
-| `@zauso-ai/capstan-cli` | CLI：`dev`、`build`、`start`、`deploy:init`、`verify`、`add`、`mcp`、`db:*` |
+| `@zauso-ai/capstan-cli` | CLI：`dev`、`build`、`start`、`deploy:init`、`verify`、`ops:*`、`add`、`mcp`、`db:*` |
 | `create-capstan-app` | 專案鷹架工具（`--template blank`、`--template tickets`） |
 
 

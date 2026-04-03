@@ -10,18 +10,28 @@ import {
   csrfProtection,
   enforcePolicies,
   mountApprovalRoutes,
+  createCapstanOpsContext,
 } from "@zauso-ai/capstan-core";
 import type {
   APIDefinition,
   HttpMethod,
   CapstanAuthContext,
   CapstanContext,
+  CapstanOpsContext,
   PolicyDefinition,
   MiddlewareDefinition,
 } from "@zauso-ai/capstan-core";
 import { createPageFetch } from "./page-fetch.js";
 import { runPageRuntime } from "./page-runtime.js";
 import type { PageRuntimeOptions } from "./page-runtime.js";
+import {
+  createRouteRuntimeDiagnostics,
+  createRuntimeDiagnostic,
+  mergeRuntimeDiagnostics,
+  runtimeDiagnosticsHeaders,
+  type RuntimeDiagnostic,
+} from "./runtime-diagnostics.js";
+import { resolveProjectOpsConfig } from "./ops-sink.js";
 import type {
   RuntimeAppBuild,
   RuntimeAppConfig,
@@ -33,6 +43,9 @@ import type {
 interface HonoEnv {
   Variables: {
     capstanAuth: CapstanAuthContext;
+    capstanOps?: CapstanOpsContext;
+    capstanRequestId?: string;
+    capstanTraceId?: string;
   };
 }
 
@@ -277,6 +290,7 @@ async function enforceRoutePolicy(
         input: args.input,
         policy: policyName,
         reason,
+        ctx: args.ctx,
       });
 
       return new Response(
@@ -329,6 +343,7 @@ async function enforceRoutePolicy(
       input: args.input,
       policy: policyName,
       reason: result.reason ?? "This action requires approval",
+      ctx: args.ctx,
     });
 
     return new Response(
@@ -398,6 +413,7 @@ function loadPortablePageModule(
 ): {
   default?: unknown;
   loader?: unknown;
+  componentType?: unknown;
   hydration?: unknown;
   renderMode?: unknown;
   revalidate?: unknown;
@@ -409,6 +425,7 @@ function loadPortablePageModule(
   return {
     ...(mod.default !== undefined ? { default: mod.default } : {}),
     ...(mod.loader !== undefined ? { loader: mod.loader } : {}),
+    ...(mod.componentType !== undefined ? { componentType: mod.componentType } : {}),
     ...(mod.hydration !== undefined ? { hydration: mod.hydration } : {}),
     ...(mod.renderMode !== undefined ? { renderMode: mod.renderMode } : {}),
     ...(mod.revalidate !== undefined ? { revalidate: mod.revalidate } : {}),
@@ -525,7 +542,15 @@ export async function buildPortableRuntimeApp(
   const manifest = config.manifest;
   const app = new Hono<HonoEnv>();
   const routeModules = config.routeModules;
+  const diagnostics: RuntimeDiagnostic[] = [];
   const routeRegistry: RuntimeRouteRegistryEntry[] = [];
+  const opsConfig = resolveProjectOpsConfig(config.ops, {
+    rootDir: config.rootDir,
+    ...(config.appName ? { appName: config.appName } : {}),
+    environment: config.mode ?? "development",
+    source: config.mode === "production" ? "portable-runtime:prod" : "portable-runtime:dev",
+  });
+  const ops = createCapstanOpsContext(opsConfig);
   const handlerRegistry = new Map<
     string,
     (input: unknown, ctx: CapstanContext) => Promise<unknown>
@@ -533,7 +558,14 @@ export async function buildPortableRuntimeApp(
   const unknownPolicyMode =
     config.unknownPolicyMode ?? (config.mode === "production" ? "deny" : "approve");
 
-  app.use("*", createRequestLogger());
+  if (ops) {
+    app.use("*", async (c, next) => {
+      c.set("capstanOps", ops);
+      await next();
+    });
+  }
+
+  app.use("*", createRequestLogger({ ops }));
   if (config.corsOptions !== false) {
     app.use("*", cors(config.corsOptions));
   }
@@ -671,7 +703,7 @@ export async function buildPortableRuntimeApp(
 
       app[honoMethod](route.urlPattern, async (c) => {
         const ctx = createContext(c);
-
+        const startTime = Date.now();
         const executeHandler = async (): Promise<Response> => {
           let input: unknown;
           try {
@@ -700,25 +732,89 @@ export async function buildPortableRuntimeApp(
             }
           }
 
-          if (isAPIDefinition(handler)) {
-            const params = c.req.param() as Record<string, string>;
-            const result = await handler.handler({ input, ctx, params });
-            return c.json(result as object);
+          const params = c.req.param() as Record<string, string>;
+
+          if (ops && isAPIDefinition(handler)) {
+            await ops.recordCapabilityInvocation({
+              ...(ctx.requestId !== undefined ? { requestId: ctx.requestId } : {}),
+              ...(ctx.traceId !== undefined ? { traceId: ctx.traceId } : {}),
+              phase: "start",
+              data: {
+                method,
+                path: route.urlPattern,
+                ...(handler.capability !== undefined
+                  ? { capability: handler.capability }
+                  : {}),
+                ...(handler.resource !== undefined
+                  ? { resource: handler.resource }
+                  : {}),
+              },
+            });
           }
 
-          if (typeof handler === "function") {
-            const params = c.req.param() as Record<string, string>;
-            const result = await (
-              handler as (args: {
-                input: unknown;
-                ctx: CapstanContext;
-                params: Record<string, string>;
-              }) => Promise<unknown>
-            )({ input, ctx, params });
-            return c.json(result as object);
-          }
+          try {
+            if (isAPIDefinition(handler)) {
+              const result = await handler.handler({ input, ctx, params });
+              if (ops) {
+                await ops.recordCapabilityInvocation({
+                  ...(ctx.requestId !== undefined ? { requestId: ctx.requestId } : {}),
+                  ...(ctx.traceId !== undefined ? { traceId: ctx.traceId } : {}),
+                  phase: "end",
+                  data: {
+                    method,
+                    path: route.urlPattern,
+                    ...(handler.capability !== undefined
+                      ? { capability: handler.capability }
+                      : {}),
+                    ...(handler.resource !== undefined
+                      ? { resource: handler.resource }
+                      : {}),
+                    status: 200,
+                    durationMs: Date.now() - startTime,
+                    outcome: "success",
+                  },
+                });
+              }
+              return c.json(result as object);
+            }
 
-          return c.json({ error: "Invalid handler export" }, 500);
+            if (typeof handler === "function") {
+              const result = await (
+                handler as (args: {
+                  input: unknown;
+                  ctx: CapstanContext;
+                  params: Record<string, string>;
+                }) => Promise<unknown>
+              )({ input, ctx, params });
+              return c.json(result as object);
+            }
+
+            return c.json({ error: "Invalid handler export" }, 500);
+          } catch (err) {
+            if (ops && isAPIDefinition(handler)) {
+              await ops.recordCapabilityInvocation({
+                ...(ctx.requestId !== undefined ? { requestId: ctx.requestId } : {}),
+                ...(ctx.traceId !== undefined ? { traceId: ctx.traceId } : {}),
+                phase: "end",
+                incidentFingerprint: `capability:${method}:${route.urlPattern}:5xx`,
+                data: {
+                  method,
+                  path: route.urlPattern,
+                  ...(handler.capability !== undefined
+                    ? { capability: handler.capability }
+                    : {}),
+                  ...(handler.resource !== undefined
+                    ? { resource: handler.resource }
+                    : {}),
+                  status: 500,
+                  durationMs: Date.now() - startTime,
+                  outcome: "failure",
+                },
+              });
+            }
+
+            throw err;
+          }
         };
 
         try {
@@ -787,6 +883,17 @@ export async function buildPortableRuntimeApp(
     try {
       pageModule = loadPortablePageModule(routeModules, routeFilePath);
     } catch (err) {
+      diagnostics.push(
+        createRuntimeDiagnostic(
+          "error",
+          "runtime.page-module.load-failed",
+          `Failed to load portable page route ${route.filePath}.`,
+          {
+            filePath: route.filePath,
+            error: err instanceof Error ? err.message : String(err),
+          },
+        ),
+      );
       console.error(
         `[capstan] Failed to load portable page ${route.filePath}:`,
         err instanceof Error ? err.message : err,
@@ -795,13 +902,54 @@ export async function buildPortableRuntimeApp(
     }
 
     if (!pageModule.default) {
+      diagnostics.push(
+        createRuntimeDiagnostic(
+          "error",
+          "route.page.missing-default",
+          `Page route ${route.urlPattern} must export a default React component.`,
+          {
+            filePath: route.filePath,
+            urlPattern: route.urlPattern,
+          },
+        ),
+      );
       console.warn(`[capstan] Page ${route.filePath} has no default export, skipping.`);
       return null;
     }
 
+    const moduleComponentType = (
+      pageModule as { componentType?: unknown }
+    ).componentType;
+
+    diagnostics.push(
+      ...createRouteRuntimeDiagnostics({
+        urlPattern: route.urlPattern,
+        filePath: route.filePath,
+        routeType: route.type,
+        ...(route.componentType !== undefined
+          ? { routeComponentType: route.componentType }
+          : {}),
+        ...(moduleComponentType !== undefined
+          ? { moduleComponentType }
+          : {}),
+        hasDefaultExport: Boolean(pageModule.default),
+      }),
+    );
+
     const loadedLayouts = resolvedLayouts.map((layoutPath) => {
       const layoutMod = loadPortableLayoutModule(routeModules, layoutPath);
       if (!layoutMod.default) {
+        diagnostics.push(
+          createRuntimeDiagnostic(
+            "error",
+            "route.layout.missing-default",
+            `Layout ${layoutPath} must export a default React component.`,
+            {
+              filePath: layoutPath,
+              routeFilePath: route.filePath,
+            },
+          ),
+        );
         throw new Error(`Layout ${layoutPath} has no default export.`);
       }
       return {
@@ -828,6 +976,23 @@ export async function buildPortableRuntimeApp(
       isStaticBuildRequest,
     }: ExecutePageRouteArgs): Promise<Response> => {
       const executePageRequest = async (): Promise<Response> => {
+        const requestDiagnostics: RuntimeDiagnostic[] = [];
+        if (pageModule.renderMode === "ssg" && !isStaticBuildRequest) {
+          requestDiagnostics.push(
+            createRuntimeDiagnostic(
+              "info",
+              "page-runtime.render-mode-fallback",
+              "Runtime downgraded SSG to SSR outside of a static build request.",
+              {
+                filePath: route.filePath,
+                urlPattern: route.urlPattern,
+                requestedRenderMode: pageModule.renderMode,
+                effectiveRenderMode: "ssr",
+              },
+            ),
+          );
+        }
+
         if (
           route.type === "page" &&
           !isNavRequest &&
@@ -839,10 +1004,22 @@ export async function buildPortableRuntimeApp(
             new URL(request.url).pathname,
           );
           if (staticHtml !== null) {
+            requestDiagnostics.push(
+              createRuntimeDiagnostic(
+                "info",
+                "page-runtime.static-html-hit",
+                "Served pre-rendered HTML from the static asset provider.",
+                {
+                  filePath: route.filePath,
+                  urlPattern: route.urlPattern,
+                },
+              ),
+            );
             return new Response(staticHtml, {
               status: 200,
               headers: {
                 "content-type": "text/html; charset=utf-8",
+                ...runtimeDiagnosticsHeaders(mergeRuntimeDiagnostics(diagnostics, requestDiagnostics)),
               },
             });
           }
@@ -900,14 +1077,19 @@ export async function buildPortableRuntimeApp(
           ...(errorComponent !== undefined
             ? { errorComponent: errorComponent as PageRuntimeOptions["errorComponent"] }
             : {}),
+          diagnostics: mergeRuntimeDiagnostics(diagnostics, requestDiagnostics),
         } as PageRuntimeOptions;
 
         const pageResult = await runPageRuntime(pageRuntimeOptions);
+        const responseHeaders = {
+          ...pageResult.headers,
+          ...runtimeDiagnosticsHeaders(pageResult.diagnostics ?? []),
+        };
 
         if (pageResult.kind === "navigation") {
           return new Response(pageResult.body, {
             status: pageResult.statusCode,
-            headers: pageResult.headers,
+            headers: responseHeaders,
           });
         }
 
@@ -918,14 +1100,14 @@ export async function buildPortableRuntimeApp(
           );
           return new Response(html, {
             status: pageResult.statusCode,
-            headers: pageResult.headers,
+            headers: responseHeaders,
           });
         }
 
         const html = decoratePageHtml(pageResult.html, manifest);
         return new Response(html, {
           status: pageResult.statusCode,
-          headers: pageResult.headers,
+          headers: responseHeaders,
         });
       };
 
@@ -948,6 +1130,7 @@ export async function buildPortableRuntimeApp(
               status: 500,
               headers: {
                 "content-type": "application/json; charset=utf-8",
+                ...runtimeDiagnosticsHeaders(diagnostics),
               },
             },
           );
@@ -972,6 +1155,7 @@ export async function buildPortableRuntimeApp(
           status: 500,
           headers: {
             "content-type": "text/html; charset=utf-8",
+            ...runtimeDiagnosticsHeaders(diagnostics),
           },
         });
       }
@@ -1012,6 +1196,25 @@ export async function buildPortableRuntimeApp(
   }
 
   mountApprovalRoutes(app, handlerRegistry);
+
+  if (ops) {
+    const healthSnapshotInput: Parameters<CapstanOpsContext["recordHealthSnapshot"]>[0] = {
+      appName: config.appName ?? "capstan-app",
+      routeCount: routeRegistry.length,
+      apiRouteCount,
+      pageRouteCount,
+      approvalCount: 0,
+      ...(config.mode !== undefined ? { mode: config.mode } : {}),
+      ...(config.policyRegistry !== undefined
+        ? { policyCount: config.policyRegistry.size }
+        : {}),
+      ...(config.ops?.recentWindowMs !== undefined
+        ? { recentWindowMs: config.ops.recentWindowMs }
+        : {}),
+      ...(config.auth?.session ? { notes: ["session-auth-enabled"] } : {}),
+    };
+    void ops.recordHealthSnapshot(healthSnapshotInput).catch(() => void 0);
+  }
 
   app.get("/_capstan/client.js", () => {
     return new Response(CAPSTAN_CLIENT_BOOTSTRAP, {
@@ -1241,5 +1444,11 @@ export async function buildPortableRuntimeApp(
     return c.notFound();
   });
 
-  return { app, apiRouteCount, pageRouteCount, routeRegistry };
+  return {
+    app,
+    apiRouteCount,
+    pageRouteCount,
+    routeRegistry,
+    diagnostics,
+  } as RuntimeAppBuild & { diagnostics: RuntimeDiagnostic[] };
 }

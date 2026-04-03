@@ -5,13 +5,13 @@ import { tmpdir } from "node:os";
 
 import {
   FileHarnessRuntimeStore,
-  HarnessContextKernel,
-} from "@zauso-ai/capstan-ai";
+} from "../../packages/ai/src/index.ts";
+import { HarnessContextKernel } from "../../packages/ai/src/harness/context/kernel.ts";
 import type {
   AgentLoopCheckpoint,
   HarnessRunRecord,
   HarnessSessionMemoryRecord,
-} from "@zauso-ai/capstan-ai";
+} from "../../packages/ai/src/index.ts";
 
 const tempDirs: string[] = [];
 
@@ -40,9 +40,12 @@ function buildRunRecord(
     updatedAt: now,
     iterations: 0,
     toolCalls: 0,
+    taskCalls: 0,
     maxIterations: 10,
     toolNames: ["lookup"],
+    taskNames: [],
     artifactIds: [],
+    taskIds: [],
     sandbox: {
       driver: "local",
       mode: "test",
@@ -302,6 +305,51 @@ describe("HarnessContextKernel", () => {
     expect(update.checkpoint.messages[7]!.content).toContain("[microcompacted tool result]");
   });
 
+  it("microcompacts tool-result transcript messages even when the richer engine uses a non-user role", async () => {
+    const hugePayload = "X".repeat(400);
+
+    const { kernel, runId } = await persistRunAndCheckpoint({
+      context: {
+        maxPromptTokens: 5000,
+        reserveOutputTokens: 0,
+        maxRecentToolResults: 0,
+        microcompactToolResultChars: 32,
+        sessionCompactThreshold: 0.99,
+      },
+      checkpoint: {
+        iterations: 1,
+        toolCalls: [
+          { tool: "lookup", args: { id: 1 }, result: { body: hugePayload } },
+        ],
+        messages: [
+          { role: "system", content: "system" },
+          { role: "user", content: "goal" },
+          { role: "assistant", content: "{\"tool\":\"lookup\",\"arguments\":{\"id\":1}}" },
+          { role: "tool" as any, content: toolResultMessage("lookup", { body: hugePayload }) },
+        ],
+      },
+    });
+
+    const update = await kernel.handleCheckpoint({
+      runId,
+      checkpoint: buildCheckpoint({
+        iterations: 1,
+        toolCalls: [
+          { tool: "lookup", args: { id: 1 }, result: { body: hugePayload } },
+        ],
+        messages: [
+          { role: "system", content: "system" },
+          { role: "user", content: "goal" },
+          { role: "assistant", content: "{\"tool\":\"lookup\",\"arguments\":{\"id\":1}}" },
+          { role: "tool" as any, content: toolResultMessage("lookup", { body: hugePayload }) },
+        ],
+      }),
+    });
+
+    expect(update.compaction?.kind).toBe("microcompact");
+    expect(update.checkpoint.messages[3]!.content).toContain("[microcompacted tool result]");
+  });
+
   it("session compacts oversized checkpoints and promotes a summary memory", async () => {
     const bigResult = "result ".repeat(120).trim();
     const messages = [
@@ -362,6 +410,46 @@ describe("HarnessContextKernel", () => {
 
     const storedSummary = await kernel.getLatestSummary(runId);
     expect(storedSummary).toEqual(update.summary);
+  });
+
+  it("preserves every leading system prompt and the goal message when session compaction rewrites the transcript", async () => {
+    const messages = [
+      { role: "system" as const, content: "system prompt one" },
+      { role: "system" as const, content: "system prompt two" },
+      { role: "user" as const, content: "goal" },
+      { role: "assistant" as const, content: "middle assistant" },
+      { role: "user" as const, content: "middle user" },
+      { role: "assistant" as const, content: "tail assistant" },
+      { role: "user" as const, content: "tail user" },
+    ];
+
+    const { kernel, runId } = await persistRunAndCheckpoint({
+      context: {
+        maxPromptTokens: 120,
+        reserveOutputTokens: 0,
+        maxRecentMessages: 2,
+        sessionCompactThreshold: 0.15,
+      },
+      checkpoint: {
+        iterations: 3,
+        messages,
+      },
+    });
+
+    const update = await kernel.handleCheckpoint({
+      runId,
+      checkpoint: buildCheckpoint({
+        iterations: 3,
+        messages,
+      }),
+    });
+
+    expect(update.summary).toBeDefined();
+    expect(update.checkpoint.messages[0]!.content).toBe("system prompt one");
+    expect(update.checkpoint.messages[1]!.content).toBe("system prompt two");
+    expect(update.checkpoint.messages[2]!.role).toBe("user");
+    expect(update.checkpoint.messages[2]!.content).toBe("goal");
+    expect(update.checkpoint.messages[3]!.content).toContain("[HARNESS_SUMMARY]");
   });
 
   it("captureRunState persists a terminal summary and promoted memory", async () => {
@@ -434,6 +522,36 @@ describe("HarnessContextKernel", () => {
     expect(captured.summary).toBeUndefined();
     expect(captured.promotedMemories).toEqual([]);
     expect(await kernel.getLatestSummary(runId)).toBeUndefined();
+  });
+
+  it("falls back to the latest assistant transcript content when lastAssistantResponse is absent", async () => {
+    const { kernel, runId } = await persistRunAndCheckpoint({
+      checkpoint: {
+        stage: "tool_result",
+        messages: [
+          { role: "system", content: "system prompt" },
+          { role: "user", content: "goal" },
+          { role: "assistant", content: "latest assistant reasoning" },
+          { role: "tool" as any, content: toolResultMessage("lookup", { ok: true }) },
+        ],
+      },
+    });
+
+    const update = await kernel.handleCheckpoint({
+      runId,
+      checkpoint: buildCheckpoint({
+        stage: "tool_result",
+        messages: [
+          { role: "system", content: "system prompt" },
+          { role: "user", content: "goal" },
+          { role: "assistant", content: "latest assistant reasoning" },
+          { role: "tool" as any, content: toolResultMessage("lookup", { ok: true }) },
+        ],
+      }),
+    });
+
+    expect(update.sessionMemory.headline).toBe("latest assistant reasoning");
+    expect(update.sessionMemory.lastAssistantResponse).toBe("latest assistant reasoning");
   });
 
   it("records high severity observations when tool results contain errors", async () => {

@@ -41,6 +41,7 @@ describe("deploy manifest helpers", () => {
       command: "capstan build",
       mode: "server",
       distDir: "dist",
+      target: "node-standalone",
     });
     expect(manifest.server).toEqual({
       entry: "dist/_capstan_server.js",
@@ -87,6 +88,7 @@ describe("deploy manifest helpers", () => {
 
     expect(manifest.build.command).toBe("capstan build --static");
     expect(manifest.build.mode).toBe("hybrid-static");
+    expect(manifest.build.target).toBe("node-standalone");
     expect(manifest.assets.copied).toBe(false);
     expect(manifest.assets.staticHtmlDir).toBe("dist/static");
     expect(manifest.artifacts.staticDir).toBe("dist/static");

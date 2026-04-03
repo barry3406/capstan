@@ -8,6 +8,10 @@ function isMetadataRecord(value: unknown): value is Record<string, unknown> {
   return isRecord(value);
 }
 
+function isAuthRecord(value: unknown): value is Record<string, unknown> {
+  return isRecord(value);
+}
+
 function buildPayloadError(url: string, reason: string): Error {
   return new Error(`Invalid navigation payload for ${url}: ${reason}`);
 }
@@ -49,6 +53,13 @@ export function normalizeNavigationPayload(url: string, value: unknown): Navigat
       throw buildPayloadError(url, "metadata must be an object when present");
     }
     payload.metadata = value.metadata as NonNullable<NavigationPayload["metadata"]>;
+  }
+
+  if ("auth" in value) {
+    if (!isAuthRecord(value.auth)) {
+      throw buildPayloadError(url, "auth must be an object when present");
+    }
+    payload.auth = value.auth as NonNullable<NavigationPayload["auth"]>;
   }
 
   return payload;

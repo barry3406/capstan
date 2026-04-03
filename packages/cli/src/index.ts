@@ -13,6 +13,16 @@ import {
   resolveServerEntryPath,
 } from "./deploy-manifest.js";
 import {
+  buildDeployManifestIntegrity,
+  compareDeployManifestIntegrity,
+  loadDeployManifestContract,
+  type DeployContractDiagnostic,
+} from "./deploy-integrity.js";
+import {
+  createDeploymentDoctorActions,
+  type DeploymentDoctorAction,
+} from "./deploy-doctor.js";
+import {
   BUILD_TARGETS,
   DEPLOY_INIT_TARGETS,
   collectPortableRuntimeAssets,
@@ -22,6 +32,7 @@ import {
   createPortableRuntimeModulesModuleSource,
   createProjectDeploymentFiles,
   createDeployTargetContract,
+  createProjectRootDeployTargetContract,
   createProjectDockerfile,
   createProjectDockerIgnore,
   createProjectEnvExample,
@@ -37,6 +48,12 @@ import {
   shouldEmitPortableRuntimeBundle,
   type BuildTarget,
 } from "./deploy-targets.js";
+import {
+  runOpsEvents,
+  runOpsHealth,
+  runOpsIncidents,
+  runOpsTail,
+} from "./ops.js";
 
 // ---------------------------------------------------------------------------
 // Known commands for fuzzy matching
@@ -48,9 +65,12 @@ const KNOWN_COMMANDS = [
   "add",
   "db:migrate", "db:push", "db:status",
   "verify",
+  "ops:events", "ops:incidents", "ops:health", "ops:tail",
   "mcp",
   "agent:manifest", "agent:openapi",
-  "harness:list", "harness:get", "harness:events", "harness:artifacts", "harness:checkpoint", "harness:pause", "harness:cancel", "harness:replay", "harness:paths",
+  "harness:list", "harness:get", "harness:events", "harness:artifacts", "harness:checkpoint",
+  "harness:approval", "harness:approvals", "harness:approve", "harness:deny",
+  "harness:pause", "harness:cancel", "harness:replay", "harness:paths",
 ] as const;
 
 /**
@@ -126,6 +146,18 @@ async function main(): Promise<void> {
     case "verify":
       await runVerify(args, args.includes("--json"));
       return;
+    case "ops:events":
+      await runOpsEvents(args);
+      return;
+    case "ops:incidents":
+      await runOpsIncidents(args);
+      return;
+    case "ops:health":
+      await runOpsHealth(args);
+      return;
+    case "ops:tail":
+      await runOpsTail(args);
+      return;
     case "db:migrate":
       await runDbMigrate(args);
       return;
@@ -158,6 +190,18 @@ async function main(): Promise<void> {
       return;
     case "harness:checkpoint":
       await runHarnessCheckpoint(args);
+      return;
+    case "harness:approval":
+      await runHarnessApproval(args);
+      return;
+    case "harness:approvals":
+      await runHarnessApprovals(args);
+      return;
+    case "harness:approve":
+      await runHarnessApprove(args);
+      return;
+    case "harness:deny":
+      await runHarnessDeny(args);
       return;
     case "harness:pause":
       await runHarnessPause(args);
@@ -256,48 +300,43 @@ async function runVerify(args: string[], asJson: boolean): Promise<void> {
   }
 }
 
-interface DeploymentVerifyDiagnostic {
-  severity: "error" | "warning" | "info";
-  code: string;
-  message: string;
-  hint?: string;
-}
-
 interface DeploymentVerifyReport {
   status: "passed" | "failed";
   appRoot: string;
   target: BuildTarget;
   timestamp: string;
-  diagnostics: DeploymentVerifyDiagnostic[];
+  diagnostics: DeployContractDiagnostic[];
+  doctor: DeploymentDoctorAction[];
   summary: {
     errorCount: number;
     warningCount: number;
   };
 }
 
-function getDeployContractKey(
+function getDeployTargetContract(
+  deployManifest: DeployManifest,
   target: BuildTarget,
-): keyof NonNullable<DeployManifest["targets"]> {
+): unknown {
   switch (target) {
     case "node-standalone":
-      return "nodeStandalone";
+      return deployManifest.targets?.nodeStandalone;
     case "docker":
-      return "docker";
+      return deployManifest.targets?.docker;
     case "vercel-node":
-      return "vercelNode";
+      return deployManifest.targets?.vercelNode;
     case "vercel-edge":
-      return "vercelEdge";
+      return deployManifest.targets?.vercelEdge;
     case "cloudflare":
-      return "cloudflare";
+      return deployManifest.targets?.cloudflare;
     case "fly":
-      return "fly";
+      return deployManifest.targets?.fly;
   }
 }
 
 function createDeploymentReport(
   appRoot: string,
   target: BuildTarget,
-  diagnostics: DeploymentVerifyDiagnostic[],
+  diagnostics: DeployContractDiagnostic[],
 ): DeploymentVerifyReport {
   const errorCount = diagnostics.filter((diagnostic) => diagnostic.severity === "error").length;
   const warningCount = diagnostics.filter((diagnostic) => diagnostic.severity === "warning").length;
@@ -308,6 +347,7 @@ function createDeploymentReport(
     target,
     timestamp: new Date().toISOString(),
     diagnostics,
+    doctor: createDeploymentDoctorActions(target, diagnostics),
     summary: {
       errorCount,
       warningCount,
@@ -341,6 +381,18 @@ function renderDeploymentVerifyText(report: DeploymentVerifyReport): string {
   }
 
   lines.push("");
+  if (report.doctor.length > 0) {
+    lines.push("Doctor");
+    lines.push("");
+    for (const action of report.doctor) {
+      lines.push(`  - ${action.title}`);
+      for (const step of action.steps) {
+        lines.push(`    -> ${step}`);
+      }
+    }
+    lines.push("");
+  }
+
   lines.push(
     `  ${report.summary.errorCount} error${report.summary.errorCount !== 1 ? "s" : ""}, ${report.summary.warningCount} warning${report.summary.warningCount !== 1 ? "s" : ""}`,
   );
@@ -442,19 +494,17 @@ async function verifyDeployment(options: {
   appRoot: string;
   requestedTarget?: string;
 }): Promise<DeploymentVerifyReport> {
-  const diagnostics: DeploymentVerifyDiagnostic[] = [];
-  const deployManifest = await loadDeployManifest(options.appRoot);
+  const diagnostics: DeployContractDiagnostic[] = [];
+  const manifestResult = await loadDeployManifestContract(options.appRoot);
+  const deployManifest = manifestResult.manifest;
 
   if (!deployManifest) {
-    diagnostics.push({
-      severity: "error",
-      code: "missing_deploy_manifest",
-      message: "dist/deploy-manifest.json is missing.",
-      hint: "Run `capstan build` or `capstan build --target <target>` before deployment verification.",
-    });
+    diagnostics.push(...manifestResult.diagnostics);
     return createDeploymentReport(
       options.appRoot,
-      "node-standalone",
+      options.requestedTarget && isBuildTarget(options.requestedTarget)
+        ? options.requestedTarget
+        : "node-standalone",
       diagnostics,
     );
   }
@@ -476,10 +526,18 @@ async function verifyDeployment(options: {
   const target = options.requestedTarget && isBuildTarget(options.requestedTarget)
     ? options.requestedTarget
     : deployManifest.build.target ?? "node-standalone";
-  const contractKey = getDeployContractKey(target);
-  const contract = deployManifest.targets?.[contractKey];
 
-  if (!contract) {
+  if (deployManifest.build.target && deployManifest.build.target !== target) {
+    diagnostics.push({
+      severity: "error",
+      code: "target_mismatch",
+      message: `Build manifest target is ${deployManifest.build.target}, but verification is running against ${target}.`,
+      hint: `Rebuild with \`capstan build --target ${deployManifest.build.target}\` or verify with the matching target.`,
+    });
+    return createDeploymentReport(options.appRoot, target, diagnostics);
+  }
+
+  if (!getDeployTargetContract(deployManifest, target)) {
     diagnostics.push({
       severity: "error",
       code: "missing_target_contract",
@@ -489,60 +547,7 @@ async function verifyDeployment(options: {
     return createDeploymentReport(options.appRoot, target, diagnostics);
   }
 
-  if (deployManifest.build.target && deployManifest.build.target !== target) {
-    diagnostics.push({
-      severity: "warning",
-      code: "target_mismatch",
-      message: `Build manifest target is ${deployManifest.build.target}, but verification is running against ${target}.`,
-      hint: `Rebuild with \`capstan build --target ${target}\` if you want target-specific artifacts.`,
-    });
-  }
-
-  const filesToCheck: string[] = [];
-  if ("entry" in contract && typeof contract.entry === "string") {
-    filesToCheck.push(contract.entry);
-  }
-  if ("configFile" in contract && typeof contract.configFile === "string") {
-    filesToCheck.push(contract.configFile);
-  }
-  if ("dockerfile" in contract && typeof contract.dockerfile === "string") {
-    filesToCheck.push(contract.dockerfile);
-  }
-  if ("dockerIgnore" in contract && typeof contract.dockerIgnore === "string") {
-    filesToCheck.push(contract.dockerIgnore);
-  }
-  if ("packageJson" in contract && typeof contract.packageJson === "string") {
-    filesToCheck.push(contract.packageJson);
-  }
-
-  for (const contractPath of filesToCheck) {
-    const absolutePath = resolve(options.appRoot, contractPath);
-    if (!existsSync(absolutePath)) {
-      diagnostics.push({
-        severity: "error",
-        code: "missing_target_file",
-        message: `${contractPath} is missing for ${target}.`,
-        hint: `Re-run \`capstan build --target ${target}\` and verify the output directory was preserved.`,
-      });
-    }
-  }
-
-  if (target === "vercel-edge" || target === "cloudflare") {
-    for (const runtimeFile of [
-      "dist/standalone/runtime/manifest.js",
-      "dist/standalone/runtime/modules.js",
-      "dist/standalone/runtime/assets.js",
-    ]) {
-      if (!existsSync(resolve(options.appRoot, runtimeFile))) {
-        diagnostics.push({
-          severity: "error",
-          code: "missing_portable_runtime",
-          message: `${runtimeFile} is missing from the portable deployment bundle.`,
-          hint: `Re-run \`capstan build --target ${target}\`.`,
-        });
-      }
-    }
-  }
+  diagnostics.push(...await compareDeployManifestIntegrity(options.appRoot, deployManifest));
 
   const configPath = await resolveConfigAt(options.appRoot);
   if (configPath) {
@@ -1151,7 +1156,7 @@ main().catch((err) => {
   console.log(pc.dim("[capstan]") + pc.green(" Generated dist/_capstan_server.js"));
   const deployTargets = buildTarget
     ? createDeployTargetContract(buildTarget)
-    : undefined;
+    : createProjectRootDeployTargetContract();
   const deployManifest = createDeployManifest({
     rootDir: cwd,
     distDir,
@@ -1160,13 +1165,8 @@ main().catch((err) => {
     isStaticBuild: isStatic,
     publicAssetsCopied,
     ...(buildTarget ? { buildTarget } : {}),
-    ...(deployTargets ? { targets: deployTargets } : {}),
+    targets: deployTargets,
   });
-  await writeFile(
-    join(distDir, "deploy-manifest.json"),
-    JSON.stringify(deployManifest, null, 2),
-  );
-  console.log(pc.dim("[capstan]") + pc.green(" Generated dist/deploy-manifest.json"));
 
   if (buildTarget) {
     await emitStandaloneBuildTarget({
@@ -1176,7 +1176,34 @@ main().catch((err) => {
       appName,
       deployManifest,
     });
+    if (process.exitCode && process.exitCode !== 0) {
+      return;
+    }
   }
+
+  const deployIntegrity = await buildDeployManifestIntegrity(cwd, deployManifest);
+  if (deployIntegrity.diagnostics.length > 0 || !deployIntegrity.integrity) {
+    console.error(pc.red("[capstan] Deployment integrity generation failed."));
+    for (const diagnostic of deployIntegrity.diagnostics) {
+      const marker = diagnostic.severity === "warning" ? "!" : "\u2717";
+      console.error(pc.red(`  ${marker} ${diagnostic.message}`));
+      if (diagnostic.hint) {
+        console.error(pc.dim(`    → ${diagnostic.hint}`));
+      }
+    }
+    process.exitCode = 1;
+    return;
+  }
+
+  const deployManifestWithIntegrity = {
+    ...deployManifest,
+    integrity: deployIntegrity.integrity,
+  };
+  await writeFile(
+    join(distDir, "deploy-manifest.json"),
+    JSON.stringify(deployManifestWithIntegrity, null, 2),
+  );
+  console.log(pc.dim("[capstan]") + pc.green(" Generated dist/deploy-manifest.json with integrity metadata"));
   console.log(pc.dim("[capstan]") + pc.green(" Build complete."));
 }
 
@@ -1188,7 +1215,23 @@ async function runStart(args: string[]): Promise<void> {
   const startRoot = fromDir
     ? resolve(process.cwd(), fromDir)
     : process.cwd();
+  const verification = await verifyDeployment({ appRoot: startRoot });
+  if (verification.status === "failed") {
+    process.stderr.write(renderDeploymentVerifyText(verification));
+    process.exitCode = 1;
+    return;
+  }
+  if (verification.summary.warningCount > 0) {
+    process.stderr.write(renderDeploymentVerifyText(verification));
+  }
+
   const deployManifest = await loadDeployManifest(startRoot);
+  if (!deployManifest) {
+    console.error(pc.red(`[capstan] ${relative(process.cwd(), join(startRoot, "dist", "deploy-manifest.json"))} not found.`));
+    console.error(pc.yellow("[capstan] Run `capstan build` first to compile the project."));
+    process.exitCode = 1;
+    return;
+  }
   const serverEntry = resolveServerEntryPath(startRoot, deployManifest);
 
   // Verify the production build exists
@@ -1362,15 +1405,6 @@ async function emitStandaloneBuildTarget(options: {
     });
   }
 
-  const standaloneManifest = createStandaloneDeployManifest(
-    deployManifest,
-    buildTarget,
-  );
-  await writeFile(
-    join(standaloneDistDir, "deploy-manifest.json"),
-    JSON.stringify(standaloneManifest, null, 2),
-    "utf-8",
-  );
   await writeFile(
     join(standaloneRoot, "package.json"),
     await createStandalonePackageJson({
@@ -1446,6 +1480,38 @@ async function emitStandaloneBuildTarget(options: {
     await writeFile(targetPath, file.content, "utf-8");
     console.log(pc.dim("[capstan]") + pc.green(` Generated ${relative(rootDir, targetPath)}`));
   }
+
+  const standaloneManifest = createStandaloneDeployManifest(
+    deployManifest,
+    buildTarget,
+  );
+  const standaloneIntegrity = await buildDeployManifestIntegrity(standaloneRoot, standaloneManifest);
+  if (standaloneIntegrity.diagnostics.length > 0 || !standaloneIntegrity.integrity) {
+    console.error(pc.red("[capstan] Standalone deployment integrity generation failed."));
+    for (const diagnostic of standaloneIntegrity.diagnostics) {
+      const marker = diagnostic.severity === "warning" ? "!" : "\u2717";
+      console.error(pc.red(`  ${marker} ${diagnostic.message}`));
+      if (diagnostic.hint) {
+        console.error(pc.dim(`    → ${diagnostic.hint}`));
+      }
+    }
+    process.exitCode = 1;
+    return;
+  }
+
+  await writeFile(
+    join(standaloneDistDir, "deploy-manifest.json"),
+    JSON.stringify(
+      {
+        ...standaloneManifest,
+        integrity: standaloneIntegrity.integrity,
+      },
+      null,
+      2,
+    ),
+    "utf-8",
+  );
+  console.log(pc.dim("[capstan]") + pc.green(" Generated dist/standalone/dist/deploy-manifest.json with integrity metadata"));
 }
 
 // ---------------------------------------------------------------------------
@@ -1958,7 +2024,7 @@ function readPositionalArgs(args: string[]): string[] {
   for (let index = 0; index < args.length; index++) {
     const value = args[index];
     if (!value) continue;
-    if (value === "--root") {
+    if (value === "--root" || value === "--grants" || value === "--subject" || value === "--note") {
       index++;
       continue;
     }
@@ -1971,13 +2037,70 @@ function readPositionalArgs(args: string[]): string[] {
   return positional;
 }
 
+function parseJsonFlag<T>(label: string, raw: string | undefined): T | undefined {
+  if (!raw) {
+    return undefined;
+  }
+
+  try {
+    return JSON.parse(raw) as T;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Invalid ${label} JSON: ${message}`);
+  }
+}
+
+type HarnessCliGrant =
+  | string
+  | {
+      resource: string;
+      action: string;
+      scope?: Record<string, string>;
+      expiresAt?: string;
+      constraints?: Record<string, unknown>;
+      effect?: "allow" | "deny";
+    };
+
 async function resolveHarnessRuntime(args: string[]) {
   const { openHarnessRuntime } = await import("@zauso-ai/capstan-ai");
+  const grants = parseJsonFlag<ReadonlyArray<HarnessCliGrant>>(
+    "--grants",
+    readFlagValue(args, "--grants") ?? process.env.CAPSTAN_HARNESS_GRANTS,
+  );
+  const subject = parseJsonFlag<Record<string, unknown>>(
+    "--subject",
+    readFlagValue(args, "--subject") ?? process.env.CAPSTAN_HARNESS_SUBJECT,
+  );
   const rootDir = resolve(
     process.cwd(),
     readFlagValue(args, "--root") ?? process.cwd(),
   );
-  return openHarnessRuntime(rootDir);
+  const authModule = grants?.length ? await import("@zauso-ai/capstan-auth") : undefined;
+  const runtimeGrantAuthorizer =
+    authModule && grants?.length
+      ? authModule.createHarnessGrantAuthorizer(grants)
+      : undefined;
+  const runtime = await openHarnessRuntime({
+    rootDir,
+    ...(runtimeGrantAuthorizer
+      ? {
+          authorize(request) {
+            return runtimeGrantAuthorizer(request);
+          },
+        }
+      : {}),
+  });
+
+  return {
+    runtime,
+    access:
+      subject || grants?.length
+        ? {
+            ...(subject ? { subject } : {}),
+            ...(grants?.length ? { metadata: { grants } } : {}),
+          }
+        : undefined,
+  };
 }
 
 function printHarnessPayload(payload: unknown, asJson: boolean): void {
@@ -2001,8 +2124,8 @@ function printHarnessPayload(payload: unknown, asJson: boolean): void {
 }
 
 async function runHarnessList(args: string[]): Promise<void> {
-  const runtime = await resolveHarnessRuntime(args);
-  const runs = await runtime.listRuns();
+  const { runtime, access } = await resolveHarnessRuntime(args);
+  const runs = await runtime.listRuns(access);
   printHarnessPayload(runs, hasFlag(args, "--json"));
 }
 
@@ -2012,8 +2135,8 @@ async function runHarnessGet(args: string[]): Promise<void> {
     throw new Error("Usage: capstan harness:get <runId> [--root <dir>] [--json]");
   }
 
-  const runtime = await resolveHarnessRuntime(args);
-  const run = await runtime.getRun(runId);
+  const { runtime, access } = await resolveHarnessRuntime(args);
+  const run = await runtime.getRun(runId, access);
 
   if (!run) {
     throw new Error(`Harness run not found: ${runId}`);
@@ -2024,8 +2147,8 @@ async function runHarnessGet(args: string[]): Promise<void> {
 
 async function runHarnessEvents(args: string[]): Promise<void> {
   const [runId] = readPositionalArgs(args);
-  const runtime = await resolveHarnessRuntime(args);
-  const events = await runtime.getEvents(runId);
+  const { runtime, access } = await resolveHarnessRuntime(args);
+  const events = await runtime.getEvents(runId, access);
   printHarnessPayload(events, hasFlag(args, "--json"));
 }
 
@@ -2035,8 +2158,8 @@ async function runHarnessArtifacts(args: string[]): Promise<void> {
     throw new Error("Usage: capstan harness:artifacts <runId> [--root <dir>] [--json]");
   }
 
-  const runtime = await resolveHarnessRuntime(args);
-  const artifacts = await runtime.getArtifacts(runId);
+  const { runtime, access } = await resolveHarnessRuntime(args);
+  const artifacts = await runtime.getArtifacts(runId, access);
   printHarnessPayload(artifacts, hasFlag(args, "--json"));
 }
 
@@ -2046,8 +2169,8 @@ async function runHarnessCheckpoint(args: string[]): Promise<void> {
     throw new Error("Usage: capstan harness:checkpoint <runId> [--root <dir>] [--json]");
   }
 
-  const runtime = await resolveHarnessRuntime(args);
-  const checkpoint = await runtime.getCheckpoint(runId);
+  const { runtime, access } = await resolveHarnessRuntime(args);
+  const checkpoint = await runtime.getCheckpoint(runId, access);
 
   if (!checkpoint) {
     throw new Error(`Harness checkpoint not found: ${runId}`);
@@ -2056,14 +2179,71 @@ async function runHarnessCheckpoint(args: string[]): Promise<void> {
   printHarnessPayload(checkpoint, hasFlag(args, "--json"));
 }
 
+async function runHarnessApproval(args: string[]): Promise<void> {
+  const [approvalId] = readPositionalArgs(args);
+  if (!approvalId) {
+    throw new Error("Usage: capstan harness:approval <approvalId> [--root <dir>] [--json]");
+  }
+
+  const { runtime, access } = await resolveHarnessRuntime(args);
+  const approval = await runtime.getApproval(approvalId, access);
+
+  if (!approval) {
+    throw new Error(`Harness approval not found: ${approvalId}`);
+  }
+
+  printHarnessPayload(approval, hasFlag(args, "--json"));
+}
+
+async function runHarnessApprovals(args: string[]): Promise<void> {
+  const [runId] = readPositionalArgs(args);
+  const { runtime, access } = await resolveHarnessRuntime(args);
+  const approvals = await runtime.listApprovals(runId, access);
+  printHarnessPayload(approvals, hasFlag(args, "--json"));
+}
+
+async function runHarnessApprove(args: string[]): Promise<void> {
+  const [runId] = readPositionalArgs(args);
+  if (!runId) {
+    throw new Error(
+      "Usage: capstan harness:approve <runId> [--note <text>] [--root <dir>] [--json]",
+    );
+  }
+
+  const { runtime, access } = await resolveHarnessRuntime(args);
+  const note = readFlagValue(args, "--note");
+  const approval = await runtime.approveRun(runId, {
+    ...(access ? { access } : {}),
+    ...(note ? { note } : {}),
+  });
+  printHarnessPayload(approval, hasFlag(args, "--json"));
+}
+
+async function runHarnessDeny(args: string[]): Promise<void> {
+  const [runId] = readPositionalArgs(args);
+  if (!runId) {
+    throw new Error(
+      "Usage: capstan harness:deny <runId> [--note <text>] [--root <dir>] [--json]",
+    );
+  }
+
+  const { runtime, access } = await resolveHarnessRuntime(args);
+  const note = readFlagValue(args, "--note");
+  const approval = await runtime.denyRun(runId, {
+    ...(access ? { access } : {}),
+    ...(note ? { note } : {}),
+  });
+  printHarnessPayload(approval, hasFlag(args, "--json"));
+}
+
 async function runHarnessPause(args: string[]): Promise<void> {
   const [runId] = readPositionalArgs(args);
   if (!runId) {
     throw new Error("Usage: capstan harness:pause <runId> [--root <dir>] [--json]");
   }
 
-  const runtime = await resolveHarnessRuntime(args);
-  const run = await runtime.pauseRun(runId);
+  const { runtime, access } = await resolveHarnessRuntime(args);
+  const run = await runtime.pauseRun(runId, access);
   printHarnessPayload(run, hasFlag(args, "--json"));
 }
 
@@ -2073,8 +2253,8 @@ async function runHarnessCancel(args: string[]): Promise<void> {
     throw new Error("Usage: capstan harness:cancel <runId> [--root <dir>] [--json]");
   }
 
-  const runtime = await resolveHarnessRuntime(args);
-  const run = await runtime.cancelRun(runId);
+  const { runtime, access } = await resolveHarnessRuntime(args);
+  const run = await runtime.cancelRun(runId, access);
   printHarnessPayload(run, hasFlag(args, "--json"));
 }
 
@@ -2084,14 +2264,14 @@ async function runHarnessReplay(args: string[]): Promise<void> {
     throw new Error("Usage: capstan harness:replay <runId> [--root <dir>] [--json]");
   }
 
-  const runtime = await resolveHarnessRuntime(args);
-  const report = await runtime.replayRun(runId);
+  const { runtime, access } = await resolveHarnessRuntime(args);
+  const report = await runtime.replayRun(runId, access);
   printHarnessPayload(report, hasFlag(args, "--json"));
 }
 
 async function runHarnessPaths(args: string[]): Promise<void> {
-  const runtime = await resolveHarnessRuntime(args);
-  printHarnessPayload(runtime.getPaths(), hasFlag(args, "--json"));
+  const { runtime, access } = await resolveHarnessRuntime(args);
+  printHarnessPayload(runtime.getPaths(access), hasFlag(args, "--json"));
 }
 
 // ---------------------------------------------------------------------------
@@ -2285,6 +2465,13 @@ function printHelp(): void {
     ["verify [--deployment] [--target <target>]", "Run runtime or deployment verification"],
   ]);
 
+  group("Operations", [
+    ["ops:events [--path <dir>] [--kind <kind>] [--limit <n>] [--json]", "List recent ops events"],
+    ["ops:incidents [--path <dir>] [--status <status>] [--limit <n>] [--json]", "List incidents from the ops store"],
+    ["ops:health [--path <dir>] [--json]", "Show a derived health snapshot"],
+    ["ops:tail [--path <dir>] [--limit <n>] [--follow] [--json]", "Show the latest ops feed"],
+  ]);
+
   group("Agent Protocols", [
     ["mcp",            "Start MCP server (stdio)"],
     ["agent:manifest", "Print agent manifest JSON"],
@@ -2297,6 +2484,10 @@ function printHelp(): void {
     ["harness:events",    "Read runtime events (optionally scoped to one run)"],
     ["harness:artifacts", "List artifacts for one run"],
     ["harness:checkpoint","Read the persisted loop checkpoint for a run"],
+    ["harness:approval",  "Read one persisted approval record"],
+    ["harness:approvals", "List persisted approvals (optionally scoped to one run)"],
+    ["harness:approve",   "Approve a blocked run's pending approval"],
+    ["harness:deny",      "Deny a blocked run's pending approval and cancel it"],
     ["harness:pause",     "Request cooperative pause for a running run"],
     ["harness:cancel",    "Request cancellation for a run"],
     ["harness:replay",    "Replay events and verify stored run state"],

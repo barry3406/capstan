@@ -3,6 +3,9 @@ import { execFile } from "node:child_process";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
+import type { VerifyDiagnostic, VerifyReport, VerifyStep } from "./verify-types.js";
+import { checkPackageContracts } from "./verify-package.js";
+import { checkBuildArtifacts } from "./verify-build.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -11,61 +14,6 @@ const execFileAsync = promisify(execFile);
 // dist/ yet when core is built first in the monorepo).
 const ROUTER_PKG = "@zauso-ai/capstan-router";
 const AGENT_PKG = "@zauso-ai/capstan-agent";
-
-// ---------------------------------------------------------------------------
-// Public types
-// ---------------------------------------------------------------------------
-
-export interface VerifyDiagnostic {
-  code: string;
-  severity: "error" | "warning" | "info";
-  message: string;
-  hint?: string;
-  file?: string;
-  line?: number;
-  column?: number;
-  fixCategory?:
-    | "type_error"
-    | "schema_mismatch"
-    | "missing_file"
-    | "policy_violation"
-    | "contract_drift"
-    | "missing_export"
-    | "protocol_drift";
-  autoFixable?: boolean;
-}
-
-export interface VerifyStep {
-  name: string;
-  status: "passed" | "failed" | "skipped";
-  durationMs: number;
-  diagnostics: VerifyDiagnostic[];
-}
-
-export interface VerifyReport {
-  status: "passed" | "failed";
-  appRoot: string;
-  timestamp: string;
-  steps: VerifyStep[];
-  repairChecklist: Array<{
-    index: number;
-    step: string;
-    message: string;
-    file?: string;
-    line?: number;
-    hint?: string;
-    fixCategory?: string;
-    autoFixable?: boolean;
-  }>;
-  summary: {
-    totalSteps: number;
-    passedSteps: number;
-    failedSteps: number;
-    skippedSteps: number;
-    errorCount: number;
-    warningCount: number;
-  };
-}
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -1285,6 +1233,7 @@ export async function verifyCapstanApp(appRoot: string): Promise<VerifyReport> {
   steps.push(structureStep);
 
   if (structureStep.status === "failed") {
+    steps.push(skippedStep("package", "Skipped: structure check failed."));
     steps.push(skippedStep("config", "Skipped: structure check failed."));
     steps.push(skippedStep("routes", "Skipped: structure check failed."));
     steps.push(skippedStep("models", "Skipped: structure check failed."));
@@ -1292,10 +1241,15 @@ export async function verifyCapstanApp(appRoot: string): Promise<VerifyReport> {
     steps.push(skippedStep("contracts", "Skipped: structure check failed."));
     steps.push(skippedStep("manifest", "Skipped: structure check failed."));
     steps.push(skippedStep("contracts-cross-protocol", "Skipped: structure check failed."));
+    steps.push(skippedStep("build-artifacts", "Skipped: structure check failed."));
     return buildReport(root, steps);
   }
 
-  // Step 2: config
+  // Step 2: package contracts
+  const packageStep = await measureStep("package", () => checkPackageContracts(root));
+  steps.push(packageStep);
+
+  // Step 3: config
   const configStep = await measureStep("config", () => checkConfig(root));
   steps.push(configStep);
 
@@ -1306,24 +1260,26 @@ export async function verifyCapstanApp(appRoot: string): Promise<VerifyReport> {
     steps.push(skippedStep("contracts", "Skipped: config check failed."));
     steps.push(skippedStep("manifest", "Skipped: config check failed."));
     steps.push(skippedStep("contracts-cross-protocol", "Skipped: config check failed."));
+    steps.push(await measureStep("build-artifacts", () => checkBuildArtifacts(root)));
     return buildReport(root, steps);
   }
 
-  // Step 3: routes
+  // Step 4: routes
   const routesStep = await measureStep("routes", () => checkRoutes(root));
   steps.push(routesStep);
 
-  // Step 4: models — runs even if routes fail (independent check)
+  // Step 5: models — runs even if routes fail (independent check)
   const modelsStep = await measureStep("models", () => checkModels(root));
   steps.push(modelsStep);
 
-  // Step 5: typecheck — runs even if routes/models have warnings, but skip
+  // Step 6: typecheck — runs even if routes/models have warnings, but skip
   // if routes had hard errors (broken files will cause tsc noise)
   if (routesStep.status === "failed") {
     steps.push(skippedStep("typecheck", "Skipped: routes check failed."));
     steps.push(skippedStep("contracts", "Skipped: routes check failed."));
     steps.push(skippedStep("manifest", "Skipped: routes check failed."));
     steps.push(skippedStep("contracts-cross-protocol", "Skipped: routes check failed."));
+    steps.push(await measureStep("build-artifacts", () => checkBuildArtifacts(root)));
     return buildReport(root, steps);
   }
 
@@ -1334,33 +1290,40 @@ export async function verifyCapstanApp(appRoot: string): Promise<VerifyReport> {
     steps.push(skippedStep("contracts", "Skipped: typecheck failed."));
     steps.push(skippedStep("manifest", "Skipped: typecheck failed."));
     steps.push(skippedStep("contracts-cross-protocol", "Skipped: typecheck failed."));
+    steps.push(await measureStep("build-artifacts", () => checkBuildArtifacts(root)));
     return buildReport(root, steps);
   }
 
-  // Step 6: contracts
+  // Step 7: contracts
   const contractsStep = await measureStep("contracts", () => checkContracts(root));
   steps.push(contractsStep);
 
   if (contractsStep.status === "failed") {
     steps.push(skippedStep("manifest", "Skipped: contracts check failed."));
     steps.push(skippedStep("contracts-cross-protocol", "Skipped: contracts check failed."));
+    steps.push(await measureStep("build-artifacts", () => checkBuildArtifacts(root)));
     return buildReport(root, steps);
   }
 
-  // Step 7: manifest
+  // Step 8: manifest
   const manifestStep = await measureStep("manifest", () => checkManifest(root));
   steps.push(manifestStep);
 
   if (manifestStep.status === "failed") {
     steps.push(skippedStep("contracts-cross-protocol", "Skipped: manifest check failed."));
+    steps.push(await measureStep("build-artifacts", () => checkBuildArtifacts(root)));
     return buildReport(root, steps);
   }
 
-  // Step 8: cross-protocol contract consistency
+  // Step 9: cross-protocol contract consistency
   const crossProtocolStep = await measureStep("contracts-cross-protocol", () =>
     checkCrossProtocol(root),
   );
   steps.push(crossProtocolStep);
+
+  // Step 10: generated build artifact contract
+  const buildArtifactsStep = await measureStep("build-artifacts", () => checkBuildArtifacts(root));
+  steps.push(buildArtifactsStep);
 
   return buildReport(root, steps);
 }

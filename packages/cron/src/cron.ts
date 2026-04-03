@@ -4,6 +4,9 @@
 
 import type { CronJobConfig, CronRunner, CronJobInfo } from "./types.js";
 
+const DEFAULT_SET_TIMEOUT = globalThis.setTimeout;
+const DEFAULT_CLEAR_TIMEOUT = globalThis.clearTimeout;
+
 // ---------------------------------------------------------------------------
 // defineCron — declarative helper (returns config as-is, for composition)
 // ---------------------------------------------------------------------------
@@ -50,6 +53,7 @@ export function createCronRunner(): CronRunner {
       if (!state) return false;
       clearJobTimer(state);
       jobs.delete(id);
+      triggerJobStop(state);
       return true;
     },
 
@@ -67,6 +71,7 @@ export function createCronRunner(): CronRunner {
       for (const state of jobs.values()) {
         clearJobTimer(state);
         state.status = state.config.enabled === false ? "disabled" : "idle";
+        triggerJobStop(state);
       }
     },
 
@@ -220,10 +225,7 @@ export function cronToMs(pattern: string): number {
  * Falls back to createCronRunner() in Node.js.
  */
 export function createBunCronRunner(): CronRunner {
-  // Check if Bun.cron is available
-  const g = globalThis as Record<string, unknown>;
-  const bunObj = g["Bun"] as Record<string, unknown> | undefined;
-  if (bunObj && typeof bunObj["cron"] === "function") {
+  if (canUseNativeBunCron()) {
     return createBunNativeCronRunner();
   }
   // Fallback to setInterval-based
@@ -290,6 +292,7 @@ function createBunNativeCronRunner(): CronRunner {
       if (!entry) return false;
       if (entry.handle) entry.handle.stop();
       jobs.delete(id);
+      triggerJobStop({ config: entry.config });
       return true;
     },
 
@@ -310,6 +313,7 @@ function createBunNativeCronRunner(): CronRunner {
           entry.handle = null;
         }
         entry.info.status = entry.config.enabled === false ? "disabled" : "idle";
+        triggerJobStop({ config: entry.config });
       }
     },
 
@@ -317,4 +321,36 @@ function createBunNativeCronRunner(): CronRunner {
       return [...jobs.values()].map((e) => e.info);
     },
   };
+}
+
+function canUseNativeBunCron(): boolean {
+  const g = globalThis as Record<string, unknown>;
+  const bunObj = g["Bun"] as Record<string, unknown> | undefined;
+  if (!bunObj || typeof bunObj["cron"] !== "function") {
+    return false;
+  }
+
+  // If the host has installed timer mocks or fake timers, prefer the
+  // deterministic fallback runner so the cron scheduler stays inside the
+  // host-controlled timing model instead of bypassing it with Bun.cron.
+  if (
+    globalThis.setTimeout !== DEFAULT_SET_TIMEOUT ||
+    globalThis.clearTimeout !== DEFAULT_CLEAR_TIMEOUT
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+function triggerJobStop(job: Pick<JobState, "config"> | { config: CronJobConfig }): void {
+  const onStop = job.config.onStop;
+  if (!onStop) {
+    return;
+  }
+
+  void Promise.resolve(onStop()).catch((error) => {
+    const err = error instanceof Error ? error : new Error(String(error));
+    job.config.onError?.(err);
+  });
 }

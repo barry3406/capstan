@@ -1,5 +1,9 @@
-import { readFile } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
+
+import {
+  loadDeployManifestContract,
+  type DeployManifestIntegrity,
+} from "./deploy-integrity.js";
 
 export interface DeploymentEnvironmentVariable {
   name: string;
@@ -84,6 +88,7 @@ export interface DeployManifest {
     staticDir: string | null;
   };
   environment: DeploymentEnvironmentVariable[];
+  integrity?: DeployManifestIntegrity;
   targets?: DeployTargetContract;
 }
 
@@ -129,12 +134,8 @@ export function resolveServerEntryPath(
 }
 
 export async function loadDeployManifest(projectDir: string): Promise<DeployManifest | null> {
-  try {
-    const raw = await readFile(getDeployManifestPath(projectDir), "utf-8");
-    return JSON.parse(raw) as DeployManifest;
-  } catch {
-    return null;
-  }
+  const result = await loadDeployManifestContract(projectDir);
+  return result.manifest;
 }
 
 export function createDeployManifest(
@@ -154,12 +155,13 @@ export function createDeployManifest(
   const publicDirPath = join(distDir, "public");
   const staticDirPath = join(distDir, "static");
   const deployManifestPath = getDeployManifestPath(rootDir);
+  const effectiveBuildTarget = options.buildTarget ?? "node-standalone";
   const buildCommandParts = ["capstan", "build"];
   if (isStaticBuild) {
     buildCommandParts.push("--static");
   }
-  if (buildTarget) {
-    buildCommandParts.push("--target", buildTarget);
+  if (options.buildTarget) {
+    buildCommandParts.push("--target", effectiveBuildTarget);
   }
 
   return {
@@ -173,7 +175,7 @@ export function createDeployManifest(
       command: buildCommandParts.join(" "),
       mode: isStaticBuild ? "hybrid-static" : "server",
       distDir: toContractPath(rootDir, distDir),
-      ...(buildTarget ? { target: buildTarget } : {}),
+      target: effectiveBuildTarget,
     },
     server: {
       entry: toContractPath(rootDir, serverEntryPath),

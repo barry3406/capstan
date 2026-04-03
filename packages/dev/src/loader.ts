@@ -1,5 +1,9 @@
-import { pathToFileURL } from "node:url";
-import { stat } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { mkdir, stat, writeFile } from "node:fs/promises";
+
+type EsbuildBuild = typeof import("esbuild").build;
 
 /**
  * Cached module entry that tracks the file's mtime so we only re-evaluate
@@ -25,6 +29,108 @@ const virtualModuleRegistry = new Map<string, Record<string, unknown>>();
  * millisecond (e.g. editor auto-format on save).
  */
 let cacheGeneration = 0;
+let esbuildBuild: EsbuildBuild | null = null;
+const runtimeGlobals = globalThis as typeof globalThis & { Bun?: unknown };
+let compiledRouteCacheRoot: string | null = null;
+
+function isTypeScriptModule(filePath: string): boolean {
+  return /\.(?:cts|mts|ts|tsx)$/.test(filePath);
+}
+
+async function findNearestTsconfig(filePath: string): Promise<string | undefined> {
+  let currentDir = path.dirname(filePath);
+
+  for (;;) {
+    const candidate = path.join(currentDir, "tsconfig.json");
+    try {
+      const candidateStat = await stat(candidate);
+      if (candidateStat.isFile()) {
+        return candidate;
+      }
+    } catch {
+      // Keep walking upward.
+    }
+
+    const parentDir = path.dirname(currentDir);
+    if (parentDir === currentDir) {
+      return undefined;
+    }
+    currentDir = parentDir;
+  }
+}
+
+async function getCompiledRouteCacheRoot(): Promise<string> {
+  if (compiledRouteCacheRoot !== null) {
+    return compiledRouteCacheRoot;
+  }
+
+  let currentDir = path.dirname(fileURLToPath(import.meta.url));
+  for (;;) {
+    const nodeModulesDir = path.join(currentDir, "node_modules");
+    try {
+      const stats = await stat(nodeModulesDir);
+      if (stats.isDirectory()) {
+        compiledRouteCacheRoot = path.join(currentDir, ".capstan-route-cache");
+        return compiledRouteCacheRoot;
+      }
+    } catch {
+      // Keep walking upward.
+    }
+
+    const parentDir = path.dirname(currentDir);
+    if (parentDir === currentDir) {
+      compiledRouteCacheRoot = path.join(process.cwd(), ".capstan-route-cache");
+      return compiledRouteCacheRoot;
+    }
+    currentDir = parentDir;
+  }
+}
+
+async function getCompiledRoutePath(filePath: string, cacheKey: string): Promise<string> {
+  const digest = createHash("sha256")
+    .update(`${filePath}:${cacheKey}`)
+    .digest("hex");
+
+  return path.join(await getCompiledRouteCacheRoot(), `${digest}.mjs`);
+}
+
+async function importRouteFile(filePath: string, cacheKey: string): Promise<Record<string, unknown>> {
+  if (isTypeScriptModule(filePath) && typeof runtimeGlobals.Bun === "undefined") {
+    if (esbuildBuild === null) {
+      ({ build: esbuildBuild } = await import("esbuild"));
+    }
+
+    const compiledPath = await getCompiledRoutePath(filePath, cacheKey);
+    const tsconfig = await findNearestTsconfig(filePath);
+    const result = await esbuildBuild({
+      entryPoints: [filePath],
+      bundle: true,
+      format: "esm",
+      platform: "node",
+      target: "node22",
+      write: false,
+      jsx: "automatic",
+      sourcemap: "inline",
+      logLevel: "silent",
+      packages: "external",
+      ...(tsconfig ? { tsconfig } : {}),
+    });
+
+    const output = result.outputFiles[0];
+    if (!output) {
+      throw new Error(`Failed to compile route module: ${filePath}`);
+    }
+
+    await mkdir(path.dirname(compiledPath), { recursive: true });
+    await writeFile(compiledPath, output.text, "utf-8");
+
+    return (await import(pathToFileURL(compiledPath).href)) as Record<string, unknown>;
+  }
+
+  const fileUrl = pathToFileURL(filePath).href;
+  const bustUrl = `${fileUrl}?t=${cacheKey}`;
+  return (await import(bustUrl)) as Record<string, unknown>;
+}
 
 /**
  * Dynamically import a module from disk, using a mtime-based cache to avoid
@@ -48,9 +154,7 @@ export async function loadRouteModule(
     return cached.mod;
   }
 
-  const fileUrl = pathToFileURL(filePath).href;
-  const bustUrl = `${fileUrl}?t=${fileStat.mtimeMs}_${cacheGeneration}`;
-  const mod = (await import(bustUrl)) as Record<string, unknown>;
+  const mod = await importRouteFile(filePath, `${fileStat.mtimeMs}_${cacheGeneration}`);
   moduleCache.set(filePath, { mod, mtimeMs: fileStat.mtimeMs });
   return mod;
 }

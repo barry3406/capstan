@@ -1,11 +1,13 @@
 import type { KeyValueStore } from "./store.js";
 import { MemoryStore } from "./store.js";
+import type { CapstanContext } from "./types.js";
 
 export interface PendingApproval {
   id: string;
   method: string;
   path: string;
   input: unknown;
+  params?: Record<string, string>;
   policy: string;
   reason: string;
   status: "pending" | "approved" | "denied";
@@ -55,8 +57,10 @@ export async function createApproval(opts: {
   method: string;
   path: string;
   input: unknown;
+  params?: Record<string, string>;
   policy: string;
   reason: string;
+  ctx?: CapstanContext;
 }): Promise<PendingApproval> {
   const id = await createRuntimeRandomUUID();
   const approval: PendingApproval = {
@@ -69,8 +73,26 @@ export async function createApproval(opts: {
     status: "pending",
     createdAt: new Date().toISOString(),
   };
+  if (opts.params !== undefined) {
+    approval.params = opts.params;
+  }
   await approvalStore.set(id, approval);
   approvalIds.add(id);
+  if (opts.ctx?.ops) {
+    await opts.ctx.ops.recordApprovalRequested({
+      ...(opts.ctx.requestId ? { requestId: opts.ctx.requestId } : {}),
+      ...(opts.ctx.traceId ? { traceId: opts.ctx.traceId } : {}),
+      incidentFingerprint: `approval:${approval.id}`,
+      data: {
+        approvalId: approval.id,
+        method: opts.method,
+        path: opts.path,
+        policy: opts.policy,
+        reason: opts.reason,
+        status: "pending",
+      },
+    });
+  }
   return approval;
 }
 
@@ -110,6 +132,7 @@ export async function resolveApproval(
   id: string,
   decision: "approved" | "denied",
   resolvedBy?: string,
+  ctx?: CapstanContext,
 ): Promise<PendingApproval | undefined> {
   const approval = await approvalStore.get(id);
   if (!approval) return undefined;
@@ -119,6 +142,22 @@ export async function resolveApproval(
     approval.resolvedBy = resolvedBy;
   }
   await approvalStore.set(id, approval);
+  if (ctx?.ops) {
+    await ctx.ops.recordApprovalResolved({
+      ...(ctx.requestId ? { requestId: ctx.requestId } : {}),
+      ...(ctx.traceId ? { traceId: ctx.traceId } : {}),
+      incidentFingerprint: `approval:${approval.id}`,
+      data: {
+        approvalId: approval.id,
+        method: approval.method,
+        path: approval.path,
+        policy: approval.policy,
+        reason: approval.reason,
+        status: decision,
+        ...(resolvedBy !== undefined ? { resolvedBy } : {}),
+      },
+    });
+  }
   return approval;
 }
 

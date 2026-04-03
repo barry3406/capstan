@@ -3,6 +3,13 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
+import {
+  grantApprovalActions,
+  grantArtifactActions,
+  grantCheckpointActions,
+  grantRunActions,
+} from "@zauso-ai/capstan-auth";
+import type { AuthGrant } from "@zauso-ai/capstan-auth";
 import { createHarness } from "@zauso-ai/capstan-ai";
 import type {
   BrowserSandbox,
@@ -36,6 +43,16 @@ function mockLLM(
       return { content, model: "mock-1" };
     },
   };
+}
+
+function approvalCollectionGrants(runId?: string): AuthGrant[] {
+  return [
+    {
+      resource: "approval",
+      action: "list",
+      ...(runId ? { scope: { runId } } : {}),
+    },
+  ];
 }
 
 async function createTempDir(): Promise<string> {
@@ -238,6 +255,7 @@ describe("capstan harness runtime CLI", () => {
       ]),
       runtime: {
         rootDir,
+        maxConcurrentRuns: 2,
         beforeToolCall: async () => ({
           allowed: false,
           reason: "write requires approval",
@@ -275,6 +293,42 @@ describe("capstan harness runtime CLI", () => {
     };
     expect(checkpointRecord.stage).toBe("approval_required");
     expect(checkpointRecord.pendingToolCall?.tool).toBe("write");
+
+    const deniedCheckpoint = await runCli([
+      "harness:checkpoint",
+      result.runId,
+      "--root",
+      rootDir,
+      "--json",
+      "--grants",
+      JSON.stringify(grantCheckpointActions("other-run")),
+    ]);
+    expect(deniedCheckpoint.exitCode).toBe(1);
+    expect(deniedCheckpoint.stderr).toContain("checkpoint:read");
+
+    const deniedArtifacts = await runCli([
+      "harness:artifacts",
+      result.runId,
+      "--root",
+      rootDir,
+      "--json",
+      "--grants",
+      JSON.stringify(grantArtifactActions("other-run")),
+    ]);
+    expect(deniedArtifacts.exitCode).toBe(1);
+    expect(deniedArtifacts.stderr).toContain("artifact:read");
+
+    const deniedCancel = await runCli([
+      "harness:cancel",
+      result.runId,
+      "--root",
+      rootDir,
+      "--json",
+      "--grants",
+      JSON.stringify(grantRunActions("other-run", ["cancel"])),
+    ]);
+    expect(deniedCancel.exitCode).toBe(1);
+    expect(deniedCancel.stderr).toContain("run:cancel");
 
     const canceled = await runCli([
       "harness:cancel",
@@ -339,6 +393,18 @@ describe("capstan harness runtime CLI", () => {
       return run?.toolCalls === 1 ? run : undefined;
     });
 
+    const deniedPause = await runCli([
+      "harness:pause",
+      started.runId,
+      "--root",
+      rootDir,
+      "--json",
+      "--grants",
+      JSON.stringify(grantRunActions("other-run", ["pause"])),
+    ]);
+    expect(deniedPause.exitCode).toBe(1);
+    expect(deniedPause.stderr).toContain("run:pause");
+
     const paused = await runCli([
       "harness:pause",
       started.runId,
@@ -368,5 +434,277 @@ describe("capstan harness runtime CLI", () => {
     expect(checkpoint.exitCode).toBe(0);
     const checkpointRecord = JSON.parse(checkpoint.stdout) as { stage: string };
     expect(checkpointRecord.stage).toBe("assistant_response");
+  });
+
+  it("lists and reads persisted approvals through dedicated CLI commands", async () => {
+    const rootDir = await createTempDir();
+    const harness = await createHarness({
+      llm: mockLLM([
+        JSON.stringify({ tool: "write", arguments: { value: "pending" } }),
+      ]),
+      runtime: {
+        rootDir,
+        maxConcurrentRuns: 2,
+        beforeToolCall: async () => ({
+          allowed: false,
+          reason: "write requires approval",
+        }),
+      },
+      verify: { enabled: false },
+    });
+
+    const blocked = await harness.run({
+      goal: "inspect approval cli",
+      tools: [
+        {
+          name: "write",
+          description: "writes a value",
+          async execute() {
+            return { ok: true };
+          },
+        },
+      ],
+    });
+
+    const run = await harness.getRun(blocked.runId);
+    const approvalId = run?.pendingApprovalId;
+    expect(approvalId).toBeString();
+
+    const approvals = await runCli([
+      "harness:approvals",
+      blocked.runId,
+      "--root",
+      rootDir,
+      "--json",
+    ]);
+    expect(approvals.exitCode).toBe(0);
+    expect(JSON.parse(approvals.stdout)).toEqual([
+      expect.objectContaining({
+        id: approvalId,
+        runId: blocked.runId,
+        status: "pending",
+      }),
+    ]);
+
+    const approval = await runCli([
+      "harness:approval",
+      approvalId!,
+      "--root",
+      rootDir,
+      "--json",
+    ]);
+    expect(approval.exitCode).toBe(0);
+    expect(JSON.parse(approval.stdout)).toMatchObject({
+      id: approvalId,
+      runId: blocked.runId,
+      status: "pending",
+      tool: "write",
+    });
+
+    const deniedList = await runCli([
+      "harness:approvals",
+      blocked.runId,
+      "--root",
+      rootDir,
+      "--json",
+      "--grants",
+      JSON.stringify(grantApprovalActions(["list"], { runId: "other-run" })),
+    ]);
+    expect(deniedList.exitCode).toBe(1);
+    expect(deniedList.stderr).toContain("approval:list");
+
+    const deniedRead = await runCli([
+      "harness:approval",
+      approvalId!,
+      "--root",
+      rootDir,
+      "--json",
+      "--grants",
+      JSON.stringify(
+        grantApprovalActions(["read"], {
+          approvalId: "approval-other",
+          runId: blocked.runId,
+          tool: "write",
+        }),
+      ),
+    ]);
+    expect(deniedRead.exitCode).toBe(1);
+    expect(deniedRead.stderr).toContain("approval:read");
+
+    const scopedList = await runCli([
+      "harness:approvals",
+      blocked.runId,
+      "--root",
+      rootDir,
+      "--json",
+      "--grants",
+      JSON.stringify([
+        ...approvalCollectionGrants(blocked.runId),
+        ...grantApprovalActions(["read"], {
+          approvalId: approvalId!,
+          runId: blocked.runId,
+          tool: "write",
+        }),
+      ]),
+    ]);
+    expect(scopedList.exitCode).toBe(0);
+    expect(JSON.parse(scopedList.stdout)).toHaveLength(1);
+  });
+
+  it("approves and denies blocked runs through the CLI with scoped approval grants", async () => {
+    const rootDir = await createTempDir();
+    const harness = await createHarness({
+      llm: mockLLM([
+        JSON.stringify({ tool: "write", arguments: { value: "approve-me" } }),
+        JSON.stringify({ tool: "write", arguments: { value: "deny-me" } }),
+      ]),
+      runtime: {
+        rootDir,
+        maxConcurrentRuns: 2,
+        beforeToolCall: async () => ({
+          allowed: false,
+          reason: "write requires approval",
+        }),
+      },
+      verify: { enabled: false },
+    });
+
+    const first = await harness.run({
+      goal: "approve from cli",
+      tools: [
+        {
+          name: "write",
+          description: "writes a value",
+          async execute() {
+            return { ok: true };
+          },
+        },
+      ],
+    });
+    const second = await harness.run({
+      goal: "deny from cli",
+      tools: [
+        {
+          name: "write",
+          description: "writes a value",
+          async execute() {
+            return { ok: true };
+          },
+        },
+      ],
+    });
+
+    const firstRun = await harness.getRun(first.runId);
+    const secondRun = await harness.getRun(second.runId);
+    const firstApprovalId = firstRun?.pendingApprovalId;
+    const secondApprovalId = secondRun?.pendingApprovalId;
+    expect(firstApprovalId).toBeString();
+    expect(secondApprovalId).toBeString();
+
+    const deniedApprove = await runCli([
+      "harness:approve",
+      first.runId,
+      "--root",
+      rootDir,
+      "--json",
+      "--note",
+      "ship it",
+      "--subject",
+      JSON.stringify({ id: "operator-1", role: "ops" }),
+      "--grants",
+      JSON.stringify(
+        grantApprovalActions(["approve"], {
+          approvalId: firstApprovalId!,
+          runId: first.runId,
+          tool: "other-tool",
+        }),
+      ),
+    ]);
+    expect(deniedApprove.exitCode).toBe(1);
+    expect(deniedApprove.stderr).toContain("approval:approve");
+
+    const approved = await runCli([
+      "harness:approve",
+      first.runId,
+      "--root",
+      rootDir,
+      "--json",
+      "--note",
+      "ship it",
+      "--subject",
+      JSON.stringify({ id: "operator-1", role: "ops" }),
+      "--grants",
+      JSON.stringify(
+        grantApprovalActions(["approve"], {
+          approvalId: firstApprovalId!,
+          runId: first.runId,
+          tool: "write",
+        }),
+      ),
+    ]);
+    expect(approved.exitCode).toBe(0);
+    expect(JSON.parse(approved.stdout)).toMatchObject({
+      id: firstApprovalId,
+      status: "approved",
+      resolutionNote: "ship it",
+      tool: "write",
+    });
+    const firstEvents = await harness.getEvents(first.runId);
+    expect(firstEvents.find((event) => event.type === "approval_approved")?.data).toMatchObject({
+      approvalId: firstApprovalId,
+      kind: "tool",
+      tool: "write",
+      status: "approved",
+      resolutionNote: "ship it",
+      resolvedBy: {
+        id: "operator-1",
+        role: "ops",
+      },
+    });
+
+    const denied = await runCli([
+      "harness:deny",
+      second.runId,
+      "--root",
+      rootDir,
+      "--json",
+      "--note",
+      "unsafe",
+      "--subject",
+      JSON.stringify({ id: "operator-2" }),
+      "--grants",
+      JSON.stringify(
+        grantApprovalActions(["deny"], {
+          approvalId: secondApprovalId!,
+          runId: second.runId,
+          tool: "write",
+        }),
+      ),
+    ]);
+    expect(denied.exitCode).toBe(0);
+    expect(JSON.parse(denied.stdout)).toMatchObject({
+      id: secondApprovalId,
+      status: "denied",
+      resolutionNote: "unsafe",
+      resolvedBy: { id: "operator-2" },
+    });
+    const secondEvents = await harness.getEvents(second.runId);
+    expect(secondEvents.find((event) => event.type === "approval_denied")?.data).toMatchObject({
+      approvalId: secondApprovalId,
+      kind: "tool",
+      tool: "write",
+      status: "denied",
+      resolutionNote: "unsafe",
+      resolvedBy: { id: "operator-2" },
+    });
+
+    expect((await harness.getRun(first.runId))?.pendingApproval).toMatchObject({
+      status: "approved",
+    });
+    expect((await harness.getRun(second.runId))?.status).toBe("canceled");
+    expect(firstEvents.map((event) => event.type)).toContain("approval_approved");
+    expect(secondEvents.map((event) => event.type)).toEqual(
+      expect.arrayContaining(["approval_denied", "run_canceled"]),
+    );
   });
 });

@@ -1,3 +1,13 @@
+import {
+  PageFetchRequestCache,
+  createPageFetchCacheKey,
+  createSharedPageFetchCacheKey,
+  readSharedPageFetchCache,
+  resolveSharedPageFetchCachePolicy,
+  shouldCacheFetchResponse,
+  writeSharedPageFetchCache,
+} from "./page-fetch-cache.js";
+
 export type PageFetchMethod = "GET" | "POST" | "PUT" | "DELETE";
 
 export interface PageFetchClient {
@@ -303,7 +313,7 @@ async function buildResponseError(method: PageFetchMethod, url: URL, response: R
   );
 }
 
-async function executePageFetch<T>(
+async function performPageFetch<T>(
   baseRequest: Request,
   fetchImpl: (request: Request) => Promise<Response>,
   forwardHeaders: Set<string>,
@@ -311,7 +321,7 @@ async function executePageFetch<T>(
   path: string,
   paramsOrBody?: Record<string, string> | unknown,
   bodyMode = false,
-): Promise<T> {
+): Promise<{ value: T; response: Response }> {
   const url = buildUrl(baseRequest, path, bodyMode ? undefined : (paramsOrBody as Record<string, string> | undefined));
   const headers = cloneForwardHeaders(baseRequest.headers, forwardHeaders);
   const bodyConfig = bodyMode ? serializeBody(paramsOrBody) : {};
@@ -377,7 +387,81 @@ async function executePageFetch<T>(
     throw await buildResponseError(method, url, response);
   }
 
-  return parseResponse<T>(method, url, response);
+  const value = await parseResponse<T>(method, url, response);
+  return { value, response };
+}
+
+async function executePageFetch<T>(
+  baseRequest: Request,
+  fetchImpl: (request: Request) => Promise<Response>,
+  forwardHeaders: Set<string>,
+  method: PageFetchMethod,
+  path: string,
+  paramsOrBody?: Record<string, string> | unknown,
+  bodyMode = false,
+  requestCache?: PageFetchRequestCache,
+): Promise<T> {
+  const url = buildUrl(baseRequest, path, bodyMode ? undefined : (paramsOrBody as Record<string, string> | undefined));
+  const headers = cloneForwardHeaders(baseRequest.headers, forwardHeaders);
+  const cacheKey = requestCache && method === "GET"
+    ? createPageFetchCacheKey(method, url.toString(), headers)
+    : undefined;
+  const sharedCacheKey = method === "GET"
+    ? createSharedPageFetchCacheKey(method, url.toString(), headers)
+    : undefined;
+
+  if (cacheKey && requestCache && requestCache.has(cacheKey)) {
+    return requestCache.get<T>(cacheKey) as T;
+  }
+
+  if (cacheKey && sharedCacheKey) {
+    const shared = await readSharedPageFetchCache<T>(sharedCacheKey);
+    if (shared !== undefined) {
+      requestCache?.set(cacheKey, shared);
+      return shared;
+    }
+  }
+
+  if (cacheKey && requestCache) {
+    return requestCache.dedupe(cacheKey, async () => {
+      const { value, response } = await performPageFetch<T>(
+        baseRequest,
+        fetchImpl,
+        forwardHeaders,
+        method,
+        path,
+        paramsOrBody,
+        bodyMode,
+      );
+      if (sharedCacheKey) {
+        const policy = resolveSharedPageFetchCachePolicy(url.toString(), response);
+        if (policy.cacheable) {
+          await writeSharedPageFetchCache(sharedCacheKey, value, policy);
+        }
+      }
+      return {
+        value,
+        cacheable: shouldCacheFetchResponse(response),
+      };
+    });
+  }
+
+  const { value, response } = await performPageFetch<T>(
+    baseRequest,
+    fetchImpl,
+    forwardHeaders,
+    method,
+    path,
+    paramsOrBody,
+    bodyMode,
+  );
+  if (sharedCacheKey) {
+    const policy = resolveSharedPageFetchCachePolicy(url.toString(), response);
+    if (policy.cacheable) {
+      await writeSharedPageFetchCache(sharedCacheKey, value, policy);
+    }
+  }
+  return value;
 }
 
 export function createPageFetch(
@@ -390,10 +474,11 @@ export function createPageFetch(
   }
 
   const forwardHeaders = createForwardHeaderSet(options.forwardHeaders);
+  const requestCache = new PageFetchRequestCache();
 
   return {
     get<T>(path: string, params?: Record<string, string>): Promise<T> {
-      return executePageFetch<T>(request, fetchImpl, forwardHeaders, "GET", path, params, false);
+      return executePageFetch<T>(request, fetchImpl, forwardHeaders, "GET", path, params, false, requestCache);
     },
     post<T>(path: string, body?: unknown): Promise<T> {
       return executePageFetch<T>(request, fetchImpl, forwardHeaders, "POST", path, body, true);

@@ -27,7 +27,6 @@ let _pw: PlaywrightModule | null = null;
 async function loadPlaywright(): Promise<PlaywrightModule> {
   if (!_pw) {
     try {
-      // @ts-expect-error — playwright is a peer dep, may not be installed
       _pw = (await import("playwright")) as unknown as PlaywrightModule;
     } catch {
       throw new Error(

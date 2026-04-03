@@ -202,6 +202,17 @@ describe("scanRoutes", () => {
     expect(page!.urlPattern).toBe("/(marketing/about");
   });
 
+  it("does not treat concatenated parentheses as a route group", async () => {
+    const dir = await makeTempDir();
+    await touch(dir, "(marketing)(v2)/about.page.tsx");
+
+    const manifest = await scanRoutes(dir);
+    const page = manifest.routes.find((r) => r.type === "page");
+
+    expect(page).toBeDefined();
+    expect(page!.urlPattern).toBe("/(marketing)(v2)/about");
+  });
+
   it("registers not-found.tsx as a scoped not-found route", async () => {
     const dir = await makeTempDir();
     await touch(dir, "docs/not-found.tsx");
@@ -236,6 +247,36 @@ describe("scanRoutes", () => {
 
     expect(page).toBeDefined();
     expect(page!.notFound).toBe(join(dir, "docs", "not-found.tsx"));
+  });
+
+  it("throws on duplicate page routes even when they live in different route groups", async () => {
+    const dir = await makeTempDir();
+    await touch(dir, "(marketing)/about.page.tsx");
+    await touch(dir, "(docs)/about.page.tsx");
+
+    await expect(scanRoutes(dir)).rejects.toMatchObject({
+      code: "ROUTE_CONFLICT",
+    });
+  });
+
+  it("throws on duplicate api routes with the same URL pattern", async () => {
+    const dir = await makeTempDir();
+    await touch(dir, "api/health.api.ts");
+    await touch(dir, "(internal)/api/health.api.ts");
+
+    await expect(scanRoutes(dir)).rejects.toMatchObject({
+      code: "ROUTE_CONFLICT",
+    });
+  });
+
+  it("throws when two equally specific scoped not-found boundaries would tie", async () => {
+    const dir = await makeTempDir();
+    await touch(dir, "(marketing)/not-found.tsx");
+    await touch(dir, "(docs)/not-found.tsx");
+
+    await expect(scanRoutes(dir)).rejects.toMatchObject({
+      code: "ROUTE_CONFLICT",
+    });
   });
 });
 
@@ -322,6 +363,14 @@ describe("matchRoute", () => {
     expect(match!.route.type).toBe("not-found");
     expect(match!.route.filePath).toBe(join(dir, "docs", "not-found.tsx"));
     expect(match!.params).toEqual({});
+  });
+
+  it("does not let a scoped not-found route escape its directory scope", async () => {
+    const dir = await makeTempDir();
+    await touch(dir, "docs/not-found.tsx");
+
+    const manifest = await scanRoutes(dir);
+    expect(matchRoute(manifest, "GET", "/docsx")).toBeNull();
   });
 
   it("prefers a deeper scoped not-found route over the root fallback", async () => {

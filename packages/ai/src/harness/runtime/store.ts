@@ -10,6 +10,7 @@ import {
 import { dirname, resolve } from "node:path";
 
 import type {
+  HarnessApprovalRecord,
   HarnessArtifactInput,
   HarnessArtifactRecord,
   HarnessContextArtifactRef,
@@ -27,6 +28,7 @@ import type {
   HarnessRuntimeStore,
   HarnessSessionMemoryRecord,
   HarnessSummaryRecord,
+  HarnessTaskRecord,
 } from "../types.js";
 import type { AgentLoopCheckpoint, MemoryScope } from "../../types.js";
 import { assertValidAgentLoopCheckpoint, assertValidCheckpointRecord } from "./checkpoint.js";
@@ -35,6 +37,8 @@ import {
   assertValidSessionMemoryRecord,
   assertValidSummaryRecord,
 } from "./context-records.js";
+import { assertValidApprovalRecord } from "./approval-records.js";
+import { assertValidTaskRecord } from "./task-records.js";
 
 const HARNESS_ROOT = ".capstan/harness";
 
@@ -81,6 +85,8 @@ export function buildHarnessRuntimePaths(rootDir: string): HarnessRuntimePaths {
     eventsDir: resolve(runtimeRoot, "events"),
     globalEventsPath: resolve(runtimeRoot, "events.ndjson"),
     artifactsDir: resolve(runtimeRoot, "artifacts"),
+    tasksDir: resolve(runtimeRoot, "tasks"),
+    approvalsDir: resolve(runtimeRoot, "approvals"),
     checkpointsDir: resolve(runtimeRoot, "checkpoints"),
     summariesDir: resolve(runtimeRoot, "summaries"),
     sessionMemoryDir: resolve(runtimeRoot, "session-memory"),
@@ -102,6 +108,8 @@ export class FileHarnessRuntimeStore implements HarnessRuntimeStore {
     await this.io.mkdir(this.paths.runsDir, { recursive: true });
     await this.io.mkdir(this.paths.eventsDir, { recursive: true });
     await this.io.mkdir(this.paths.artifactsDir, { recursive: true });
+    await this.io.mkdir(this.paths.tasksDir, { recursive: true });
+    await this.io.mkdir(this.paths.approvalsDir, { recursive: true });
     await this.io.mkdir(this.paths.checkpointsDir, { recursive: true });
     await this.io.mkdir(this.paths.summariesDir, { recursive: true });
     await this.io.mkdir(this.paths.sessionMemoryDir, { recursive: true });
@@ -212,6 +220,144 @@ export class FileHarnessRuntimeStore implements HarnessRuntimeStore {
       resolve(artifactDir, "index.ndjson"),
       this.io,
     );
+  }
+
+  async persistTask(task: HarnessTaskRecord): Promise<void> {
+    await this.initialize();
+    const safeRunId = normalizeRunId(task.runId);
+    assertValidTaskRecord(safeRunId, task);
+    await writeJsonAtomic(taskRecordPath(this.paths.tasksDir, safeRunId, task.id), task, this.io);
+  }
+
+  async patchTask(
+    runId: string,
+    taskId: string,
+    patch: Partial<Omit<HarnessTaskRecord, "id" | "runId" | "createdAt">>,
+  ): Promise<HarnessTaskRecord> {
+    const safeRunId = normalizeRunId(runId);
+    const safeTaskId = normalizeTaskId(taskId);
+    const current = await readJsonFile<HarnessTaskRecord>(
+      taskRecordPath(this.paths.tasksDir, safeRunId, safeTaskId),
+      this.io,
+    );
+    if (!current) {
+      throw new Error(`Harness run ${runId} task not found: ${taskId}`);
+    }
+    assertValidTaskRecord(safeRunId, current);
+    const next: HarnessTaskRecord = {
+      ...current,
+      ...patch,
+      updatedAt: new Date().toISOString(),
+    };
+    assertValidTaskRecord(safeRunId, next);
+    await writeJsonAtomic(taskRecordPath(this.paths.tasksDir, safeRunId, safeTaskId), next, this.io);
+    return next;
+  }
+
+  async getTasks(runId: string): Promise<HarnessTaskRecord[]> {
+    await this.initialize();
+    const safeRunId = normalizeRunId(runId);
+    const dirPath = resolve(this.paths.tasksDir, safeRunId);
+    const entries = await this.io.readdir(dirPath).catch((error) => {
+      if (isFileNotFound(error)) {
+        return [] as string[];
+      }
+      throw error;
+    });
+    const records = await Promise.all(
+      entries
+        .filter((entry) => entry.endsWith(".json"))
+        .map((entry) => readJsonFile<HarnessTaskRecord>(resolve(dirPath, entry), this.io)),
+    );
+    return records
+      .filter((record): record is HarnessTaskRecord => Boolean(record))
+      .map((record) => {
+        assertValidTaskRecord(safeRunId, record);
+        return record;
+      })
+      .sort((left, right) =>
+        left.order === right.order
+          ? left.createdAt.localeCompare(right.createdAt)
+          : left.order - right.order,
+      );
+  }
+
+  async persistApproval(record: HarnessApprovalRecord): Promise<void> {
+    await this.initialize();
+    const safeApprovalId = normalizeApprovalId(record.id);
+    const fallbackTimestamp = new Date().toISOString();
+    const nextRecord: HarnessApprovalRecord = {
+      ...record,
+      ...(record.requestedAt ? {} : { requestedAt: fallbackTimestamp }),
+      ...(record.updatedAt ? {} : { updatedAt: record.requestedAt ?? fallbackTimestamp }),
+    };
+    assertValidApprovalRecord(safeApprovalId, nextRecord);
+    await writeJsonAtomic(
+      approvalRecordPath(this.paths.approvalsDir, safeApprovalId),
+      toPersistableValue(nextRecord),
+      this.io,
+    );
+  }
+
+  async getApproval(approvalId: string): Promise<HarnessApprovalRecord | undefined> {
+    const safeApprovalId = normalizeApprovalId(approvalId);
+    const record = await readJsonFile<HarnessApprovalRecord>(
+      approvalRecordPath(this.paths.approvalsDir, safeApprovalId),
+      this.io,
+    );
+    if (!record) {
+      return undefined;
+    }
+    assertValidApprovalRecord(safeApprovalId, record);
+    return record;
+  }
+
+  async listApprovals(runId?: string): Promise<HarnessApprovalRecord[]> {
+    await this.initialize();
+    const entries = await this.io.readdir(this.paths.approvalsDir).catch((error) => {
+      if (isFileNotFound(error)) {
+        return [] as string[];
+      }
+      throw error;
+    });
+    const approvals = await Promise.all(
+      entries
+        .filter((entry) => entry.endsWith(".json"))
+        .map((entry) =>
+          readJsonFile<HarnessApprovalRecord>(resolve(this.paths.approvalsDir, entry), this.io),
+        ),
+    );
+    return approvals
+      .filter((record): record is HarnessApprovalRecord => Boolean(record))
+      .map((record) => {
+        assertValidApprovalRecord(record.id, record);
+        return record;
+      })
+      .filter((record) => (runId ? record.runId === normalizeRunId(runId) : true))
+      .sort((left, right) => right.requestedAt.localeCompare(left.requestedAt));
+  }
+
+  async patchApproval(
+    approvalId: string,
+    patch: Partial<Omit<HarnessApprovalRecord, "id" | "runId" | "requestedAt">>,
+  ): Promise<HarnessApprovalRecord> {
+    const safeApprovalId = normalizeApprovalId(approvalId);
+    const current = await this.getApproval(safeApprovalId);
+    if (!current) {
+      throw new Error(`Harness approval not found: ${approvalId}`);
+    }
+    const next: HarnessApprovalRecord = {
+      ...current,
+      ...patch,
+      updatedAt: new Date().toISOString(),
+    };
+    assertValidApprovalRecord(safeApprovalId, next);
+    await writeJsonAtomic(
+      approvalRecordPath(this.paths.approvalsDir, safeApprovalId),
+      toPersistableValue(next),
+      this.io,
+    );
+    return next;
   }
 
   async persistCheckpoint(runId: string, checkpoint: AgentLoopCheckpoint): Promise<HarnessRunCheckpointRecord> {
@@ -506,11 +652,12 @@ export class FileHarnessRuntimeStore implements HarnessRuntimeStore {
     const requestedAt = new Date().toISOString();
 
     if (run.status === "paused" || run.status === "approval_required") {
-      return this.transitionRun(
+      const canceledRun = await this.transitionRun(
         runId,
         "run_canceled",
         {
           status: "canceled",
+          pendingApprovalId: undefined,
           pendingApproval: undefined,
           control: {
             ...run.control,
@@ -519,6 +666,16 @@ export class FileHarnessRuntimeStore implements HarnessRuntimeStore {
         },
         { requestedAt, previousStatus: run.status },
       );
+      if (run.pendingApprovalId) {
+        const approval = await this.getApproval(run.pendingApprovalId).catch(() => undefined);
+        if (approval?.status === "pending") {
+          await this.patchApproval(run.pendingApprovalId, {
+            status: "canceled",
+            resolvedAt: requestedAt,
+          }).catch(() => undefined);
+        }
+      }
+      return canceledRun;
     }
 
     if (run.status !== "running" && run.status !== "pause_requested") {
@@ -551,6 +708,7 @@ export class FileHarnessRuntimeStore implements HarnessRuntimeStore {
         ? stored.status === derived.status &&
           stored.iterations === derived.iterations &&
           stored.toolCalls === derived.toolCalls &&
+          stored.taskCalls === derived.taskCalls &&
           stored.artifactIds.length === derived.artifactCount
         : false,
       eventCount: events.length,
@@ -560,6 +718,8 @@ export class FileHarnessRuntimeStore implements HarnessRuntimeStore {
       ...(stored ? { storedIterations: stored.iterations } : {}),
       derivedToolCalls: derived.toolCalls,
       ...(stored ? { storedToolCalls: stored.toolCalls } : {}),
+      derivedTaskCalls: derived.taskCalls,
+      ...(stored ? { storedTaskCalls: stored.taskCalls } : {}),
       derivedArtifactCount: derived.artifactCount,
       ...(stored ? { storedArtifactCount: stored.artifactIds.length } : {}),
     };
@@ -682,6 +842,10 @@ function resolveArtifactDir(baseDir: string, runId: string): string {
   return resolve(baseDir, normalizeRunId(runId));
 }
 
+function approvalRecordPath(baseDir: string, approvalId: string): string {
+  return resolve(baseDir, `${normalizeApprovalId(approvalId)}.json`);
+}
+
 function encodeMemoryScope(scope: MemoryScope): string {
   const namespace = scope.type.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-");
   const id = scope.id.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-");
@@ -696,10 +860,30 @@ function memoryRecordPath(baseDir: string, record: Pick<HarnessMemoryRecord, "sc
   return resolve(baseDir, encodeMemoryScope(record.scope), `${record.id}.json`);
 }
 
+function taskRecordPath(baseDir: string, runId: string, taskId: string): string {
+  return resolve(baseDir, normalizeRunId(runId), `${normalizeTaskId(taskId)}.json`);
+}
+
 function normalizeRunId(runId: string): string {
   const normalized = runId.trim();
   if (!/^[A-Za-z0-9._-]+$/.test(normalized)) {
     throw new Error(`Invalid harness run id: ${runId}`);
+  }
+  return normalized;
+}
+
+function normalizeTaskId(taskId: string): string {
+  const normalized = taskId.trim();
+  if (!/^[A-Za-z0-9._-]+$/.test(normalized)) {
+    throw new Error(`Invalid harness task id: ${taskId}`);
+  }
+  return normalized;
+}
+
+function normalizeApprovalId(approvalId: string): string {
+  const normalized = approvalId.trim();
+  if (!/^[A-Za-z0-9._-]+$/.test(normalized)) {
+    throw new Error(`Invalid harness approval id: ${approvalId}`);
   }
   return normalized;
 }
@@ -865,11 +1049,13 @@ function deriveRunFromEvents(events: HarnessRunEventRecord[]): {
   status?: HarnessRunStatus;
   iterations: number;
   toolCalls: number;
+  taskCalls: number;
   artifactCount: number;
 } {
   let status: HarnessRunStatus | undefined;
   let iterations = 0;
   let toolCalls = 0;
+  let taskCalls = 0;
   let artifactCount = 0;
 
   for (const event of events) {
@@ -883,6 +1069,9 @@ function deriveRunFromEvents(events: HarnessRunEventRecord[]): {
         break;
       case "artifact_created":
         artifactCount++;
+        break;
+      case "task_result":
+        taskCalls++;
         break;
       case "pause_requested":
         status = "pause_requested";
@@ -901,6 +1090,10 @@ function deriveRunFromEvents(events: HarnessRunEventRecord[]): {
       case "approval_required":
         status = "approval_required";
         iterations = readNumericField(event.data, "iterations", iterations);
+        break;
+      case "approval_approved":
+      case "approval_denied":
+        status = "approval_required";
         break;
       case "run_completed":
         status = "completed";
@@ -921,6 +1114,7 @@ function deriveRunFromEvents(events: HarnessRunEventRecord[]): {
     ...(status ? { status } : {}),
     iterations,
     toolCalls,
+    taskCalls,
     artifactCount,
   };
 }

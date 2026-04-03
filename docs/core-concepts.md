@@ -150,6 +150,44 @@ const tools = toLangChainTools(registry, {
 | `GET /openapi.json`             | OpenAPI    | OpenAPI 3.1 specification            |
 | `GET /capstan/approvals`        | Capstan    | Approval workflow management         |
 
+## Semantic Ops
+
+Capstan's runtime can also project structured operational state. Request,
+capability, policy, approval, and health lifecycle signals flow through
+`createCapstanOpsContext()` in `@zauso-ai/capstan-core`, while
+`@zauso-ai/capstan-ops` provides the persistent event, incident, and snapshot
+store behind that contract.
+
+At runtime this means:
+
+- core emits normalized semantic events
+- dev and portable runtimes attach a project sink automatically
+- the sink writes `.capstan/ops/ops.db` at the app root
+- the CLI inspects the resulting store through `capstan ops:events`,
+  `capstan ops:incidents`, `capstan ops:health`, and `capstan ops:tail`
+
+```typescript
+import { createCapstanOpsContext } from "@zauso-ai/capstan-core";
+
+const ops = createCapstanOpsContext({
+  appName: "tickets",
+  source: "runtime:dev",
+});
+
+await ops?.recordRequestStart({
+  requestId: "req_123",
+  traceId: "trace_123",
+  data: {
+    method: "GET",
+    path: "/tickets",
+  },
+});
+```
+
+The semantic ops layer is intentionally machine-readable. It is designed so a
+human operator, an automated verifier, and a coding agent can all reason about
+the same event stream and incident ledger without parsing ad hoc logs.
+
 ## File-Based Routing
 
 Capstan uses a file-based routing convention in the `app/routes/` directory. The router scans the directory tree and maps files to URL patterns.
@@ -751,7 +789,7 @@ The `LLMProvider` interface can be implemented for other providers. Both provide
 
 ## AI Toolkit (@zauso-ai/capstan-ai)
 
-`@zauso-ai/capstan-ai` is a standalone AI agent toolkit that works independently OR with the Capstan framework. It provides structured reasoning, text generation, scoped memory primitives with pluggable backends, a self-orchestrating agent loop, and `createHarness()` for browser/filesystem sandboxing. For recurring runs, pair it with `@zauso-ai/capstan-cron`.
+`@zauso-ai/capstan-ai` is a standalone AI agent toolkit that works independently OR with the Capstan framework. It provides structured reasoning, text generation, scoped memory primitives with pluggable backends, a host-driven agent loop, first-class task execution, and `createHarness()` for browser/filesystem sandboxing. For recurring runs, pair it with `@zauso-ai/capstan-cron`.
 
 ### Standalone Usage (No Capstan Required)
 
@@ -826,7 +864,7 @@ Memory features:
 
 ### Agent Loop
 
-The self-orchestrating agent loop reasons about a goal, selects and executes tools, and repeats until the goal is achieved:
+The self-orchestrating agent loop is host-driven: the model proposes the next tools or tasks, and the runtime advances turns, persists checkpoints, and folds results back into the next turn until the goal is achieved:
 
 ```typescript
 const result = await ai.agent.run({
@@ -841,6 +879,43 @@ Agent loop features:
 - **`beforeToolCall` hook**: enforce policies or require approval before tool execution
 - **Configurable iteration limit**: `maxIterations` (default: 10)
 - **Entity-scoped memory**: `about` option automatically scopes all memory operations
+- **Task-aware turns**: tools and long-running tasks share one orchestration state machine
+
+### Task Fabric
+
+Use tasks when work should outlive a single tool call or run asynchronously before folding back into the next turn:
+
+```typescript
+import {
+  createShellTask,
+  createWorkflowTask,
+  createRemoteTask,
+  createSubagentTask,
+} from "@zauso-ai/capstan-ai";
+
+const result = await ai.agent.run({
+  goal: "Run verification, summarize the findings, and hand back a release note",
+  tasks: [
+    createShellTask({
+      name: "verify",
+      command: [process.execPath, "-e", "process.stdout.write('tests green')"],
+    }),
+    createWorkflowTask({
+      name: "release-note",
+      async handler() {
+        return { summary: "Build green and ready to ship." };
+      },
+    }),
+  ],
+});
+```
+
+Task features:
+- **First-class runtime state**: submitted tasks become persisted runtime records rather than ad hoc background promises
+- **Mailbox-style continuation**: task completion, failure, and cancellation feed back into the next turn automatically
+- **Concurrency contracts**: the host runtime can batch safe work while still preserving deterministic ordering in the transcript
+- **Task families**: shell, workflow, remote, and subagent tasks share one contract and can be mixed in a single run
+- **Cooperative recovery**: paused or canceled runs cancel in-flight tasks, persist task records, and can replay pending task requests from checkpoints
 
 ### Agent Harness Mode
 
@@ -873,19 +948,30 @@ await harness.destroy();
 Harness features:
 - **Browser sandbox**: Playwright by default, or Camoufox kernel for persistent profiles and advanced anti-detection
 - **Filesystem sandbox**: scoped reads/writes with traversal protection
-- **Durable runtime**: each run gets a persisted run record, event log, artifact store, and resumable checkpoint under `.capstan/harness/`
+- **Durable runtime**: each run gets a persisted run record, event log, task store, artifact store, and resumable checkpoint under `.capstan/harness/`
 - **Lifecycle control**: `startRun()`, `pauseRun()`, `cancelRun()`, `resumeRun()`, `getCheckpoint()`, and `replayRun()` make supervision and recovery explicit
 - **Context kernel**: session memory, persisted summaries, long-term runtime memory, artifact-aware context assembly, and transcript compaction all live under `.capstan/harness/`
+- **Task fabric**: `getTasks()` exposes persisted task execution records so supervision surfaces can inspect in-flight and settled background work
 - **Pluggable sandbox driver**: local isolation by default, with a runtime driver contract for custom execution backends
 - **Verification layer**: post-tool validation hooks plus LLM-based pass/fail classification
 - **Observability layer**: event stream, metrics, and trace-friendly lifecycle events
 
 ### Scheduled Agent Runs (@zauso-ai/capstan-cron)
 
-Use `@zauso-ai/capstan-cron` to run agent or harness workflows on a schedule:
+Use `@zauso-ai/capstan-cron` to submit scheduled runs into a harness runtime. The recommended pattern is to create one durable harness/runtime and let cron act as the trigger layer:
 
 ```typescript
 import { createCronRunner, createAgentCron } from "@zauso-ai/capstan-cron";
+import { createHarness } from "@zauso-ai/capstan-ai";
+
+const harness = await createHarness({
+  llm: openaiProvider({ apiKey: process.env.OPENAI_API_KEY! }),
+  sandbox: {
+    browser: { engine: "camoufox", platform: "jd", accountId: "price-monitor-01" },
+    fs: { rootDir: "./workspace" },
+  },
+  verify: { enabled: true },
+});
 
 const runner = createCronRunner();
 
@@ -893,13 +979,8 @@ runner.add(createAgentCron({
   cron: "0 */2 * * *",
   name: "price-monitor",
   goal: "Review price changes and write a fresh report",
-  llm: openaiProvider({ apiKey: process.env.OPENAI_API_KEY! }),
-  harnessConfig: {
-    sandbox: {
-      browser: { engine: "camoufox", platform: "jd", accountId: "price-monitor-01" },
-      fs: { rootDir: "./workspace" },
-    },
-    verify: { enabled: true },
+  runtime: {
+    harness,
   },
 }));
 

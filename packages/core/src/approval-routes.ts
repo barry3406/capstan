@@ -5,6 +5,7 @@ import {
   listApprovals,
   resolveApproval,
 } from "./approval.js";
+import { hasAuthGrant } from "./authz.js";
 import type { CapstanAuthContext, CapstanContext } from "./types.js";
 
 /**
@@ -14,7 +15,7 @@ import type { CapstanAuthContext, CapstanContext } from "./types.js";
  */
 export type HandlerRegistry = Map<
   string,
-  (input: unknown, ctx: CapstanContext) => Promise<unknown>
+  (input: unknown, ctx: CapstanContext, params: Record<string, string>) => Promise<unknown>
 >;
 
 /**
@@ -35,9 +36,11 @@ function requireApprovalAuth(c: HonoContext): Response | null {
   }
 
   // Allow admins and callers with the explicit "approval:manage" permission.
-  const perms: string[] = auth.permissions ?? [];
   const isAdmin = auth.role === "admin";
-  const hasPermission = perms.includes("approval:manage");
+  const hasPermission = hasAuthGrant(auth, {
+    resource: "approval",
+    action: "manage",
+  });
 
   if (!isAdmin && !hasPermission) {
     return c.json(
@@ -117,7 +120,8 @@ export function mountApprovalRoutes(app: Hono<any>, handlerRegistry: HandlerRegi
       // No body or invalid JSON -- that's fine.
     }
 
-    const approval = await resolveApproval(id, "approved", resolvedBy);
+    const ctx = createContext(c);
+    const approval = await resolveApproval(id, "approved", resolvedBy, ctx);
     if (!approval) {
       return c.json({ error: "Approval not found" }, 404);
     }
@@ -133,8 +137,7 @@ export function mountApprovalRoutes(app: Hono<any>, handlerRegistry: HandlerRegi
     }
 
     try {
-      const ctx = createContext(c);
-      const result = await handler(approval.input, ctx);
+      const result = await handler(approval.input, ctx, approval.params ?? {});
       approval.result = result;
       return c.json({
         status: "approved",
@@ -178,7 +181,8 @@ export function mountApprovalRoutes(app: Hono<any>, handlerRegistry: HandlerRegi
       // No body or invalid JSON -- that's fine.
     }
 
-    const approval = await resolveApproval(id, "denied", resolvedBy);
+    const ctx = createContext(c);
+    const approval = await resolveApproval(id, "denied", resolvedBy, ctx);
     if (!approval) {
       return c.json({ error: "Approval not found" }, 404);
     }

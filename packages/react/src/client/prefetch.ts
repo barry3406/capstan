@@ -1,6 +1,6 @@
 import type { PrefetchStrategy } from "./types.js";
 import { getRouter } from "./router.js";
-import { isPrefetchableHref } from "./href.js";
+import { normalizeClientNavigationUrl } from "./navigation-url.js";
 
 /**
  * PrefetchManager — watches links and prefetches their targets.
@@ -20,6 +20,7 @@ export class PrefetchManager {
   private hoverTimers = new Map<Element, ReturnType<typeof setTimeout>>();
   private hoverListeners = new Map<Element, { onEnter: () => void; onLeave: () => void }>();
   private prefetched = new Set<string>();
+  private pending = new Set<string>();
 
   constructor() {
     if (typeof IntersectionObserver !== "undefined") {
@@ -106,23 +107,62 @@ export class PrefetchManager {
     }
     this.hoverTimers.clear();
     this.prefetched.clear();
+    this.pending.clear();
+  }
+
+  /**
+   * Invalidate a cached prefetch marker so the next observation can refetch.
+   */
+  invalidate(href?: string): void {
+    const router = getRouter();
+    if (!href) {
+      this.prefetched.clear();
+      this.pending.clear();
+      router?.invalidate();
+      return;
+    }
+
+    const normalized = normalizeClientNavigationUrl(href);
+    const key = normalized?.requestUrl ?? href;
+    this.prefetched.delete(key);
+    this.pending.delete(key);
+    router?.invalidate(key);
   }
 
   private triggerPrefetch(href: string): void {
     const router = getRouter();
     if (!router) return;
-    if (this.prefetched.has(href)) return;
-    this.prefetched.add(href);
-    void router.prefetch(href);
+    const normalized = normalizeClientNavigationUrl(href);
+    if (!normalized) return;
+
+    const key = normalized.requestUrl;
+    if (router.hasCachedNavigation(key)) {
+      this.prefetched.add(key);
+      return;
+    }
+
+    if (this.pending.has(key)) {
+      return;
+    }
+
+    if (this.prefetched.has(key) && router.hasCachedNavigation(key)) {
+      return;
+    }
+
+    this.pending.add(key);
+    void router.prefetch(key).finally(() => {
+      this.pending.delete(key);
+      if (router.hasCachedNavigation(key)) {
+        this.prefetched.add(key);
+      } else {
+        this.prefetched.delete(key);
+      }
+    });
   }
 
   private getHref(element: Element): string | null {
     const href = element.getAttribute("href");
     if (!href) return null;
-    // Only prefetch same-origin, non-hash links
-    if (!isPrefetchableHref(href)) {
-      return null;
-    }
     return href;
   }
 }

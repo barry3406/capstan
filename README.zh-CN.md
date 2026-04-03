@@ -364,9 +364,9 @@ Capstan 内置多层安全防护：
 
 - **向量字段 & RAG 原语** — `defineEmbedding` 支持向量存储、混合搜索（关键词 + 语义），开箱即用的检索增强生成能力
 - **LangChain 集成** — 将 Capstan 能力注册表导出为 LangChain 工具，无缝对接 LangChain 工作流
-- **AI 工具包（`@zauso-ai/capstan-ai`）** — 独立 AI 工具包：`createAI()` 工厂函数（无需 Capstan 框架即可使用）、`think<T>(prompt, { schema })` 结构化推理、`generate(prompt)` 文本生成、流式变体、按 scope 隔离的 `remember()`/`recall()` / `assembleContext()` 记忆原语、`memory.about(type, id)` 实体级记忆、`agent.run()` 自编排 Agent 循环
-- **Agent Harness 模式** — `createHarness()` 组合浏览器沙箱（Playwright 或 Camoufox kernel）、文件系统沙箱、LLM 自验证与可观测性，用于长时运行 Agent
-- **定时 Agent 调度（`@zauso-ai/capstan-cron`）** — `defineCron()`、`createCronRunner()`、`createBunCronRunner()`、`createAgentCron()` 用于 7×24 定时任务
+- **AI 工具包（`@zauso-ai/capstan-ai`）** — 独立 AI 工具包：`createAI()` 工厂函数（无需 Capstan 框架即可使用）、`think<T>(prompt, { schema })` 结构化推理、`generate(prompt)` 文本生成、流式变体、按 scope 隔离的 `remember()`/`recall()` / `assembleContext()` 记忆原语、`memory.about(type, id)` 实体级记忆、带一等任务执行的宿主驱动 `agent.run()`
+- **Agent Harness 模式** — `createHarness()` 组合浏览器沙箱（Playwright 或 Camoufox kernel）、文件系统沙箱、task fabric、LLM 自验证与可观测性，用于长时运行 Agent
+- **定时 Agent 调度（`@zauso-ai/capstan-cron`）** — 作为 cron 触发层，把定时任务提交进 harness/runtime，而不是把调度和执行揉在一起
 
 ### 渲染与前端
 
@@ -490,11 +490,13 @@ bunx capstan verify --deployment --target vercel-edge
 
 构建输出现在是显式且机器可读的：`dist/_capstan_server.js` 是生产入口，`dist/deploy-manifest.json` 描述部署契约，而从 `app/public/` 复制出的静态资源在生产环境中也和开发环境一样直接挂载在根路径。只要使用显式部署目标，Capstan 都会生成 `dist/standalone/` 及其运行时 `package.json`；然后再叠加平台文件，比如 Vercel 的 `api/index.js` + `vercel.json`、Cloudflare 的 `worker.js` + `wrangler.toml`、Fly.io 的 `fly.toml` 和 Docker 资产。`capstan verify --deployment --target <target>` 会在发布前校验这些部署契约。
 
+语义化运维现在也是默认运行时闭环的一部分。开发环境和 portable runtime 构建会把结构化事件、事故与健康快照写入项目根目录下的 `.capstan/ops/ops.db`，而 CLI 可以通过 `capstan ops:events`、`capstan ops:incidents`、`capstan ops:health` 和 `capstan ops:tail` 直接查看。
+
 ---
 
 ## 📦 包一览
 
-### 工作区包（11 个）
+### 工作区包（12 个）
 
 | 包名 | 说明 |
 |------|------|
@@ -503,11 +505,12 @@ bunx capstan verify --deployment --target vercel-edge
 | `@zauso-ai/capstan-db` | Drizzle ORM、`defineModel`、字段/关联辅助函数、数据迁移、自动 CRUD（SQLite、PostgreSQL、MySQL） |
 | `@zauso-ai/capstan-auth` | JWT 会话、Agent API Key 认证、OAuth 提供者（Google、GitHub）、权限检查（`"human"` / `"agent"` / `"anonymous"`） |
 | `@zauso-ai/capstan-agent` | `CapabilityRegistry`、MCP 服务器（带类型参数）、A2A 适配器（SSE）、OpenAPI 生成器 |
-| `@zauso-ai/capstan-ai` | 独立 AI 工具包：`createAI`、`think`/`generate`（结构化 + 流式）、scope 化记忆原语、`agent.run()` 自编排循环，以及带上下文装配、control plane 和浏览器/文件沙箱的 `createHarness()` durable runtime |
+| `@zauso-ai/capstan-ai` | 独立 AI 工具包：`createAI`、`think`/`generate`（结构化 + 流式）、scope 化记忆原语、带一等任务执行的宿主驱动 `agent.run()`，以及带上下文装配、control plane、持久化 task record 和浏览器/文件沙箱的 `createHarness()` durable runtime |
 | `@zauso-ai/capstan-cron` | 定时调度包：`defineCron`、`createCronRunner`、`createBunCronRunner`、`createAgentCron` |
+| `@zauso-ai/capstan-ops` | 语义化运维内核：事件、事故、快照、查询、SQLite 持久化 |
 | `@zauso-ai/capstan-react` | SSR + loader、布局、`Outlet`、选择性水合、ISR 渲染策略、`<Link>` SPA 路由（预取 + View Transitions）、`Image`、`defineFont`、`defineMetadata`、`ErrorBoundary` |
 | `@zauso-ai/capstan-dev` | 开发服务器，支持文件监听、路由热重载、MCP/A2A 端点 |
-| `@zauso-ai/capstan-cli` | CLI 命令：`dev`、`build`、`start`、`deploy:init`、`verify`、`add`、`mcp`、`db:*` |
+| `@zauso-ai/capstan-cli` | CLI 命令：`dev`、`build`、`start`、`deploy:init`、`verify`、`ops:*`、`add`、`mcp`、`db:*` |
 | `create-capstan-app` | 项目脚手架（`--template blank`、`--template tickets`） |
 
 

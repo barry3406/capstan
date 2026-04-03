@@ -261,7 +261,7 @@ describe("Stage 2 harness runtime matrix", () => {
     expect(blocked.runtimeStatus).toBe("approval_required");
 
     await expect(harness.resumeRun(blocked.runId)).rejects.toThrow(
-      `Harness run ${blocked.runId} requires approvePendingTool=true before it can resume`,
+      `Harness run ${blocked.runId} requires an approved pending approval or approvePendingTool=true before it can resume`,
     );
     expect((await harness.getRun(blocked.runId))?.status).toBe("approval_required");
     await harness.destroy();

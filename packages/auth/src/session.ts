@@ -1,5 +1,9 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import type { SessionPayload } from "./types.js";
+import type {
+  SessionPayload,
+  SessionSigningOptions,
+  SessionVerificationOptions,
+} from "./types.js";
 
 // ── Base64url helpers ──────────────────────────────────────────────
 
@@ -70,13 +74,19 @@ function sign(payload: string, secret: string): string {
 export function signSession(
   payload: Omit<SessionPayload, "iat" | "exp">,
   secret: string,
-  maxAge?: string,
+  maxAgeOrOptions?: string | SessionSigningOptions,
 ): string {
   const nowSeconds = Math.floor(Date.now() / 1000);
-  const ttl = parseDuration(maxAge ?? "7d");
+  const options =
+    typeof maxAgeOrOptions === "string"
+      ? { maxAge: maxAgeOrOptions }
+      : (maxAgeOrOptions ?? {});
+  const ttl = parseDuration(options.maxAge ?? "7d");
 
   const full: SessionPayload = {
     ...payload,
+    ...(options.issuer !== undefined ? { iss: options.issuer } : {}),
+    ...(options.audience !== undefined ? { aud: options.audience } : {}),
     iat: nowSeconds,
     exp: nowSeconds + ttl,
   };
@@ -93,6 +103,7 @@ export function signSession(
 export function verifySession(
   token: string,
   secret: string,
+  options?: SessionVerificationOptions,
 ): SessionPayload | null {
   const parts = token.split(".");
   if (parts.length !== 3) return null;
@@ -117,6 +128,19 @@ export function verifySession(
     // Check expiration.
     const now = Math.floor(Date.now() / 1000);
     if (typeof payload.exp !== "number" || payload.exp <= now) return null;
+    if (options?.issuer !== undefined && payload.iss !== options.issuer) {
+      return null;
+    }
+    if (options?.audience !== undefined) {
+      const audiences = Array.isArray(payload.aud)
+        ? payload.aud
+        : payload.aud !== undefined
+          ? [payload.aud]
+          : [];
+      if (!audiences.includes(options.audience)) {
+        return null;
+      }
+    }
 
     return payload;
   } catch {

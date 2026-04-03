@@ -395,6 +395,21 @@ describe("deployment targets integration", () => {
     expect(dockerfile).toContain("RUN npm install --omit=dev");
     expect(dockerfile).toContain('CMD ["node", "dist/_capstan_server.js"]');
     await access(join(standaloneProjectDir, "dist", "standalone", ".dockerignore"));
+
+    const mismatch = await runCli(standaloneProjectDir, [
+      "verify",
+      "--deployment",
+      "--target",
+      "node-standalone",
+      "--json",
+    ], 1);
+    const mismatchReport = JSON.parse(mismatch.stdout) as {
+      status: string;
+      diagnostics: Array<{ code: string }>;
+    };
+
+    expect(mismatchReport.status).toBe("failed");
+    expect(mismatchReport.diagnostics.map((diagnostic) => diagnostic.code)).toContain("target_mismatch");
   });
 
   it("generates root Docker deployment files and requires --force before overwriting", async () => {
@@ -554,6 +569,31 @@ describe("deployment targets integration", () => {
     expect(dockerfile).toContain("RUN npx capstan build --target fly");
   });
 
+  it("emits a root deployment contract for plain builds", async () => {
+    await runCli(verificationProjectDir, ["build"]);
+
+    const rootManifest = JSON.parse(
+      await readFile(join(verificationProjectDir, "dist", "deploy-manifest.json"), "utf-8"),
+    ) as {
+      build: { target?: string };
+      targets?: {
+        nodeStandalone?: {
+          outputDir: string;
+          packageJson: string;
+          startCommand: string;
+        };
+      };
+    };
+
+    expect(rootManifest.build.target).toBe("node-standalone");
+    expect(rootManifest.targets?.nodeStandalone).toEqual({
+      outputDir: "dist",
+      packageJson: "package.json",
+      installCommand: "npm install --omit=dev",
+      startCommand: "capstan start",
+    });
+  });
+
   it("verifies a blank edge deployment bundle successfully", async () => {
     await runCli(standaloneProjectDir, ["build", "--target", "vercel-edge"]);
 
@@ -593,6 +633,24 @@ describe("deployment targets integration", () => {
     expect(report.status).toBe("failed");
     expect(report.diagnostics.map((diagnostic) => diagnostic.code)).toContain("sqlite_edge_unsupported");
     expect(report.diagnostics.map((diagnostic) => diagnostic.code)).toContain("edge_auth_runtime");
+  });
+
+  it("fails deployment verification when a required artifact is missing", async () => {
+    await runCli(verificationProjectDir, ["build"]);
+    await rm(join(verificationProjectDir, "dist", "agent-manifest.json"), { force: true });
+
+    const result = await runCli(verificationProjectDir, [
+      "verify",
+      "--deployment",
+      "--json",
+    ], 1);
+    const report = JSON.parse(result.stdout) as {
+      status: string;
+      diagnostics: Array<{ code: string }>;
+    };
+
+    expect(report.status).toBe("failed");
+    expect(report.diagnostics.map((diagnostic) => diagnostic.code)).toContain("missing_agent_manifest");
   });
 
   it("scaffolds cloudflare deployment files directly from create-capstan templates", async () => {

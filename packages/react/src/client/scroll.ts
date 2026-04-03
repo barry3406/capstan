@@ -9,6 +9,19 @@ const STORAGE_KEY_PREFIX = "__capstan_scroll_";
 
 let currentKey: string | null = null;
 
+export interface ScrollSnapshot {
+  x: number;
+  y: number;
+}
+
+/**
+ * Capture the current window scroll position.
+ */
+export function captureScrollPosition(): ScrollSnapshot | null {
+  if (typeof window === "undefined") return null;
+  return { x: window.scrollX, y: window.scrollY };
+}
+
 /**
  * Generate a unique key for a new history entry.
  */
@@ -28,11 +41,12 @@ export function setCurrentScrollKey(key: string): void {
  * Call this before navigating away.
  */
 export function saveScrollPosition(): void {
-  if (!currentKey || typeof window === "undefined") return;
+  const position = captureScrollPosition();
+  if (!currentKey || !position) return;
   try {
     sessionStorage.setItem(
       STORAGE_KEY_PREFIX + currentKey,
-      JSON.stringify({ x: window.scrollX, y: window.scrollY }),
+      JSON.stringify(position),
     );
   } catch {
     // sessionStorage may be full or disabled — silently ignore
@@ -55,6 +69,15 @@ export function restoreScrollPosition(key: string | null): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Restore a captured scroll snapshot.
+ */
+export function restoreScrollSnapshot(snapshot: ScrollSnapshot | null): boolean {
+  if (!snapshot || typeof window === "undefined") return false;
+  window.scrollTo(snapshot.x, snapshot.y);
+  return true;
 }
 
 /**

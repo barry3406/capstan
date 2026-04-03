@@ -9,16 +9,23 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build --workspace @zauso-ai/capstan-core && npm run build --workspace @zauso-ai/capstan-router && npm run build --workspace @zauso-ai/capstan-db && npm run build --workspace @zauso-ai/capstan-auth && npm run build --workspace @zauso-ai/capstan-ai && npm run build --workspace @zauso-ai/capstan-cron && npm run build --workspace @zauso-ai/capstan-agent && npm run build --workspace @zauso-ai/capstan-react && npm run build --workspace @zauso-ai/capstan-dev && npm run build --workspace @zauso-ai/capstan-cli && npm run build --workspace create-capstan-app",
+    "build": "node ./scripts/run-workspace-builds.mjs",
     "typecheck": "npm run typecheck --workspace @zauso-ai/capstan-cli",
     "dev": "tsx ./packages/cli/src/index.ts",
+    "perf": "node --expose-gc --import tsx ./benchmarks/run.ts",
+    "perf:check": "node --expose-gc --import tsx ./benchmarks/run.ts --check",
+    "perf:list": "node --expose-gc --import tsx ./benchmarks/run.ts --list",
     "test": "node ./scripts/run-bun-tests.mjs",
+    "test:e2e": "playwright test",
+    "test:meta": "node ./scripts/run-bun-tests.mjs tests/unit/meta-stability.test.ts",
     "test:new": "node ./scripts/run-bun-tests.mjs",
+    "test:node": "vitest run tests/integration/page-auth-integration.test.ts tests/unit/nav-payload.test.ts tests/unit/hydration.test.ts tests/unit/client-entry.test.ts tests/unit/client-router.test.ts tests/unit/navigation-history.test.ts tests/unit/navigation-prefetch.test.ts tests/unit/navigation-router.test.ts tests/unit/navigation-url.test.ts tests/unit/page-runtime.test.ts tests/unit/react-auth-context.test.ts",
     "test:vitest": "vitest run",
     "test:watch": "vitest",
     "verify": "npm run dev -- verify"
   },
   "devDependencies": {
+    "@playwright/test": "^1.59.1",
     "@types/better-sqlite3": "^7.6.13",
     "@types/jsdom": "^28.0.1",
     "@types/node": "^24.6.1",

@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { signSession } from "./session.js";
+import type { AuthCookieConfig } from "./types.js";
 
 // ── Types ─────────────────────────────────────────────────────────────
 
@@ -16,7 +17,15 @@ export interface OAuthProvider {
 export interface OAuthConfig {
   providers: OAuthProvider[];
   callbackPath?: string; // default: /auth/callback
-  sessionSecret: string;
+  sessionSecret?: string;
+  session?: {
+    secret?: string;
+    maxAge?: string;
+    cookieName?: string;
+    cookie?: AuthCookieConfig;
+  };
+  successRedirectPath?: string;
+  stateCookieName?: string;
 }
 
 interface OAuthTokenResponse {
@@ -88,6 +97,21 @@ function parseCookies(header: string): Map<string, string> {
   return cookies;
 }
 
+function buildCookie(
+  name: string,
+  value: string,
+  options?: AuthCookieConfig & { maxAge?: number },
+): string {
+  const parts = [`${name}=${value}`];
+  parts.push(`Path=${options?.path ?? "/"}`);
+  if (options?.domain) parts.push(`Domain=${options.domain}`);
+  if (options?.httpOnly !== false) parts.push("HttpOnly");
+  parts.push(`SameSite=${options?.sameSite ?? "Lax"}`);
+  if (options?.secure) parts.push("Secure");
+  if (options?.maxAge !== undefined) parts.push(`Max-Age=${options.maxAge}`);
+  return parts.join("; ");
+}
+
 // ── OAuth handlers ────────────────────────────────────────────────────
 
 export interface OAuthHandlers {
@@ -108,6 +132,13 @@ export function createOAuthHandlers(
   fetchFn: typeof globalThis.fetch = globalThis.fetch,
 ): OAuthHandlers {
   const callbackPath = config.callbackPath ?? "/auth/callback";
+  const stateCookieName = config.stateCookieName ?? "capstan_oauth_state";
+  const sessionCookieName = config.session?.cookieName ?? "capstan_session";
+  const resolvedSessionSecret = config.session?.secret ?? config.sessionSecret;
+  if (!resolvedSessionSecret) {
+    throw new Error("OAuthConfig requires session.secret or sessionSecret");
+  }
+  const sessionSecret = resolvedSessionSecret;
   const providerMap = new Map<string, OAuthProvider>();
   for (const p of config.providers) {
     providerMap.set(p.name, p);
@@ -140,7 +171,9 @@ export function createOAuthHandlers(
       status: 302,
       headers: {
         location: authorizeUrl.toString(),
-        "set-cookie": `capstan_oauth_state=${providerName}:${state}; Path=/; HttpOnly; SameSite=Lax; Max-Age=600`,
+        "set-cookie": buildCookie(stateCookieName, `${providerName}:${state}`, {
+          maxAge: 600,
+        }),
       },
     });
   }
@@ -160,7 +193,7 @@ export function createOAuthHandlers(
     // Validate state against cookie
     const cookieHeader = request.headers.get("cookie") ?? "";
     const cookies = parseCookies(cookieHeader);
-    const storedState = cookies.get("capstan_oauth_state");
+    const storedState = cookies.get(stateCookieName);
 
     if (!storedState || storedState !== stateParam) {
       return new Response(
@@ -258,18 +291,28 @@ export function createOAuthHandlers(
       userInfo.sub ?? userInfo.id?.toString() ?? userInfo.login ?? "unknown";
     const sessionData: Parameters<typeof signSession>[0] = {
       userId: `${providerName}:${userId}`,
+      ...(userInfo.name !== undefined ? { displayName: userInfo.name } : {}),
     };
     if (userInfo.email !== undefined) {
       sessionData.email = userInfo.email;
     }
-    const sessionToken = signSession(sessionData, config.sessionSecret);
+    const sessionToken = signSession(
+      sessionData,
+      sessionSecret,
+      config.session?.maxAge !== undefined
+        ? { maxAge: config.session.maxAge }
+        : undefined,
+    );
 
     // Set session cookie and redirect to /
     return new Response(null, {
       status: 302,
       headers: {
-        location: "/",
-        "set-cookie": `capstan_session=${sessionToken}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800`,
+        location: config.successRedirectPath ?? "/",
+        "set-cookie": buildCookie(sessionCookieName, sessionToken, {
+          ...(config.session?.cookie ?? {}),
+          maxAge: 604800,
+        }),
       },
     });
   }

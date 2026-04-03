@@ -37,7 +37,17 @@ export type {
   RenderStreamResult,
   CapstanPageContext,
 } from "./types.js";
-export { createStrategy, SSRStrategy, ISRStrategy, SSGStrategy, urlToFilePath } from "./render-strategy.js";
+export {
+  createStrategy,
+  SSRStrategy,
+  ISRStrategy,
+  SSGStrategy,
+  createPageCacheKey,
+  urlToFilePath,
+  normalizePagePath,
+  invalidatePagePath,
+  invalidatePageTag,
+} from "./render-strategy.js";
 export type { RenderStrategy, RenderStrategyContext, RenderStrategyResult } from "./render-strategy.js";
 export { renderPartialStream } from "./ssr.js";
 export { Link } from "./client/link.js";

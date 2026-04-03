@@ -1,6 +1,16 @@
 import type { KeyValueStore } from "./store.js";
 import { MemoryStore } from "./store.js";
-import { responseCacheInvalidateTag } from "./response-cache.js";
+import {
+  CacheTagIndex,
+  createCachePathTag,
+  createCachePathTagFromKey,
+  createPageCacheKey,
+  normalizeCacheTags,
+} from "./cache-utils.js";
+import {
+  responseCacheInvalidatePath,
+  responseCacheInvalidateTag,
+} from "./response-cache.js";
 
 export interface CacheOptions {
   /** Time-to-live in seconds */
@@ -21,21 +31,71 @@ export interface CacheEntry<T> {
 }
 
 let cacheStore: KeyValueStore<CacheEntry<unknown>> = new MemoryStore();
-let tagIndex = new Map<string, Set<string>>(); // tag -> cache keys
+const tagIndex = new CacheTagIndex();
+const inFlightComputations = new Map<string, Promise<unknown>>();
+
+async function findKeysForTag(tag: string): Promise<string[]> {
+  const keys = await cacheStore.keys();
+  const matches: string[] = [];
+
+  for (const key of keys) {
+    const entry = await cacheStore.get(key);
+    if (entry?.tags.includes(tag)) {
+      matches.push(key);
+    }
+  }
+
+  return matches;
+}
+
+async function invalidateKeys(keys: readonly string[]): Promise<number> {
+  let count = 0;
+
+  for (const key of keys) {
+    const deleted = await cacheStore.delete(key);
+    if (!deleted) {
+      continue;
+    }
+    tagIndex.unregister(key);
+    inFlightComputations.delete(key);
+    count++;
+  }
+
+  return count;
+}
+
+async function invalidateCacheTagLocally(tag: string): Promise<number> {
+  const count = await tagIndex.invalidateTag(tag, async (key) => {
+    const deleted = await cacheStore.delete(key);
+    if (deleted) {
+      inFlightComputations.delete(key);
+    }
+    return deleted;
+  });
+
+  if (count > 0) {
+    return count;
+  }
+
+  return invalidateKeys(await findKeysForTag(tag));
+}
+
+function normalizeSeconds(value: number | undefined): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+
+  return value < 0 ? 0 : value;
+}
 
 export function setCacheStore(store: KeyValueStore<CacheEntry<unknown>>): void {
   cacheStore = store;
-  tagIndex = new Map();
-}
-
-/**
- * Remove a key from every tag set in the index. Cleans up empty tag sets.
- */
-function removeKeyFromTagIndex(key: string): void {
-  for (const [tag, keys] of tagIndex) {
-    keys.delete(key);
-    if (keys.size === 0) tagIndex.delete(tag);
-  }
+  tagIndex.clear();
+  inFlightComputations.clear();
 }
 
 /**
@@ -43,24 +103,23 @@ function removeKeyFromTagIndex(key: string): void {
  */
 export async function cacheSet<T>(key: string, data: T, opts?: CacheOptions): Promise<void> {
   const now = Date.now();
+  const ttlSeconds = normalizeSeconds(opts?.ttl);
+  const revalidateSeconds = normalizeSeconds(opts?.revalidate);
+  const autoPathTag = createCachePathTagFromKey(key);
   const entry: CacheEntry<T> = {
     data,
     createdAt: now,
-    tags: opts?.tags ?? [],
+    tags: normalizeCacheTags(autoPathTag ? [...(opts?.tags ?? []), autoPathTag] : opts?.tags),
     stale: false,
   };
-  if (opts?.ttl) entry.expiresAt = now + opts.ttl * 1000;
-  if (opts?.revalidate) entry.revalidateAt = now + opts.revalidate * 1000;
+  if (ttlSeconds !== undefined) entry.expiresAt = now + ttlSeconds * 1000;
+  if (revalidateSeconds !== undefined) entry.revalidateAt = now + revalidateSeconds * 1000;
 
-  const ttlMs = opts?.ttl ? opts.ttl * 1000 : undefined;
+  const ttlMs = ttlSeconds !== undefined ? ttlSeconds * 1000 : undefined;
   await cacheStore.set(key, entry as CacheEntry<unknown>, ttlMs);
 
   // Clean old tag references AFTER the write succeeds, then register new ones.
-  removeKeyFromTagIndex(key);
-  for (const tag of entry.tags) {
-    if (!tagIndex.has(tag)) tagIndex.set(tag, new Set());
-    tagIndex.get(tag)!.add(key);
-  }
+  tagIndex.register(key, entry.tags);
 }
 
 /**
@@ -91,26 +150,24 @@ export async function cacheGet<T>(key: string): Promise<{ data: T; stale: boolea
  * Invalidate all cache entries with a given tag.
  */
 export async function cacheInvalidateTag(tag: string): Promise<number> {
-  const keys = tagIndex.get(tag);
-  let count = 0;
-  if (keys) {
-    for (const key of keys) {
-      if (await cacheStore.delete(key)) {
-        // Clean this key from ALL tag sets (not just the current tag) so
-        // the index stays consistent — mirrors response-cache behavior.
-        removeKeyFromTagIndex(key);
-        count++;
-      }
-    }
-    // Ensure the tag set itself is removed (may already be empty after
-    // removeKeyFromTagIndex, but be explicit).
-    tagIndex.delete(tag);
-  }
+  const count = await invalidateCacheTagLocally(tag);
 
   // Also invalidate the response cache so page-level ISR entries
   // tagged with the same key are evicted in a single call.
-  count += await responseCacheInvalidateTag(tag);
-  return count;
+  return count + await responseCacheInvalidateTag(tag);
+}
+
+/**
+ * Invalidate a specific path-backed cache entry.
+ */
+export async function cacheInvalidatePath(url: string): Promise<boolean> {
+  const key = createPageCacheKey(url);
+  const pathTag = createCachePathTag(url);
+  inFlightComputations.delete(key);
+  const deleted = await cacheInvalidate(key);
+  const taggedCount = await invalidateCacheTagLocally(pathTag);
+  const responseDeleted = await responseCacheInvalidatePath(url);
+  return deleted || taggedCount > 0 || responseDeleted;
 }
 
 /**
@@ -119,7 +176,8 @@ export async function cacheInvalidateTag(tag: string): Promise<number> {
 export async function cacheInvalidate(key: string): Promise<boolean> {
   const deleted = await cacheStore.delete(key);
   if (deleted) {
-    removeKeyFromTagIndex(key);
+    tagIndex.unregister(key);
+    inFlightComputations.delete(key);
   }
   return deleted;
 }
@@ -130,6 +188,28 @@ export async function cacheInvalidate(key: string): Promise<boolean> {
 export async function cacheClear(): Promise<void> {
   await cacheStore.clear();
   tagIndex.clear();
+  inFlightComputations.clear();
+}
+
+async function runCachedComputation<T>(
+  key: string,
+  compute: () => Promise<T>,
+): Promise<T> {
+  const existing = inFlightComputations.get(key);
+  if (existing) {
+    return existing as Promise<T>;
+  }
+
+  const task = (async () => {
+    try {
+      return await compute();
+    } finally {
+      inFlightComputations.delete(key);
+    }
+  })();
+
+  inFlightComputations.set(key, task as Promise<unknown>);
+  return task;
 }
 
 /**
@@ -142,14 +222,25 @@ export function cached<T>(key: string, fn: () => Promise<T>, opts?: CacheOptions
 
     // Stale-while-revalidate: return stale, refresh in background
     if (existing?.stale) {
-      // Fire-and-forget revalidation
-      fn().then(fresh => cacheSet(key, fresh, opts)).catch(() => {});
+      // Fire-and-forget revalidation, but dedupe concurrent refreshes.
+      void runCachedComputation(key, async () => {
+        const fresh = await fn();
+        await cacheSet(key, fresh, opts);
+        return fresh;
+      }).catch(() => {});
       return existing.data;
     }
 
-    // Cache miss: fetch and store
-    const data = await fn();
-    await cacheSet(key, data, opts);
-    return data;
+    // Cache miss: fetch and store, deduping concurrent callers.
+    return runCachedComputation(key, async () => {
+      const fresh = await cacheGet<T>(key);
+      if (fresh && !fresh.stale) {
+        return fresh.data;
+      }
+
+      const data = await fn();
+      await cacheSet(key, data, opts);
+      return data;
+    });
   })();
 }

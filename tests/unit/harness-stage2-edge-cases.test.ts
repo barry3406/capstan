@@ -206,6 +206,7 @@ describe("Stage 2 harness edge cases", () => {
       "approval_required",
       "summary_created",
       "memory_stored",
+      "approval_canceled",
       "run_canceled",
       "summary_created",
       "memory_stored",

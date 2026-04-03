@@ -281,6 +281,42 @@ describe("approval routes", () => {
     expect(body.result).toBeDefined();
   });
 
+  it("POST /capstan/approvals/:id/approve replays stored params for dynamic routes", async () => {
+    const { app, handlerRegistry } = createTestApp();
+    const approval = await seedApproval({
+      path: "/api/items/:id",
+      params: { id: "42" },
+    });
+
+    handlerRegistry.set("POST /api/items/:id", async (input, ctx, params) => {
+      return {
+        input,
+        params,
+        actorType: ctx.auth.type,
+      };
+    });
+
+    const res = await app.request(`/capstan/approvals/${approval.id}/approve`, {
+      method: "POST",
+    });
+    expect(res.status).toBe(200);
+
+    const body = await res.json() as {
+      status: string;
+      approvalId: string;
+      result?: {
+        params?: Record<string, string>;
+        input?: unknown;
+      };
+    };
+
+    expect(body.status).toBe("approved");
+    expect(body.result).toMatchObject({
+      params: { id: "42" },
+      input: { name: "test" },
+    });
+  });
+
   it("POST /capstan/approvals/:id/approve returns 409 if already resolved", async () => {
     const { app, handlerRegistry } = createTestApp();
     const approval = await seedApproval();

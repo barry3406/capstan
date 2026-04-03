@@ -6,6 +6,7 @@ import { mkdtemp } from "node:fs/promises";
 
 import type { AgentLoopCheckpoint } from "../../packages/ai/src/types.ts";
 import type {
+  HarnessApprovalRecord,
   HarnessRunEventRecord,
   HarnessRunRecord,
 } from "../../packages/ai/src/harness/types.ts";
@@ -40,9 +41,12 @@ function createRun(
     updatedAt: "2026-04-03T00:00:00.000Z",
     iterations: 0,
     toolCalls: 0,
+    taskCalls: 0,
     maxIterations: 5,
     toolNames: [],
+    taskNames: [],
     artifactIds: [],
+    taskIds: [],
     sandbox: {
       driver: "local",
       mode: "local",
@@ -71,6 +75,24 @@ function createCheckpoint(
   };
 }
 
+function createApproval(
+  id: string,
+  patch: Partial<HarnessApprovalRecord> = {},
+): HarnessApprovalRecord {
+  return {
+    id,
+    runId: "run-a",
+    kind: "tool",
+    tool: "delete",
+    args: { id: "123" },
+    reason: "needs approval",
+    requestedAt: "2026-04-03T00:00:00.000Z",
+    updatedAt: "2026-04-03T00:00:00.000Z",
+    status: "pending",
+    ...patch,
+  };
+}
+
 describe("FileHarnessRuntimeStore", () => {
   it("buildHarnessRuntimePaths resolves every runtime directory under .capstan/harness", () => {
     const paths = buildHarnessRuntimePaths("/tmp/capstan-root");
@@ -82,6 +104,7 @@ describe("FileHarnessRuntimeStore", () => {
       "/tmp/capstan-root/.capstan/harness/events.ndjson",
     );
     expect(paths.artifactsDir).toBe("/tmp/capstan-root/.capstan/harness/artifacts");
+    expect(paths.tasksDir).toBe("/tmp/capstan-root/.capstan/harness/tasks");
     expect(paths.checkpointsDir).toBe(
       "/tmp/capstan-root/.capstan/harness/checkpoints",
     );
@@ -98,6 +121,7 @@ describe("FileHarnessRuntimeStore", () => {
     expect((await stat(paths.runsDir)).isDirectory()).toBe(true);
     expect((await stat(paths.eventsDir)).isDirectory()).toBe(true);
     expect((await stat(paths.artifactsDir)).isDirectory()).toBe(true);
+    expect((await stat(paths.tasksDir)).isDirectory()).toBe(true);
     expect((await stat(paths.checkpointsDir)).isDirectory()).toBe(true);
     expect((await stat(paths.sandboxesDir)).isDirectory()).toBe(true);
   });
@@ -142,6 +166,131 @@ describe("FileHarnessRuntimeStore", () => {
     expect(record.checkpoint).toEqual(checkpoint);
     expect((await store.getCheckpoint("run-a"))?.checkpoint).toEqual(checkpoint);
     expect(await store.getCheckpoint("missing-run")).toBeUndefined();
+  });
+
+  it("persistApproval backfills missing timestamps for forward-compatible approval recovery", async () => {
+    const rootDir = await createTempDir();
+    const store = new FileHarnessRuntimeStore(rootDir);
+
+    await store.persistApproval({
+      id: "approval-legacy",
+      runId: "run-a",
+      kind: "tool",
+      tool: "delete",
+      args: { id: "123" },
+      reason: "legacy approval payload",
+      status: "pending",
+    } as any);
+
+    const approval = await store.getApproval("approval-legacy");
+
+    expect(approval).toBeDefined();
+    expect(approval?.requestedAt).toBeString();
+    expect(approval?.updatedAt).toBeString();
+  });
+
+  it("lists approvals newest-first and can filter them by run", async () => {
+    const rootDir = await createTempDir();
+    const store = new FileHarnessRuntimeStore(rootDir);
+
+    await store.persistApproval({
+      id: "approval-older",
+      runId: "run-a",
+      kind: "tool",
+      tool: "delete",
+      args: { id: "1" },
+      reason: "older approval",
+      requestedAt: "2026-04-03T00:00:00.000Z",
+      updatedAt: "2026-04-03T00:00:00.000Z",
+      status: "pending",
+    });
+    await store.persistApproval({
+      id: "approval-newer",
+      runId: "run-b",
+      kind: "task",
+      tool: "deploy",
+      args: { version: "v1" },
+      reason: "newer approval",
+      requestedAt: "2026-04-03T00:00:10.000Z",
+      updatedAt: "2026-04-03T00:00:10.000Z",
+      status: "pending",
+    });
+
+    expect((await store.listApprovals()).map((approval) => approval.id)).toEqual([
+      "approval-newer",
+      "approval-older",
+    ]);
+    expect((await store.listApprovals("run-a")).map((approval) => approval.id)).toEqual([
+      "approval-older",
+    ]);
+  });
+
+  it("persists approvals, updates them, and rejects malformed terminal records", async () => {
+    const rootDir = await createTempDir();
+    const store = new FileHarnessRuntimeStore(rootDir);
+
+    const created = createApproval("approval-active");
+    await store.persistApproval(created);
+
+    expect(await store.getApproval("approval-active")).toMatchObject(created);
+    expect((await store.listApprovals()).map((approval) => approval.id)).toEqual([
+      "approval-active",
+    ]);
+
+    const resolved = await store.patchApproval("approval-active", {
+      status: "approved",
+      resolvedAt: "2026-04-03T00:01:00.000Z",
+      resolutionNote: "approved by reviewer",
+    });
+
+    expect(resolved.status).toBe("approved");
+    expect(resolved.resolvedAt).toBe("2026-04-03T00:01:00.000Z");
+    expect(resolved.resolutionNote).toBe("approved by reviewer");
+    expect(resolved.updatedAt).not.toBe(created.updatedAt);
+    expect(await store.getApproval("approval-active")).toEqual(resolved);
+
+    await expect(
+      store.persistApproval({
+        ...createApproval("approval-missing-resolved-at"),
+        status: "approved",
+      }),
+    ).rejects.toThrow("terminal approvals require resolvedAt");
+
+    await expect(
+      store.persistApproval({
+        ...createApproval("approval-pending-with-resolution"),
+        resolvedAt: "2026-04-03T00:01:00.000Z",
+      }),
+    ).rejects.toThrow("pending approvals cannot have resolvedAt");
+  });
+
+  it("rejects malformed approval records loaded from disk instead of silently recovering them", async () => {
+    const rootDir = await createTempDir();
+    const store = new FileHarnessRuntimeStore(rootDir);
+    await store.initialize();
+
+    await writeFile(
+      join(store.paths.approvalsDir, "approval-bad.json"),
+      JSON.stringify({
+        id: "approval-bad",
+        runId: "run-a",
+        kind: "tool",
+        tool: "delete",
+        args: { id: "123" },
+        reason: "bad loaded record",
+        requestedAt: "2026-04-03T00:00:00.000Z",
+        updatedAt: "2026-04-03T00:00:00.000Z",
+        status: "approved",
+      }),
+      "utf8",
+    );
+
+    await expect(store.getApproval("approval-bad")).rejects.toThrow(
+      "terminal approvals require resolvedAt",
+    );
+    await expect(store.listApprovals()).rejects.toThrow(
+      "terminal approvals require resolvedAt",
+    );
   });
 
   it("appends per-run and global events and sorts global reads consistently", async () => {
@@ -222,14 +371,24 @@ describe("FileHarnessRuntimeStore", () => {
   it("requestCancel turns paused or approval-blocked runs into terminal canceled runs", async () => {
     const rootDir = await createTempDir();
     const store = new FileHarnessRuntimeStore(rootDir);
+    await store.persistApproval(
+      createApproval("approval-pending", {
+        runId: "paused-run",
+        id: "approval-pending",
+      }),
+    );
     await store.persistRun(
       createRun("paused-run", {
         status: "paused",
+        pendingApprovalId: "approval-pending",
         pendingApproval: {
+          id: "approval-pending",
+          kind: "tool",
           tool: "delete",
           args: { id: "123" },
           reason: "needs approval",
           requestedAt: "2026-04-03T00:00:00.000Z",
+          status: "pending",
         },
       }),
     );
@@ -237,11 +396,102 @@ describe("FileHarnessRuntimeStore", () => {
     const canceled = await store.requestCancel("paused-run");
 
     expect(canceled.status).toBe("canceled");
+    expect(canceled.pendingApprovalId).toBeUndefined();
     expect(canceled.pendingApproval).toBeUndefined();
     expect(canceled.control?.cancelRequestedAt).toBeString();
+    expect(await store.getApproval("approval-pending")).toMatchObject({
+      status: "canceled",
+      resolvedAt: canceled.control?.cancelRequestedAt,
+    });
 
     const events = await store.getEvents("paused-run");
     expect(events.map((event) => event.type)).toEqual(["run_canceled"]);
+  });
+
+  it("requestCancel preserves already-resolved approvals instead of downgrading them to canceled", async () => {
+    const rootDir = await createTempDir();
+    const store = new FileHarnessRuntimeStore(rootDir);
+    await store.persistRun(
+      createRun("approved-run", {
+        status: "approval_required",
+        pendingApprovalId: "approval-1",
+        pendingApproval: {
+          id: "approval-1",
+          kind: "tool",
+          tool: "delete",
+          args: { id: "123" },
+          reason: "needs approval",
+          requestedAt: "2026-04-03T00:00:00.000Z",
+          status: "approved",
+          resolvedAt: "2026-04-03T00:00:05.000Z",
+          resolutionNote: "approved elsewhere",
+        },
+      }),
+    );
+    await store.persistApproval({
+      id: "approval-1",
+      runId: "approved-run",
+      kind: "tool",
+      tool: "delete",
+      args: { id: "123" },
+      reason: "needs approval",
+      requestedAt: "2026-04-03T00:00:00.000Z",
+      updatedAt: "2026-04-03T00:00:05.000Z",
+      status: "approved",
+      resolvedAt: "2026-04-03T00:00:05.000Z",
+      resolutionNote: "approved elsewhere",
+    });
+
+    const canceled = await store.requestCancel("approved-run");
+    expect(canceled.status).toBe("canceled");
+
+    const approval = await store.getApproval("approval-1");
+    expect(approval).toMatchObject({
+      id: "approval-1",
+      status: "approved",
+      resolutionNote: "approved elsewhere",
+    });
+  });
+
+  it("requestCancel leaves already-approved approvals intact while canceling the run", async () => {
+    const rootDir = await createTempDir();
+    const store = new FileHarnessRuntimeStore(rootDir);
+    await store.persistApproval(
+      createApproval("approval-approved", {
+        runId: "approval-run",
+        id: "approval-approved",
+        status: "approved",
+        resolvedAt: "2026-04-03T00:02:00.000Z",
+        resolutionNote: "approved earlier",
+      }),
+    );
+    await store.persistRun(
+      createRun("approval-run", {
+        status: "approval_required",
+        pendingApprovalId: "approval-approved",
+        pendingApproval: {
+          id: "approval-approved",
+          kind: "tool",
+          tool: "delete",
+          args: { id: "123" },
+          reason: "needs approval",
+          requestedAt: "2026-04-03T00:00:00.000Z",
+          status: "approved",
+          resolvedAt: "2026-04-03T00:02:00.000Z",
+          resolutionNote: "approved earlier",
+        },
+      }),
+    );
+
+    const canceled = await store.requestCancel("approval-run");
+
+    expect(canceled.status).toBe("canceled");
+    expect(canceled.pendingApprovalId).toBeUndefined();
+    expect(await store.getApproval("approval-approved")).toMatchObject({
+      status: "approved",
+      resolvedAt: "2026-04-03T00:02:00.000Z",
+      resolutionNote: "approved earlier",
+    });
   });
 
   it("requestCancel moves active runs into cancel_requested and stays idempotent", async () => {

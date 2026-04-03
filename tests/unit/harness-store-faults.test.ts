@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import type { HarnessRunRecord } from "../../packages/ai/src/harness/types.ts";
+import { assertValidAgentLoopCheckpoint } from "../../packages/ai/src/harness/runtime/checkpoint.ts";
 import { FileHarnessRuntimeStore } from "../../packages/ai/src/harness/runtime/store.ts";
 
 const tempDirs: string[] = [];
@@ -41,9 +42,12 @@ function createRun(
     updatedAt: "2026-04-03T00:00:00.000Z",
     iterations: 0,
     toolCalls: 0,
+    taskCalls: 0,
     maxIterations: 5,
     toolNames: [],
+    taskNames: [],
     artifactIds: [],
+    taskIds: [],
     sandbox: {
       driver: "local",
       mode: "local",
@@ -207,6 +211,37 @@ describe("FileHarnessRuntimeStore fault injection", () => {
       } as any),
     ).rejects.toThrow(
       "Harness run run-a checkpoint is invalid: iterations must be a non-negative integer",
+    );
+  });
+
+  it("accepts paused checkpoints with richer message roles for forward-compatible harness resume", () => {
+    expect(() =>
+      assertValidAgentLoopCheckpoint({
+        stage: "paused",
+        config: { goal: "resume richer turn engine state" },
+        messages: [
+          { role: "system", content: "system prompt" },
+          { role: "tool", content: 'Tool "lookup" returned:\n{"ok":true}' },
+        ],
+        iterations: 1,
+        toolCalls: [{ tool: "lookup", args: { id: "a" }, result: { ok: true } }],
+      }),
+    ).not.toThrow();
+  });
+
+  it("still rejects blank message roles in persisted checkpoints", () => {
+    expect(() =>
+      assertValidAgentLoopCheckpoint({
+        stage: "tool_result",
+        config: { goal: "invalid role" },
+        messages: [
+          { role: "", content: "bad" },
+        ],
+        iterations: 0,
+        toolCalls: [],
+      }),
+    ).toThrow(
+      "Agent loop checkpoint is invalid: messages[0].role must be a non-empty string",
     );
   });
 });

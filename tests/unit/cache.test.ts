@@ -3,10 +3,15 @@ import {
   cacheSet,
   cacheGet,
   cacheInvalidateTag,
+  cacheInvalidatePath,
   cacheInvalidate,
   cacheClear,
   cached,
   setCacheStore,
+  responseCacheClear,
+  responseCacheSet,
+  responseCacheGet,
+  setResponseCacheStore,
   MemoryStore,
 } from "@zauso-ai/capstan-core";
 import type { CacheEntry, KeyValueStore } from "@zauso-ai/capstan-core";
@@ -14,7 +19,9 @@ import type { CacheEntry, KeyValueStore } from "@zauso-ai/capstan-core";
 // Reset cache state before each test
 beforeEach(async () => {
   await cacheClear();
+  await responseCacheClear();
   setCacheStore(new MemoryStore());
+  setResponseCacheStore(new MemoryStore());
 });
 
 // ---------------------------------------------------------------------------
@@ -80,6 +87,16 @@ describe("cacheSet + cacheGet", () => {
     expect(raw!.tags).toEqual(["a", "b"]);
   });
 
+  test("tags are normalized and deduplicated before storing", async () => {
+    const store = new MemoryStore<CacheEntry<unknown>>();
+    setCacheStore(store);
+
+    await cacheSet("normalized", "value", { tags: ["  alpha  ", "alpha", "", "beta"] });
+    const raw = await store.get("normalized");
+    expect(raw).toBeDefined();
+    expect(raw!.tags).toEqual(["alpha", "beta"]);
+  });
+
   test("revalidate: returns stale=true after revalidateAt", async () => {
     const store = new MemoryStore<CacheEntry<unknown>>();
     setCacheStore(store);
@@ -137,6 +154,13 @@ describe("cacheInvalidateTag", () => {
     expect(count).toBe(0);
   });
 
+  test("trims tag input before invalidating", async () => {
+    await cacheSet("trimmed", "value", { tags: ["topic"] });
+    const count = await cacheInvalidateTag("  topic  ");
+    expect(count).toBe(1);
+    expect(await cacheGet("trimmed")).toBeUndefined();
+  });
+
   test("multiple tags on one entry: invalidating one removes entry", async () => {
     await cacheSet("multi", "val", { tags: ["alpha", "beta"] });
     await cacheInvalidateTag("alpha");
@@ -188,6 +212,38 @@ describe("cacheClear", () => {
     // After clear, invalidating the tag should find nothing
     const count = await cacheInvalidateTag("tag1");
     expect(count).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cacheInvalidatePath
+// ---------------------------------------------------------------------------
+
+describe("cacheInvalidatePath", () => {
+  test("invalidates both data and response cache entries for the same path", async () => {
+    await cacheSet("page:/docs", "payload");
+    await responseCacheSet("page:/docs", {
+      html: "<html>docs</html>",
+      headers: {},
+      statusCode: 200,
+      createdAt: Date.now(),
+      revalidateAfter: null,
+      tags: ["docs"],
+    });
+
+    const result = await cacheInvalidatePath("https://example.com/docs?preview=1#top");
+    expect(result).toBe(true);
+    expect(await cacheGet("page:/docs")).toBeUndefined();
+    expect(await responseCacheGet("page:/docs")).toBeUndefined();
+  });
+
+  test("invalidates non-page cache entries that are tagged to the same normalized path", async () => {
+    await cacheSet("fetch:/docs?lang=zh", "payload", {
+      tags: ["path:/docs", "docs"],
+    });
+
+    expect(await cacheInvalidatePath("https://example.com/docs?preview=1#top")).toBe(true);
+    expect(await cacheGet("fetch:/docs?lang=zh")).toBeUndefined();
   });
 });
 
@@ -269,6 +325,27 @@ describe("cached()", () => {
     expect(entry).toBeDefined();
     expect(entry!.data).toBe("value");
   });
+
+  test("concurrent cache misses share a single computation", async () => {
+    let calls = 0;
+
+    const [first, second] = await Promise.all([
+      cached("dedupe", async () => {
+        calls++;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        return "value";
+      }),
+      cached("dedupe", async () => {
+        calls++;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        return "value";
+      }),
+    ]);
+
+    expect(first).toBe("value");
+    expect(second).toBe("value");
+    expect(calls).toBe(1);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -343,6 +420,21 @@ describe("tag index consistency", () => {
     // "keep" (shared) should still work
     await cacheInvalidateTag("keep");
     expect(await cacheGet("k")).toBeUndefined();
+  });
+
+  test("falls back to store scanning when the in-memory tag index is empty", async () => {
+    const store = new MemoryStore<CacheEntry<unknown>>();
+    await store.set("remote-key", {
+      data: "value",
+      createdAt: Date.now(),
+      tags: ["remote-tag"],
+      stale: false,
+    });
+
+    setCacheStore(store);
+
+    expect(await cacheInvalidateTag("remote-tag")).toBe(1);
+    expect(await cacheGet("remote-key")).toBeUndefined();
   });
 });
 

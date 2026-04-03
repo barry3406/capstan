@@ -80,6 +80,8 @@ function lifecycleEventTypes(events: Array<{ type: string }>): string[] {
 class FaultInjectingStore extends FileHarnessRuntimeStore {
   private persistRunCalls = 0;
   private persistCheckpointCalls = 0;
+  private persistTaskCalls = 0;
+  private patchTaskCalls = 0;
   private failNextArtifactBookkeepingTransition = false;
 
   constructor(
@@ -87,6 +89,8 @@ class FaultInjectingStore extends FileHarnessRuntimeStore {
     private readonly faults: {
       failPersistRunAt?: number;
       failPersistCheckpointAt?: number;
+      failPersistTaskAt?: number;
+      failPatchTaskAt?: number;
       failTransitionAfterArtifact?: boolean;
     } = {},
   ) {
@@ -110,6 +114,26 @@ class FaultInjectingStore extends FileHarnessRuntimeStore {
       throw new Error("checkpoint persistence failed");
     }
     return super.persistCheckpoint(runId, checkpoint);
+  }
+
+  override async persistTask(task: Parameters<FileHarnessRuntimeStore["persistTask"]>[0]) {
+    this.persistTaskCalls++;
+    if (this.persistTaskCalls === this.faults.failPersistTaskAt) {
+      throw new Error("task persistence failed");
+    }
+    await super.persistTask(task);
+  }
+
+  override async patchTask(
+    runId: string,
+    taskId: string,
+    patch: Parameters<FileHarnessRuntimeStore["patchTask"]>[2],
+  ) {
+    this.patchTaskCalls++;
+    if (this.patchTaskCalls === this.faults.failPatchTaskAt) {
+      throw new Error("task settlement persistence failed");
+    }
+    return super.patchTask(runId, taskId, patch);
   }
 
   override async writeArtifact(
@@ -266,6 +290,156 @@ describe("createHarness runtime fault handling", () => {
       "run_started",
       "run_failed",
     ]);
+  });
+
+  it("fails the run before task execution when task submission bookkeeping throws", async () => {
+    const rootDir = await createTempDir();
+    let executed = false;
+    const harness = await createHarness({
+      llm: mockLLM([
+        JSON.stringify({ tool: "deploy", arguments: { version: "v1" } }),
+      ]),
+      runtime: {
+        rootDir,
+        storeFactory: (dir) =>
+          new FaultInjectingStore(dir, { failPersistTaskAt: 1 }),
+      },
+      verify: { enabled: false },
+    });
+
+    await expect(
+      harness.run({
+        goal: "fail while recording task submission",
+        tasks: [
+          {
+            name: "deploy",
+            description: "deploys a release",
+            kind: "workflow",
+            async execute() {
+              executed = true;
+              return { ok: true };
+            },
+          },
+        ],
+      }),
+    ).rejects.toThrow("task persistence failed");
+
+    expect(executed).toBe(false);
+    const runs = await harness.listRuns();
+    expect(runs).toHaveLength(1);
+    expect(runs[0]?.status).toBe("failed");
+    expect(await harness.getTasks(runs[0]!.id)).toEqual([]);
+  });
+
+  it("fails the run if task settlement bookkeeping throws after the task completes", async () => {
+    const rootDir = await createTempDir();
+    const harness = await createHarness({
+      llm: mockLLM([
+        JSON.stringify({ tool: "deploy", arguments: { version: "v1" } }),
+      ]),
+      runtime: {
+        rootDir,
+        storeFactory: (dir) =>
+          new FaultInjectingStore(dir, { failPatchTaskAt: 1 }),
+      },
+      verify: { enabled: false },
+    });
+
+    await expect(
+      harness.run({
+        goal: "fail while recording task settlement",
+        tasks: [
+          {
+            name: "deploy",
+            description: "deploys a release",
+            kind: "workflow",
+            async execute(args) {
+              return { deployed: args.version };
+            },
+          },
+        ],
+      }),
+    ).rejects.toThrow('Task "deploy" settlement bookkeeping failed: task settlement persistence failed');
+
+    const runs = await harness.listRuns();
+    expect(runs).toHaveLength(1);
+    expect(runs[0]?.status).toBe("failed");
+    expect(await harness.getTasks(runs[0]!.id)).toEqual([
+      expect.objectContaining({
+        name: "deploy",
+        status: "completed",
+        result: { deployed: "v1" },
+      }),
+    ]);
+  });
+
+  it("cancels already-started sibling tasks when a later task submission record fails", async () => {
+    const rootDir = await createTempDir();
+    const harness = await createHarness({
+      llm: mockLLM([
+        JSON.stringify({
+          tools: [
+            { tool: "deploy_a", arguments: { version: "v1" } },
+            { tool: "deploy_b", arguments: { version: "v2" } },
+          ],
+        }),
+      ]),
+      runtime: {
+        rootDir,
+        storeFactory: (dir) =>
+          new FaultInjectingStore(dir, { failPersistTaskAt: 2 }),
+      },
+      verify: { enabled: false },
+    });
+
+    await expect(
+      harness.run({
+        goal: "fail the second task submission record",
+        tasks: [
+          {
+            name: "deploy_a",
+            description: "starts, then gets canceled",
+            kind: "workflow",
+            isConcurrencySafe: true,
+            async execute(_args, context) {
+              if (context.signal.aborted) {
+                throw new Error(String(context.signal.reason ?? "aborted before start"));
+              }
+              await new Promise<void>((resolve, reject) => {
+                context.signal.addEventListener(
+                  "abort",
+                  () => reject(new Error(String(context.signal.reason ?? "aborted by runtime"))),
+                  { once: true },
+                );
+              });
+              throw new Error("unreachable");
+            },
+          },
+          {
+            name: "deploy_b",
+            description: "never reaches execution because persistence fails first",
+            kind: "workflow",
+            isConcurrencySafe: true,
+            async execute() {
+              return { ok: true };
+            },
+          },
+        ],
+      }),
+    ).rejects.toThrow("task persistence failed");
+
+    const runs = await harness.listRuns();
+    expect(runs).toHaveLength(1);
+    expect(runs[0]?.status).toBe("failed");
+
+    const tasks = await harness.getTasks(runs[0]!.id);
+    expect(tasks).toEqual([
+      expect.objectContaining({
+        name: "deploy_a",
+        status: "canceled",
+      }),
+    ]);
+    expect(tasks[0]?.error).toContain("Task batch submission failed: task persistence failed");
   });
 
   it("surfaces artifact bookkeeping failures as tool errors after artifact persistence", async () => {

@@ -42,7 +42,21 @@ export async function enforcePolicies(
   ctx: CapstanContext,
   input?: unknown,
 ): Promise<PolicyCheckResult> {
+  const inputKind =
+    input === null ? "null" : Array.isArray(input) ? "array" : typeof input;
   if (policies.length === 0) {
+    if (ctx.ops) {
+      await ctx.ops.recordPolicyDecision({
+        ...(ctx.requestId ? { requestId: ctx.requestId } : {}),
+        ...(ctx.traceId ? { traceId: ctx.traceId } : {}),
+        data: {
+          policy: "none",
+          effect: "allow",
+          reason: "No policies configured",
+          inputKind,
+        },
+      });
+    }
     return { effect: "allow" };
   }
 
@@ -59,6 +73,30 @@ export async function enforcePolicies(
     ) {
       mostRestrictive = result;
     }
+  }
+
+  if (ctx.ops) {
+    const fallbackPolicy = policies[0]!;
+    let winningPolicy = fallbackPolicy;
+    for (let index = results.length - 1; index >= 0; index -= 1) {
+      if (results[index]?.effect === mostRestrictive.effect) {
+        winningPolicy = policies[index] ?? winningPolicy;
+        break;
+      }
+    }
+    await ctx.ops.recordPolicyDecision({
+      ...(ctx.requestId ? { requestId: ctx.requestId } : {}),
+      ...(ctx.traceId ? { traceId: ctx.traceId } : {}),
+      ...(mostRestrictive.effect === "deny"
+        ? { incidentFingerprint: `policy:${winningPolicy.key}:deny` }
+        : {}),
+      data: {
+        policy: winningPolicy.key,
+        effect: mostRestrictive.effect,
+        ...(mostRestrictive.reason ? { reason: mostRestrictive.reason } : {}),
+        ...(inputKind ? { inputKind } : {}),
+      },
+    });
   }
 
   return mostRestrictive;

@@ -20,6 +20,13 @@ import type {
   HarnessSessionMemoryRecord,
   HarnessSummaryRecord,
 } from "../types.js";
+import {
+  getCheckpointLastAssistantResponse,
+  getCheckpointMessages,
+  getCheckpointPendingToolCall,
+  getCheckpointStage,
+  getCheckpointToolCalls,
+} from "../runtime/checkpoint.js";
 import { summarizeHarnessResult } from "../runtime/utils.js";
 
 type NormalizedContextConfig = {
@@ -135,7 +142,11 @@ export class HarnessContextKernel {
       );
       compactedMessages = Math.max(
         compactedMessages,
-        Math.max(input.checkpoint.messages.length - nextCheckpoint.messages.length, 0),
+        Math.max(
+          getCheckpointMessages(input.checkpoint).length -
+            getCheckpointMessages(nextCheckpoint).length,
+          0,
+        ),
       );
 
       if (this.config.autoPromoteSummaries) {
@@ -356,7 +367,7 @@ export class HarnessContextKernel {
     );
     const preparedTranscript = checkpoint
       ? fitPreparedTranscriptBudget(
-          checkpoint.messages,
+          getCheckpointMessages(checkpoint),
           this.config.maxRecentMessages,
           maxContextTokens,
           reservePrimaryContextTokens(candidateBlocks),
@@ -392,11 +403,11 @@ export class HarnessContextKernel {
     scopes?: MemoryScope[];
   }): Promise<LLMMessage[]> {
     if (!this.config.enabled) {
-      return cloneMessages(input.checkpoint.messages);
+      return cloneMessages(getCheckpointMessages(input.checkpoint));
     }
 
     const preparedTranscript = buildPreparedTranscript(
-      input.checkpoint.messages,
+      getCheckpointMessages(input.checkpoint),
       this.config.maxRecentMessages,
     );
     const contextPackage = await this.assembleContext(input.runId, {
@@ -466,9 +477,10 @@ function buildRunSnapshot(
   if (run) {
     return {
       ...run,
-      status: statusFromCheckpointStage(checkpoint.stage, run.status),
+      status: statusFromCheckpointStage(getCheckpointStage(checkpoint), run.status),
       iterations: checkpoint.iterations,
-      toolCalls: checkpoint.toolCalls.length,
+      toolCalls: getCheckpointToolCalls(checkpoint).length,
+      taskCalls: checkpoint.taskCalls?.length ?? run.taskCalls,
     };
   }
 
@@ -476,14 +488,17 @@ function buildRunSnapshot(
   return {
     id: runId,
     goal: checkpoint.config.goal,
-    status: statusFromCheckpointStage(checkpoint.stage, "running"),
+    status: statusFromCheckpointStage(getCheckpointStage(checkpoint), "running"),
     createdAt: now,
     updatedAt: now,
     iterations: checkpoint.iterations,
-    toolCalls: checkpoint.toolCalls.length,
+    toolCalls: getCheckpointToolCalls(checkpoint).length,
+    taskCalls: checkpoint.taskCalls?.length ?? 0,
     maxIterations: checkpoint.config.maxIterations ?? 10,
     toolNames: [],
+    taskNames: [],
     artifactIds: [],
+    taskIds: [],
     sandbox: {
       driver: "unknown",
       mode: "unknown",
@@ -496,12 +511,14 @@ function buildRunSnapshot(
 }
 
 function statusFromCheckpointStage(
-  stage: AgentLoopCheckpoint["stage"],
+  stage: string,
   fallback: HarnessRunRecord["status"],
 ): HarnessRunRecord["status"] {
   switch (stage) {
     case "approval_required":
       return "approval_required";
+    case "paused":
+      return "paused";
     case "completed":
       return "completed";
     case "max_iterations":
@@ -520,14 +537,15 @@ function buildSessionMemory(
   compactedMessages: number,
 ): HarnessSessionMemoryRecord {
   const artifactRefs = artifactsToRefs(artifacts);
-  const recentSteps = (checkpoint?.toolCalls ?? [])
+  const recentSteps = (checkpoint ? getCheckpointToolCalls(checkpoint) : [])
     .slice(-5)
     .map((call) => formatToolObservation(call.tool, call.args, call.result));
   const blockers = collectBlockers(run, checkpoint);
   const openQuestions = collectOpenQuestions(run, checkpoint);
-  const headline =
-    checkpoint?.lastAssistantResponse?.trim() ||
-    `${run.goal} [${run.status}]`;
+  const lastAssistantResponse = checkpoint
+    ? getCheckpointLastAssistantResponse(checkpoint)
+    : undefined;
+  const headline = lastAssistantResponse?.trim() || `${run.goal} [${run.status}]`;
 
   return {
     runId: run.id,
@@ -537,8 +555,8 @@ function buildSessionMemory(
     sourceRunUpdatedAt: run.updatedAt,
     headline,
     currentPhase: describePhase(run.status, checkpoint),
-    ...(checkpoint?.lastAssistantResponse
-      ? { lastAssistantResponse: checkpoint.lastAssistantResponse }
+    ...(lastAssistantResponse
+      ? { lastAssistantResponse }
       : {}),
     recentSteps,
     blockers,
@@ -567,7 +585,7 @@ function buildSummaryRecord(
   kind: HarnessCompactionKind,
 ): HarnessSummaryRecord {
   const now = new Date().toISOString();
-  const completedSteps = checkpoint.toolCalls
+  const completedSteps = getCheckpointToolCalls(checkpoint)
     .slice(-8)
     .map((call) => formatToolObservation(call.tool, call.args, call.result));
 
@@ -585,8 +603,8 @@ function buildSummaryRecord(
     openQuestions: sessionMemory.openQuestions,
     artifactRefs: sessionMemory.artifactRefs,
     iterations: checkpoint.iterations,
-    toolCalls: checkpoint.toolCalls.length,
-    messageCount: checkpoint.messages.length,
+    toolCalls: getCheckpointToolCalls(checkpoint).length,
+    messageCount: getCheckpointMessages(checkpoint).length,
     compactedMessages: sessionMemory.compactedMessages,
   };
 }
@@ -599,7 +617,7 @@ function shouldSessionCompact(
   return (
     transcriptTokens >=
       Math.floor((config.maxPromptTokens - config.reserveOutputTokens) * config.sessionCompactThreshold) ||
-    checkpoint.messages.length > config.maxRecentMessages * 3
+    getCheckpointMessages(checkpoint).length > config.maxRecentMessages * 3
   );
 }
 
@@ -610,11 +628,10 @@ function microcompactCheckpoint(
     maxChars: number;
   },
 ): { checkpoint: AgentLoopCheckpoint; compactedMessages: number } {
-  const toolResultIndices = checkpoint.messages
+  const messages = getCheckpointMessages(checkpoint);
+  const toolResultIndices = messages
     .map((message, index) => ({ message, index }))
-    .filter(({ message }) =>
-      message.role === "user" && message.content.startsWith("Tool \""),
-    )
+    .filter(({ message }) => isToolResultTranscriptMessage(message.content))
     .map(({ index }) => index);
 
   const keep = new Set(
@@ -623,7 +640,7 @@ function microcompactCheckpoint(
       : [],
   );
   let compactedMessages = 0;
-  const nextMessages = checkpoint.messages.map((message, index) => {
+  const nextMessages = messages.map((message, index) => {
     if (!toolResultIndices.includes(index) || keep.has(index)) {
       return { ...message };
     }
@@ -654,13 +671,10 @@ function compactCheckpointTranscript(
   summary: HarnessSummaryRecord,
   maxRecentMessages: number,
 ): AgentLoopCheckpoint {
-  const messages = cloneMessages(checkpoint.messages).filter(
+  const messages = cloneMessages(getCheckpointMessages(checkpoint)).filter(
     (message) => !isHarnessSummaryMessage(message.content),
   );
-  const systemMessage = messages[0]?.role === "system" ? messages[0] : undefined;
-  const userGoal = messages[1]?.role === "user" ? messages[1] : undefined;
-  const bodyStart =
-    systemMessage && userGoal ? 2 : systemMessage ? 1 : 0;
+  const { prefix, bodyStart } = splitTranscriptPrefix(messages);
   const tail = selectTranscriptTail(messages.slice(bodyStart), maxRecentMessages);
   const summaryMessage: LLMMessage = {
     role: "system",
@@ -670,8 +684,7 @@ function compactCheckpointTranscript(
   return {
     ...cloneCheckpoint(checkpoint),
     messages: [
-      ...(systemMessage ? [{ ...systemMessage }] : []),
-      ...(userGoal ? [{ ...userGoal }] : []),
+      ...prefix,
       summaryMessage,
       ...tail,
     ],
@@ -813,16 +826,7 @@ function fitPreparedTranscriptBudget(
     return prepared;
   }
 
-  const prefix: LLMMessage[] = [];
-  let cursor = 0;
-  while (cursor < prepared.length && prepared[cursor]?.role === "system") {
-    prefix.push({ ...prepared[cursor]! });
-    cursor++;
-  }
-  if (cursor < prepared.length && prepared[cursor]?.role === "user") {
-    prefix.push({ ...prepared[cursor]! });
-    cursor++;
-  }
+  const { prefix, bodyStart: cursor } = splitTranscriptPrefix(prepared);
 
   const tail = prepared.slice(cursor).map((message) => ({ ...message }));
   while (
@@ -850,15 +854,9 @@ function buildPreparedTranscript(
   }
 
   const preserved = new Set<number>();
-  let cursor = 0;
-
-  while (cursor < filteredMessages.length && filteredMessages[cursor]?.role === "system") {
-    preserved.add(cursor);
-    cursor++;
-  }
-
-  if (cursor < filteredMessages.length && filteredMessages[cursor]?.role === "user") {
-    preserved.add(cursor);
+  const { preservedIndices } = splitTranscriptPrefix(filteredMessages);
+  for (const index of preservedIndices) {
+    preserved.add(index);
   }
 
   const tailStart = Math.max(filteredMessages.length - maxRecentMessages, 0);
@@ -872,7 +870,7 @@ function buildPreparedTranscript(
 }
 
 function estimateCheckpointTokens(checkpoint: AgentLoopCheckpoint): number {
-  return estimateMessagesTokens(checkpoint.messages);
+  return estimateMessagesTokens(getCheckpointMessages(checkpoint));
 }
 
 function estimateMessagesTokens(messages: LLMMessage[]): number {
@@ -909,25 +907,74 @@ function cloneCheckpoint(checkpoint: AgentLoopCheckpoint): AgentLoopCheckpoint {
   return {
     ...checkpoint,
     config: { ...checkpoint.config },
-    messages: cloneMessages(checkpoint.messages),
-    toolCalls: checkpoint.toolCalls.map((call) => ({
+    messages: cloneMessages(getCheckpointMessages(checkpoint)),
+    toolCalls: getCheckpointToolCalls(checkpoint).map((call) => ({
       tool: call.tool,
       args: sanitizeUnknown(call.args),
       result: sanitizeUnknown(call.result),
     })),
-    ...(checkpoint.pendingToolCall
+    ...(getCheckpointPendingToolCall(checkpoint)
       ? {
           pendingToolCall: {
-            assistantMessage: checkpoint.pendingToolCall.assistantMessage,
-            tool: checkpoint.pendingToolCall.tool,
+            assistantMessage: getCheckpointPendingToolCall(checkpoint)!.assistantMessage,
+            tool: getCheckpointPendingToolCall(checkpoint)!.tool,
             args: sanitizeUnknown(
-              checkpoint.pendingToolCall.args,
+              getCheckpointPendingToolCall(checkpoint)!.args,
             ) as Record<string, unknown>,
           },
         }
       : {}),
     ...(checkpoint.lastAssistantResponse
       ? { lastAssistantResponse: checkpoint.lastAssistantResponse }
+      : {}),
+    ...(checkpoint.orchestration
+      ? {
+          orchestration: {
+            phase: checkpoint.orchestration.phase,
+            transitionReason: checkpoint.orchestration.transitionReason,
+            turnCount: checkpoint.orchestration.turnCount,
+            recovery: {
+              reactiveCompactRetries:
+                checkpoint.orchestration.recovery.reactiveCompactRetries,
+              tokenContinuations:
+                checkpoint.orchestration.recovery.tokenContinuations,
+              toolRecoveryCount:
+                checkpoint.orchestration.recovery.toolRecoveryCount,
+            },
+            ...(checkpoint.orchestration.pendingToolRequests
+              ? {
+                  pendingToolRequests:
+                    checkpoint.orchestration.pendingToolRequests.map((request) => ({
+                      id: request.id,
+                      name: request.name,
+                      args: sanitizeUnknown(request.args) as Record<string, unknown>,
+                      order: request.order,
+                    })),
+                }
+              : {}),
+            ...(checkpoint.orchestration.lastModelFinishReason
+              ? {
+                  lastModelFinishReason:
+                    checkpoint.orchestration.lastModelFinishReason,
+                }
+              : {}),
+            ...(checkpoint.orchestration.continuationPrompt
+              ? {
+                  continuationPrompt:
+                    checkpoint.orchestration.continuationPrompt,
+                }
+              : {}),
+            ...(checkpoint.orchestration.compactHint
+              ? { compactHint: checkpoint.orchestration.compactHint }
+              : {}),
+            ...(checkpoint.orchestration.assistantMessagePersisted != null
+              ? {
+                  assistantMessagePersisted:
+                    checkpoint.orchestration.assistantMessagePersisted,
+                }
+              : {}),
+          },
+        }
       : {}),
   };
 }
@@ -961,8 +1008,9 @@ function describePhase(
   if (status === "failed") {
     return "failed";
   }
-  if (checkpoint?.pendingToolCall) {
-    return `executing_${checkpoint.pendingToolCall.tool}`;
+  const pendingToolCall = checkpoint ? getCheckpointPendingToolCall(checkpoint) : undefined;
+  if (pendingToolCall) {
+    return `executing_${pendingToolCall.tool}`;
   }
   return "reasoning";
 }
@@ -978,7 +1026,8 @@ function collectBlockers(
   if (run.pendingApproval) {
     blockers.push(`Approval required for ${run.pendingApproval.tool}: ${run.pendingApproval.reason}`);
   }
-  const lastCall = checkpoint?.toolCalls[checkpoint.toolCalls.length - 1];
+  const toolCalls = checkpoint ? getCheckpointToolCalls(checkpoint) : [];
+  const lastCall = toolCalls[toolCalls.length - 1];
   if (lastCall && hasToolError(lastCall.result)) {
     blockers.push(formatToolError(lastCall.tool, lastCall.result));
   }
@@ -993,10 +1042,40 @@ function collectOpenQuestions(
   if (run.pendingApproval) {
     questions.push(`Should ${run.pendingApproval.tool} be approved?`);
   }
-  if (checkpoint?.pendingToolCall) {
-    questions.push(`What should happen after ${checkpoint.pendingToolCall.tool}?`);
+  const pendingToolCall = checkpoint ? getCheckpointPendingToolCall(checkpoint) : undefined;
+  if (pendingToolCall) {
+    questions.push(`What should happen after ${pendingToolCall.tool}?`);
   }
   return uniqueStrings(questions);
+}
+
+function splitTranscriptPrefix(messages: LLMMessage[]): {
+  prefix: LLMMessage[];
+  preservedIndices: number[];
+  bodyStart: number;
+} {
+  const preservedIndices: number[] = [];
+  let cursor = 0;
+
+  while (cursor < messages.length && messages[cursor]?.role === "system") {
+    preservedIndices.push(cursor);
+    cursor++;
+  }
+
+  if (cursor < messages.length && messages[cursor]?.role === "user") {
+    preservedIndices.push(cursor);
+    cursor++;
+  }
+
+  return {
+    prefix: preservedIndices.map((index) => ({ ...messages[index]! })),
+    preservedIndices,
+    bodyStart: cursor,
+  };
+}
+
+function isToolResultTranscriptMessage(content: string): boolean {
+  return content.startsWith("Tool \"");
 }
 
 function formatToolObservation(tool: string, args: unknown, result: unknown): string {

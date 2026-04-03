@@ -29,7 +29,23 @@ async function createMinimalApp(root: string): Promise<void> {
     join(root, "capstan.config.ts"),
     `export default { app: { name: "test", title: "Test" } };\n`,
   );
-  await writeFile(join(root, "package.json"), `{ "name": "test-app" }\n`);
+  await writeFile(
+    join(root, "package.json"),
+    JSON.stringify({
+      name: "test-app",
+      private: true,
+      type: "module",
+      packageManager: "npm@11.9.0",
+      scripts: {
+        dev: "capstan dev",
+        build: "capstan build",
+        verify: "capstan verify --json",
+      },
+      devDependencies: {
+        "@zauso-ai/capstan-cli": "workspace:*",
+      },
+    }, null, 2),
+  );
   await writeFile(join(root, "tsconfig.json"), `{ "compilerOptions": {} }\n`);
 }
 
@@ -158,6 +174,52 @@ describe("config step", () => {
   });
 });
 
+describe("package step", () => {
+  it("passes when package.json uses the expected Capstan package contract", async () => {
+    await createMinimalApp(tempDir);
+    const report = await verifyCapstanApp(tempDir);
+    const packageStep = report.steps.find((s) => s.name === "package");
+    expect(packageStep).toBeDefined();
+    expect(packageStep!.status).toBe("passed");
+  });
+
+  it("fails when package.json is invalid JSON", async () => {
+    await mkdir(join(tempDir, "app", "routes"), { recursive: true });
+    await writeFile(join(tempDir, "capstan.config.ts"), "export default {};\n");
+    await writeFile(join(tempDir, "package.json"), "{bad-json\n");
+    await writeFile(join(tempDir, "tsconfig.json"), "{ \"compilerOptions\": {} }\n");
+
+    const report = await verifyCapstanApp(tempDir);
+    const packageStep = report.steps.find((s) => s.name === "package");
+    expect(packageStep).toBeDefined();
+    expect(packageStep!.status).toBe("failed");
+    expect(packageStep!.diagnostics.map((diagnostic) => diagnostic.code)).toContain("package_json_invalid");
+  });
+
+  it("warns when required Capstan scripts are missing", async () => {
+    await mkdir(join(tempDir, "app", "routes"), { recursive: true });
+    await writeFile(join(tempDir, "capstan.config.ts"), "export default {};\n");
+    await writeFile(
+      join(tempDir, "package.json"),
+      JSON.stringify({
+        name: "test-app",
+        private: true,
+        type: "module",
+        packageManager: "npm@11.9.0",
+        scripts: {},
+      }, null, 2),
+    );
+    await writeFile(join(tempDir, "tsconfig.json"), "{ \"compilerOptions\": {} }\n");
+
+    const report = await verifyCapstanApp(tempDir);
+    const packageStep = report.steps.find((s) => s.name === "package");
+    expect(packageStep).toBeDefined();
+    expect(packageStep!.diagnostics.map((diagnostic) => diagnostic.code)).toContain("package_script_missing_dev");
+    expect(packageStep!.diagnostics.map((diagnostic) => diagnostic.code)).toContain("package_script_missing_build");
+    expect(packageStep!.diagnostics.map((diagnostic) => diagnostic.code)).toContain("package_script_missing_verify");
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Cascade / skip behaviour
 // ---------------------------------------------------------------------------
@@ -175,9 +237,9 @@ describe("cascade order", () => {
     }
   });
 
-  it("total steps equals 8 in the cascade", async () => {
+  it("total steps equals 10 in the cascade", async () => {
     const report = await verifyCapstanApp(tempDir);
-    expect(report.steps.length).toBe(8);
+    expect(report.steps.length).toBe(10);
   });
 
   it("multiple steps can fail independently (models runs even if routes has warnings)", async () => {
@@ -195,6 +257,29 @@ describe("cascade order", () => {
     expect(modelsStep).toBeDefined();
     // Should at least run (not be skipped)
     expect(modelsStep!.status).not.toBe("skipped");
+  });
+});
+
+describe("build-artifacts step", () => {
+  it("is informational when the app has not been built yet", async () => {
+    await createMinimalApp(tempDir);
+    const report = await verifyCapstanApp(tempDir);
+    const buildStep = report.steps.find((s) => s.name === "build-artifacts");
+    expect(buildStep).toBeDefined();
+    expect(buildStep!.status).toBe("passed");
+    expect(buildStep!.diagnostics.map((diagnostic) => diagnostic.code)).toContain("build_not_found");
+  });
+
+  it("fails when dist/deploy-manifest.json is malformed", async () => {
+    await createMinimalApp(tempDir);
+    await mkdir(join(tempDir, "dist"), { recursive: true });
+    await writeFile(join(tempDir, "dist", "deploy-manifest.json"), "{broken-json", "utf-8");
+
+    const report = await verifyCapstanApp(tempDir);
+    const buildStep = report.steps.find((s) => s.name === "build-artifacts");
+    expect(buildStep).toBeDefined();
+    expect(buildStep!.status).toBe("failed");
+    expect(buildStep!.diagnostics.map((diagnostic) => diagnostic.code)).toContain("build_deploy_manifest_invalid_json");
   });
 });
 

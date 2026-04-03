@@ -97,7 +97,7 @@ function countDirectoryDepth(manifest: RouteManifest, filePath: string): number 
   const normalizedRoot = normalizeFilePath(manifest.rootDir).replace(/\/+$/, "");
   const normalizedFile = normalizeFilePath(filePath);
 
-  if (!normalizedFile.startsWith(normalizedRoot)) {
+  if (normalizedFile !== normalizedRoot && !normalizedFile.startsWith(`${normalizedRoot}/`)) {
     return 0;
   }
 

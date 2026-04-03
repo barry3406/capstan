@@ -1,6 +1,165 @@
-import { watch, existsSync } from "node:fs";
-import type { FSWatcher } from "node:fs";
+import { watch, existsSync, readdirSync, statSync } from "node:fs";
+import type { Dirent, FSWatcher } from "node:fs";
 import path from "node:path";
+
+type WatchHandle = { close: () => void };
+
+interface DirectoryWatchOptions {
+  debounceMs: number;
+  scanIntervalMs?: number;
+  matches: (filename: string | null) => boolean;
+}
+
+function collectMatchingFileSnapshot(
+  rootDir: string,
+  matches: (filename: string | null) => boolean,
+): Map<string, string> {
+  const snapshot = new Map<string, string>();
+  const stack = [rootDir];
+
+  while (stack.length > 0) {
+    const currentDir = stack.pop();
+    if (!currentDir) continue;
+
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(currentDir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    for (const entry of entries) {
+      const fullPath = path.join(currentDir, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(fullPath);
+        continue;
+      }
+
+      if (!entry.isFile() || !matches(entry.name)) {
+        continue;
+      }
+
+      try {
+        const stats = statSync(fullPath);
+        snapshot.set(
+          path.relative(rootDir, fullPath),
+          `${stats.mtimeMs}:${stats.size}`,
+        );
+      } catch {
+        // Ignore files that disappear between directory listing and stat.
+      }
+    }
+  }
+
+  return snapshot;
+}
+
+function findFirstSnapshotDifference(
+  previous: Map<string, string>,
+  next: Map<string, string>,
+): string | undefined {
+  for (const [file, signature] of next) {
+    if (previous.get(file) !== signature) {
+      return file;
+    }
+  }
+
+  for (const file of previous.keys()) {
+    if (!next.has(file)) {
+      return file;
+    }
+  }
+
+  return undefined;
+}
+
+function watchDirectory(
+  rootDir: string,
+  onChange: (changedFile?: string) => void,
+  options: DirectoryWatchOptions,
+): WatchHandle {
+  if (!existsSync(rootDir)) {
+    return { close: () => {} };
+  }
+
+  const scanIntervalMs = options.scanIntervalMs ?? Math.max(options.debounceMs, 100);
+  let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  let scanTimer: ReturnType<typeof setInterval> | null = null;
+  let closed = false;
+  let lastChangedFile: string | undefined;
+  let snapshot = collectMatchingFileSnapshot(rootDir, options.matches);
+  let watcher: FSWatcher | null = null;
+
+  function scheduleCallback(changedFile?: string): void {
+    if (closed) return;
+
+    lastChangedFile = changedFile;
+
+    if (debounceTimer !== null) {
+      clearTimeout(debounceTimer);
+    }
+
+    debounceTimer = setTimeout(() => {
+      debounceTimer = null;
+      if (!closed) {
+        onChange(lastChangedFile);
+        lastChangedFile = undefined;
+      }
+    }, options.debounceMs);
+  }
+
+  function scanForChanges(): void {
+    if (closed) return;
+
+    const nextSnapshot = collectMatchingFileSnapshot(rootDir, options.matches);
+    const changedRelativePath = findFirstSnapshotDifference(snapshot, nextSnapshot);
+    snapshot = nextSnapshot;
+
+    if (changedRelativePath) {
+      scheduleCallback(path.join(rootDir, changedRelativePath));
+    }
+  }
+
+  try {
+    watcher = watch(rootDir, { recursive: true }, (_eventType, filename) => {
+      if (!options.matches(filename ?? null)) {
+        return;
+      }
+
+      const fullPath = filename ? path.join(rootDir, filename) : undefined;
+      scheduleCallback(fullPath);
+    });
+
+    watcher.on("error", () => {
+      // Intentionally swallowed. The polling snapshot fallback keeps the
+      // watcher usable even if the underlying fs.watch stream glitches.
+    });
+  } catch {
+    watcher = null;
+  }
+
+  scanTimer = setInterval(scanForChanges, scanIntervalMs);
+  scanTimer.unref?.();
+
+  return {
+    close: () => {
+      closed = true;
+
+      if (debounceTimer !== null) {
+        clearTimeout(debounceTimer);
+        debounceTimer = null;
+      }
+
+      if (scanTimer !== null) {
+        clearInterval(scanTimer);
+        scanTimer = null;
+      }
+
+      watcher?.close();
+      watcher = null;
+    },
+  };
+}
 
 /**
  * Watch a routes directory for file changes and invoke a callback when
@@ -15,76 +174,14 @@ import path from "node:path";
 export function watchRoutes(
   routesDir: string,
   onChange: (changedFile?: string) => void,
-): { close: () => void } {
-  // If the directory doesn't exist, return a no-op watcher.
-  // The dev server will retry on next explicit scan.
-  if (!existsSync(routesDir)) {
-    return { close: () => {} };
-  }
-
-  let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-  let closed = false;
-  let lastChangedFile: string | undefined;
-
-  const DEBOUNCE_MS = 300;
-
-  /** Route-file extensions we care about. */
-  const ROUTE_EXTENSIONS = [".ts", ".tsx"];
-
-  function isRouteFile(filename: string | null): boolean {
-    if (!filename) return false;
-    return ROUTE_EXTENSIONS.some((ext) => filename.endsWith(ext));
-  }
-
-  function scheduleCallback(changedFile?: string): void {
-    if (closed) return;
-
-    lastChangedFile = changedFile;
-
-    if (debounceTimer !== null) {
-      clearTimeout(debounceTimer);
-    }
-
-    debounceTimer = setTimeout(() => {
-      debounceTimer = null;
-      if (!closed) {
-        onChange(lastChangedFile);
-        lastChangedFile = undefined;
-      }
-    }, DEBOUNCE_MS);
-  }
-
-  let watcher: FSWatcher;
-
-  try {
-    watcher = watch(routesDir, { recursive: true }, (_eventType, filename) => {
-      if (isRouteFile(filename ?? null)) {
-        const fullPath = filename ? path.join(routesDir, filename) : undefined;
-        scheduleCallback(fullPath);
-      }
-    });
-  } catch {
-    // If watching fails (e.g. permission error), return a no-op handle.
-    return { close: () => {} };
-  }
-
-  // Handle watcher errors silently -- the dev server keeps running
-  // and the user can still trigger manual reloads.
-  watcher.on("error", () => {
-    // Intentionally swallowed. The server remains usable even if the
-    // watcher encounters a transient filesystem error.
+): WatchHandle {
+  const routeExtensions = [".ts", ".tsx"];
+  return watchDirectory(routesDir, onChange, {
+    debounceMs: 300,
+    matches: (filename) =>
+      typeof filename === "string" &&
+      routeExtensions.some((ext) => filename.endsWith(ext)),
   });
-
-  return {
-    close: () => {
-      closed = true;
-      if (debounceTimer !== null) {
-        clearTimeout(debounceTimer);
-        debounceTimer = null;
-      }
-      watcher.close();
-    },
-  };
 }
 
 /**
@@ -99,68 +196,9 @@ export function watchRoutes(
 export function watchStyles(
   stylesDir: string,
   onChange: (changedFile?: string) => void,
-): { close: () => void } {
-  if (!existsSync(stylesDir)) {
-    return { close: () => {} };
-  }
-
-  let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-  let closed = false;
-  let lastChangedFile: string | undefined;
-
-  const DEBOUNCE_MS = 100;
-
-  function isCSSFile(filename: string | null): boolean {
-    if (!filename) return false;
-    return filename.endsWith(".css");
-  }
-
-  function scheduleCallback(changedFile?: string): void {
-    if (closed) return;
-
-    lastChangedFile = changedFile;
-
-    if (debounceTimer !== null) {
-      clearTimeout(debounceTimer);
-    }
-
-    debounceTimer = setTimeout(() => {
-      debounceTimer = null;
-      if (!closed) {
-        onChange(lastChangedFile);
-        lastChangedFile = undefined;
-      }
-    }, DEBOUNCE_MS);
-  }
-
-  let watcher: FSWatcher;
-
-  try {
-    watcher = watch(stylesDir, { recursive: true }, (_eventType, filename) => {
-      if (isCSSFile(filename ?? null)) {
-        const fullPath = filename
-          ? path.join(stylesDir, filename)
-          : undefined;
-        scheduleCallback(fullPath);
-      }
-    });
-  } catch {
-    return { close: () => {} };
-  }
-
-  watcher.on("error", () => {
-    // Intentionally swallowed. The server remains usable even if the
-    // watcher encounters a transient filesystem error.
+): WatchHandle {
+  return watchDirectory(stylesDir, onChange, {
+    debounceMs: 100,
+    matches: (filename) => typeof filename === "string" && filename.endsWith(".css"),
   });
-
-  return {
-    close: () => {
-      closed = true;
-      if (debounceTimer !== null) {
-        clearTimeout(debounceTimer);
-        debounceTimer = null;
-      }
-      watcher.close();
-    },
-  };
 }

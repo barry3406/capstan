@@ -3,6 +3,12 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
+import {
+  createHarnessGrantAuthorizer,
+  grantApprovalActions,
+  grantRunActions,
+  grantRunCollectionActions,
+} from "@zauso-ai/capstan-auth";
 import { createHarness, openHarnessRuntime } from "@zauso-ai/capstan-ai";
 import type {
   BrowserSandbox,
@@ -71,6 +77,10 @@ function lifecycleEventTypes(events: Array<{ type: string }>): string[] {
         type !== "summary_created" &&
         type !== "context_compacted",
     );
+}
+
+function createGrantAuthorizer(getGrants: () => ReadonlyArray<string | Record<string, unknown>>) {
+  return createHarnessGrantAuthorizer(getGrants);
 }
 
 class FakeBrowserSession implements BrowserSession {
@@ -339,10 +349,13 @@ describe("createHarness runtime substrate", () => {
     const run = await harness.getRun(result.runId);
     expect(run!.status).toBe("approval_required");
     expect(run!.pendingApproval).toEqual({
+      id: run!.pendingApproval!.id,
+      kind: "tool",
       tool: "delete",
       args: { id: "123" },
       reason: "delete requires human approval",
       requestedAt: run!.pendingApproval!.requestedAt,
+      status: "pending",
     });
 
     const events = await harness.getEvents(result.runId);
@@ -714,6 +727,145 @@ describe("createHarness runtime substrate", () => {
     expect(writes).toEqual(["approved"]);
   });
 
+  it("requires both run:resume and matching approval:approve grants to resume blocked runs", async () => {
+    const rootDir = await createTempDir();
+    const writes: string[] = [];
+    let policyCalls = 0;
+    let grants: ReadonlyArray<string | Record<string, unknown>> = [
+      ...grantRunCollectionActions(["start"]),
+    ];
+
+    const harness = await createHarness({
+      llm: mockLLM([
+        JSON.stringify({ tool: "write", arguments: { value: "approved" } }),
+        "done",
+      ]),
+      runtime: {
+        rootDir,
+        beforeToolCall: async () => {
+          policyCalls++;
+          return {
+            allowed: false,
+            reason: "write requires approval",
+          };
+        },
+        authorize: createGrantAuthorizer(() => grants),
+      },
+      verify: { enabled: false },
+    });
+
+    const blocked = await harness.run({
+      goal: "write one value with grants",
+      tools: [
+        {
+          name: "write",
+          description: "persists a value",
+          async execute(args) {
+            writes.push(String(args.value));
+            return { saved: true };
+          },
+        },
+      ],
+    });
+
+    expect(blocked.runtimeStatus).toBe("approval_required");
+    expect(policyCalls).toBe(1);
+    grants = [...grantRunActions(blocked.runId, ["read"])];
+    const approvalId = (await harness.getRun(blocked.runId))!.pendingApproval!.id;
+
+    grants = [
+      ...grantRunCollectionActions(["start"]),
+      ...grantRunActions(blocked.runId, ["resume"]),
+    ];
+    await expect(
+      harness.resumeRun(blocked.runId, {
+        approvePendingTool: true,
+      }),
+    ).rejects.toThrow("Harness access denied for approval:approve");
+
+    grants = [
+      ...grantRunCollectionActions(["start"]),
+      ...grantRunActions(blocked.runId, ["resume"]),
+      ...grantApprovalActions(["approve"], {
+        approvalId,
+        runId: blocked.runId,
+        tool: "other-tool",
+      }),
+    ];
+    await expect(
+      harness.resumeRun(blocked.runId, {
+        approvePendingTool: true,
+      }),
+    ).rejects.toThrow("Harness access denied for approval:approve");
+
+    grants = [
+      ...grantRunCollectionActions(["start"]),
+      ...grantRunActions(blocked.runId, ["resume"]),
+      ...grantApprovalActions(["approve"], {
+        approvalId,
+        runId: blocked.runId,
+        tool: "write",
+      }),
+    ];
+    const resumed = await harness.resumeRun(blocked.runId, {
+      approvePendingTool: true,
+    });
+
+    expect(resumed.runtimeStatus).toBe("completed");
+    expect(policyCalls).toBe(1);
+    expect(writes).toEqual(["approved"]);
+  });
+
+  it("cancels approval-blocked runs through the harness and records approval_canceled", async () => {
+    const rootDir = await createTempDir();
+    const harness = await createHarness({
+      llm: mockLLM([
+        JSON.stringify({ tool: "write", arguments: { value: "blocked" } }),
+      ]),
+      runtime: {
+        rootDir,
+        beforeToolCall: async () => ({
+          allowed: false,
+          reason: "write requires approval",
+        }),
+      },
+      verify: { enabled: false },
+    });
+
+    const blocked = await harness.run({
+      goal: "write one blocked value",
+      tools: [
+        {
+          name: "write",
+          description: "persists a value",
+          async execute() {
+            return { saved: true };
+          },
+        },
+      ],
+    });
+
+    expect(blocked.runtimeStatus).toBe("approval_required");
+    const approvals = await harness.listApprovals(blocked.runId);
+    expect(approvals[0]!).toMatchObject({
+      kind: "tool",
+      status: "pending",
+    });
+
+    const canceled = await harness.cancelRun(blocked.runId);
+    expect(canceled.status).toBe("canceled");
+    expect((await harness.getApproval(approvals[0]!.id))).toMatchObject({
+      status: "canceled",
+    });
+    expect(lifecycleEventTypes(await harness.getEvents(blocked.runId))).toEqual([
+      "run_started",
+      "tool_call",
+      "approval_required",
+      "approval_canceled",
+      "run_canceled",
+    ]);
+  });
+
   it("cancels a running run cooperatively through the runtime control plane", async () => {
     const rootDir = await createTempDir();
     const runtime = await openHarnessRuntime(rootDir);
@@ -911,5 +1063,87 @@ describe("createHarness runtime substrate", () => {
     await expect(runtime.cancelRun(result.runId)).rejects.toThrow(
       `Cannot cancel run ${result.runId} from status completed`,
     );
+  });
+
+  it("persists explicit trigger and submission metadata on runtime-backed runs", async () => {
+    const rootDir = await createTempDir();
+    const harness = await createHarness({
+      llm: mockLLM(["trigger-aware result"]),
+      runtime: { rootDir },
+      verify: { enabled: false },
+    });
+
+    const result = await harness.run(
+      {
+        goal: "run from cron",
+      },
+      {
+        trigger: {
+          type: "cron",
+          source: "nightly-sync",
+          firedAt: "2026-04-04T00:00:00.000Z",
+          schedule: {
+            name: "nightly-sync",
+            pattern: "0 0 * * *",
+            timezone: "Asia/Shanghai",
+          },
+          metadata: {
+            tickId: "cron-tick-001",
+            shard: "cn-east",
+          },
+        },
+        metadata: {
+          submittedBy: "scheduler",
+        },
+      },
+    );
+
+    expect(result.runtimeStatus).toBe("completed");
+
+    const run = await harness.getRun(result.runId);
+    expect(run).toMatchObject({
+      id: result.runId,
+      goal: "run from cron",
+      status: "completed",
+      trigger: {
+        type: "cron",
+        source: "nightly-sync",
+        firedAt: "2026-04-04T00:00:00.000Z",
+        schedule: {
+          name: "nightly-sync",
+          pattern: "0 0 * * *",
+          timezone: "Asia/Shanghai",
+        },
+        metadata: {
+          tickId: "cron-tick-001",
+          shard: "cn-east",
+        },
+      },
+      metadata: {
+        submittedBy: "scheduler",
+      },
+    });
+
+    const events = await harness.getEvents(result.runId);
+    expect(events.find((event) => event.type === "run_started")?.data).toMatchObject({
+      trigger: {
+        type: "cron",
+        source: "nightly-sync",
+      },
+      metadata: {
+        submittedBy: "scheduler",
+      },
+    });
+
+    const controlPlane = await openHarnessRuntime(rootDir);
+    expect(await controlPlane.getRun(result.runId)).toMatchObject({
+      trigger: {
+        type: "cron",
+        source: "nightly-sync",
+      },
+      metadata: {
+        submittedBy: "scheduler",
+      },
+    });
   });
 });
