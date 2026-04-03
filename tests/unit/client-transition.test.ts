@@ -37,4 +37,106 @@ describe("withViewTransition", () => {
       }),
     ).rejects.toThrow("async boom");
   });
+
+  test("handles void return from fn", async () => {
+    let called = false;
+    await withViewTransition(() => { called = true; });
+    expect(called).toBe(true);
+  });
+
+  test("uses startViewTransition when available", async () => {
+    // Mock document.startViewTransition
+    const origDoc = globalThis.document;
+    let transitionFnCalled = false;
+    const mockDoc = {
+      ...origDoc,
+      startViewTransition: (fn: () => void) => {
+        fn();
+        transitionFnCalled = true;
+        return { finished: Promise.resolve() };
+      },
+    };
+    Object.defineProperty(globalThis, "document", {
+      value: mockDoc,
+      writable: true,
+      configurable: true,
+    });
+
+    await withViewTransition(() => {});
+    expect(transitionFnCalled).toBe(true);
+
+    Object.defineProperty(globalThis, "document", {
+      value: origDoc,
+      writable: true,
+      configurable: true,
+    });
+  });
+
+  test("awaits transition.finished", async () => {
+    let resolved = false;
+    const origDoc = globalThis.document;
+    const mockDoc = {
+      ...origDoc,
+      startViewTransition: (fn: () => void) => {
+        fn();
+        return {
+          finished: new Promise<void>((r) => {
+            setTimeout(() => { resolved = true; r(); }, 10);
+          }),
+        };
+      },
+    };
+    Object.defineProperty(globalThis, "document", {
+      value: mockDoc,
+      writable: true,
+      configurable: true,
+    });
+
+    await withViewTransition(() => {});
+    expect(resolved).toBe(true);
+
+    Object.defineProperty(globalThis, "document", {
+      value: origDoc,
+      writable: true,
+      configurable: true,
+    });
+  });
+
+  test("falls back when startViewTransition is not a function", async () => {
+    const origDoc = globalThis.document;
+    const mockDoc = {
+      ...origDoc,
+      startViewTransition: "not a function",
+    };
+    Object.defineProperty(globalThis, "document", {
+      value: mockDoc,
+      writable: true,
+      configurable: true,
+    });
+
+    let called = false;
+    await withViewTransition(() => { called = true; });
+    expect(called).toBe(true);
+
+    Object.defineProperty(globalThis, "document", {
+      value: origDoc,
+      writable: true,
+      configurable: true,
+    });
+  });
+
+  test("falls back when document is undefined", async () => {
+    const origDoc = globalThis.document;
+    delete (globalThis as Record<string, unknown>)["document"];
+
+    let called = false;
+    await withViewTransition(() => { called = true; });
+    expect(called).toBe(true);
+
+    Object.defineProperty(globalThis, "document", {
+      value: origDoc,
+      writable: true,
+      configurable: true,
+    });
+  });
 });

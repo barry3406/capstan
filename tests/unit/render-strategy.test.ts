@@ -240,9 +240,183 @@ describe("ISRStrategy cache logic", () => {
 // ---------------------------------------------------------------------------
 
 describe("SSGStrategy", () => {
-  test("currently delegates to SSR (Phase 3 stub)", () => {
+  test("has a render method", () => {
     const strategy = new SSGStrategy();
-    // SSGStrategy should exist and have a render method
     expect(typeof strategy.render).toBe("function");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ISRStrategy — more edge cases
+// ---------------------------------------------------------------------------
+
+describe("ISRStrategy edge cases", () => {
+  test("cache key uses page: prefix + URL", async () => {
+    const strategy = new ISRStrategy();
+    const now = Date.now();
+
+    // Set with key "page:/specific-path"
+    await responseCacheSet("page:/specific-path", {
+      html: "<html>specific</html>",
+      headers: {},
+      statusCode: 200,
+      createdAt: now,
+      revalidateAfter: now + 60_000,
+      tags: [],
+    });
+
+    // Should find it with URL /specific-path
+    const result = await strategy.render(makeISRCtx("/specific-path"));
+    expect(result.cacheStatus).toBe("HIT");
+    expect(result.html).toBe("<html>specific</html>");
+  });
+
+  test("cache entry with revalidateAfter=null is always fresh", async () => {
+    const strategy = new ISRStrategy();
+    const now = Date.now();
+
+    await responseCacheSet("page:/static", {
+      html: "<html>static forever</html>",
+      headers: {},
+      statusCode: 200,
+      createdAt: now - 999_999_999,
+      revalidateAfter: null,
+      tags: [],
+    });
+
+    const result = await strategy.render(makeISRCtx("/static"));
+    expect(result.cacheStatus).toBe("HIT");
+    expect(result.html).toBe("<html>static forever</html>");
+  });
+
+  test("STALE returns original statusCode not 200", async () => {
+    const strategy = new ISRStrategy();
+    const now = Date.now();
+
+    await responseCacheSet("page:/stale-error", {
+      html: "<html>error page stale</html>",
+      headers: {},
+      statusCode: 500,
+      createdAt: now - 120_000,
+      revalidateAfter: now - 1,
+      tags: [],
+    });
+
+    const result = await strategy.render(makeISRCtx("/stale-error"));
+    expect(result.cacheStatus).toBe("STALE");
+    expect(result.statusCode).toBe(500);
+  });
+
+  test("STALE loaderData is null", async () => {
+    const strategy = new ISRStrategy();
+    const now = Date.now();
+
+    await responseCacheSet("page:/stale-data", {
+      html: "<html>stale data</html>",
+      headers: {},
+      statusCode: 200,
+      createdAt: now - 120_000,
+      revalidateAfter: now - 1,
+      tags: [],
+    });
+
+    const result = await strategy.render(makeISRCtx("/stale-data"));
+    expect(result.loaderData).toBeNull();
+  });
+
+  test("cache tags are preserved in cache entry", async () => {
+    const now = Date.now();
+    await responseCacheSet("page:/tagged", {
+      html: "<html>tagged</html>",
+      headers: {},
+      statusCode: 200,
+      createdAt: now,
+      revalidateAfter: now + 60_000,
+      tags: ["blog", "featured"],
+    });
+
+    const entry = await responseCacheGet("page:/tagged");
+    expect(entry).toBeDefined();
+    expect(entry!.entry.tags).toEqual(["blog", "featured"]);
+  });
+
+  test("sequential cache reads for same URL return same content", async () => {
+    const strategy = new ISRStrategy();
+    const now = Date.now();
+
+    await responseCacheSet("page:/repeat", {
+      html: "<html>repeat</html>",
+      headers: {},
+      statusCode: 200,
+      createdAt: now,
+      revalidateAfter: now + 60_000,
+      tags: [],
+    });
+
+    const r1 = await strategy.render(makeISRCtx("/repeat"));
+    const r2 = await strategy.render(makeISRCtx("/repeat"));
+    expect(r1.html).toBe(r2.html);
+    expect(r1.cacheStatus).toBe("HIT");
+    expect(r2.cacheStatus).toBe("HIT");
+  });
+
+  test("different cacheTags in ctx don't affect cache lookup", async () => {
+    const strategy = new ISRStrategy();
+    const now = Date.now();
+
+    await responseCacheSet("page:/tags", {
+      html: "<html>tag test</html>",
+      headers: {},
+      statusCode: 200,
+      createdAt: now,
+      revalidateAfter: now + 60_000,
+      tags: ["original"],
+    });
+
+    // ctx has different cacheTags — but lookup is by key, not tags
+    const ctx = makeISRCtx("/tags");
+    ctx.cacheTags = ["different"];
+    const result = await strategy.render(ctx);
+    expect(result.cacheStatus).toBe("HIT");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SSRStrategy
+// ---------------------------------------------------------------------------
+
+describe("SSRStrategy", () => {
+  test("has a render method", () => {
+    const strategy = new SSRStrategy();
+    expect(typeof strategy.render).toBe("function");
+  });
+
+  test("is the default for createStrategy('ssr')", () => {
+    expect(createStrategy("ssr")).toBeInstanceOf(SSRStrategy);
+  });
+
+  test("is used as fallback for unknown modes", () => {
+    expect(createStrategy("nonexistent" as never)).toBeInstanceOf(SSRStrategy);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// createStrategy — additional tests
+// ---------------------------------------------------------------------------
+
+describe("createStrategy edge cases", () => {
+  test("ssg with staticDir option", () => {
+    const strategy = createStrategy("ssg", { staticDir: "/custom/path" });
+    expect(strategy).toBeInstanceOf(SSGStrategy);
+  });
+
+  test("non-ssg modes ignore staticDir", () => {
+    const strategy = createStrategy("ssr", { staticDir: "/custom/path" });
+    expect(strategy).toBeInstanceOf(SSRStrategy);
+  });
+
+  test("isr ignores staticDir", () => {
+    const strategy = createStrategy("isr", { staticDir: "/custom/path" });
+    expect(strategy).toBeInstanceOf(ISRStrategy);
   });
 });

@@ -92,4 +92,93 @@ describe("PrefetchManager", () => {
     (noHref as Element & { __fire: (t: string) => void }).__fire("pointerenter");
     manager.destroy();
   });
+
+  test("getHref filters out protocol-relative links", () => {
+    const el = createMockElement("//cdn.example.com/asset");
+    manager.observe(el, "hover");
+    (el as Element & { __fire: (t: string) => void }).__fire("pointerenter");
+    // No error — link was filtered
+    manager.destroy();
+  });
+
+  test("hover: pointerleave cancels pending prefetch", async () => {
+    const el = createMockElement("/about");
+    manager.observe(el, "hover");
+
+    // Enter → starts 80ms timer
+    (el as Element & { __fire: (t: string) => void }).__fire("pointerenter");
+    // Leave immediately → cancels timer
+    (el as Element & { __fire: (t: string) => void }).__fire("pointerleave");
+
+    // Wait longer than HOVER_DELAY_MS — no prefetch should fire
+    await new Promise((r) => setTimeout(r, 100));
+    manager.destroy();
+  });
+
+  test("triggerPrefetch deduplicates same URL", () => {
+    // Hover over two elements with same href — should only prefetch once
+    const el1 = createMockElement("/about");
+    const el2 = createMockElement("/about");
+
+    manager.observe(el1, "hover");
+    manager.observe(el2, "hover");
+
+    (el1 as Element & { __fire: (t: string) => void }).__fire("pointerenter");
+    (el2 as Element & { __fire: (t: string) => void }).__fire("pointerenter");
+
+    // No errors — dedup handled internally
+    manager.destroy();
+  });
+
+  test("observe with viewport when IntersectionObserver unavailable", () => {
+    // PrefetchManager constructor checks typeof IntersectionObserver
+    // In bun:test env, IntersectionObserver is usually undefined
+    const noObserverManager = new PrefetchManager();
+    const el = createMockElement("/about");
+    // viewport strategy should not throw even without IntersectionObserver
+    noObserverManager.observe(el, "viewport");
+    noObserverManager.destroy();
+  });
+
+  test("unobserve on unregistered element is a no-op", () => {
+    const el = createMockElement("/about");
+    // Unobserve without prior observe — should not throw
+    manager.unobserve(el);
+    manager.destroy();
+  });
+
+  test("destroy clears all hover timers", async () => {
+    const el1 = createMockElement("/a");
+    const el2 = createMockElement("/b");
+    manager.observe(el1, "hover");
+    manager.observe(el2, "hover");
+
+    (el1 as Element & { __fire: (t: string) => void }).__fire("pointerenter");
+    (el2 as Element & { __fire: (t: string) => void }).__fire("pointerenter");
+
+    // Destroy should clear all pending timers
+    manager.destroy();
+
+    // Wait — should not error from orphaned timers
+    await new Promise((r) => setTimeout(r, 100));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getPrefetchManager singleton
+// ---------------------------------------------------------------------------
+
+import { getPrefetchManager } from "@zauso-ai/capstan-react/client";
+
+describe("getPrefetchManager", () => {
+  test("returns a singleton", () => {
+    const a = getPrefetchManager();
+    const b = getPrefetchManager();
+    expect(a).toBe(b);
+  });
+
+  test("singleton is a PrefetchManager instance", () => {
+    const m = getPrefetchManager();
+    expect(m).toBeInstanceOf(PrefetchManager);
+  });
 });

@@ -94,3 +94,113 @@ describe("scrollToTop", () => {
     spy.mockRestore();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Edge cases
+// ---------------------------------------------------------------------------
+
+describe("scroll edge cases", () => {
+  test("save then restore round-trip preserves position", () => {
+    const key = generateScrollKey();
+    setCurrentScrollKey(key);
+
+    (globalThis.window as Record<string, unknown>)["scrollX"] = 42;
+    (globalThis.window as Record<string, unknown>)["scrollY"] = 99;
+    saveScrollPosition();
+
+    let restoredX = 0;
+    let restoredY = 0;
+    const spy = spyOn(window, "scrollTo").mockImplementation((x: unknown, y: unknown) => {
+      restoredX = x as number;
+      restoredY = y as number;
+    });
+
+    const result = restoreScrollPosition(key);
+    expect(result).toBe(true);
+    expect(restoredX).toBe(42);
+    expect(restoredY).toBe(99);
+    spy.mockRestore();
+  });
+
+  test("multiple saves overwrite previous position", () => {
+    const key = generateScrollKey();
+    setCurrentScrollKey(key);
+
+    (globalThis.window as Record<string, unknown>)["scrollX"] = 10;
+    (globalThis.window as Record<string, unknown>)["scrollY"] = 20;
+    saveScrollPosition();
+
+    (globalThis.window as Record<string, unknown>)["scrollX"] = 30;
+    (globalThis.window as Record<string, unknown>)["scrollY"] = 40;
+    saveScrollPosition();
+
+    let restoredX = 0;
+    let restoredY = 0;
+    const spy = spyOn(window, "scrollTo").mockImplementation((x: unknown, y: unknown) => {
+      restoredX = x as number;
+      restoredY = y as number;
+    });
+
+    restoreScrollPosition(key);
+    expect(restoredX).toBe(30);
+    expect(restoredY).toBe(40);
+    spy.mockRestore();
+  });
+
+  test("different keys store different positions", () => {
+    const key1 = generateScrollKey();
+    const key2 = generateScrollKey();
+
+    setCurrentScrollKey(key1);
+    (globalThis.window as Record<string, unknown>)["scrollX"] = 100;
+    (globalThis.window as Record<string, unknown>)["scrollY"] = 200;
+    saveScrollPosition();
+
+    setCurrentScrollKey(key2);
+    (globalThis.window as Record<string, unknown>)["scrollX"] = 300;
+    (globalThis.window as Record<string, unknown>)["scrollY"] = 400;
+    saveScrollPosition();
+
+    const positions: Array<{ x: number; y: number }> = [];
+    const spy = spyOn(window, "scrollTo").mockImplementation((x: unknown, y: unknown) => {
+      positions.push({ x: x as number, y: y as number });
+    });
+
+    restoreScrollPosition(key1);
+    restoreScrollPosition(key2);
+
+    expect(positions[0]).toEqual({ x: 100, y: 200 });
+    expect(positions[1]).toEqual({ x: 300, y: 400 });
+    spy.mockRestore();
+  });
+
+  test("restoreScrollPosition with empty string returns false", () => {
+    // Empty string is truthy but no data stored
+    expect(restoreScrollPosition("")).toBe(false);
+  });
+
+  test("generateScrollKey includes timestamp component", () => {
+    const key = generateScrollKey();
+    // Format: {timestamp}-{random}
+    const parts = key.split("-");
+    expect(parts.length).toBeGreaterThanOrEqual(2);
+    // First part should be a number (timestamp)
+    expect(Number.isFinite(Number(parts[0]))).toBe(true);
+  });
+
+  test("setCurrentScrollKey + saveScrollPosition + null restore", () => {
+    const key = generateScrollKey();
+    setCurrentScrollKey(key);
+
+    (globalThis.window as Record<string, unknown>)["scrollX"] = 50;
+    (globalThis.window as Record<string, unknown>)["scrollY"] = 75;
+    saveScrollPosition();
+
+    // Restore with null key should return false
+    expect(restoreScrollPosition(null)).toBe(false);
+    // Restore with correct key should work
+    const spy = spyOn(window, "scrollTo").mockImplementation(() => {});
+    expect(restoreScrollPosition(key)).toBe(true);
+    spy.mockRestore();
+  });
+});

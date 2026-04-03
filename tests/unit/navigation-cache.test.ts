@@ -159,4 +159,93 @@ describe("TTL expiration", () => {
     await new Promise((r) => setTimeout(r, 40));
     expect(cache.has("/a")).toBe(false);
   });
+
+  test("non-expired entry remains available", async () => {
+    const cache = new NavigationCache(50, 200);
+    cache.set("/a", makePayload("/a"));
+    await new Promise((r) => setTimeout(r, 50));
+    // 50ms < 200ms TTL — still valid
+    expect(cache.get("/a")).toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Edge cases
+// ---------------------------------------------------------------------------
+
+describe("NavigationCache edge cases", () => {
+  test("maxSize of 1 always keeps the latest", () => {
+    const cache = new NavigationCache(1);
+    cache.set("/a", makePayload("/a"));
+    cache.set("/b", makePayload("/b"));
+    expect(cache.size).toBe(1);
+    expect(cache.get("/a")).toBeUndefined();
+    expect(cache.get("/b")).toBeDefined();
+  });
+
+  test("rapid sequential sets at capacity", () => {
+    const cache = new NavigationCache(3);
+    for (let i = 0; i < 10; i++) {
+      cache.set(`/${i}`, makePayload(`/${i}`));
+    }
+    expect(cache.size).toBe(3);
+    // Last 3 should survive
+    expect(cache.get("/7")).toBeDefined();
+    expect(cache.get("/8")).toBeDefined();
+    expect(cache.get("/9")).toBeDefined();
+    expect(cache.get("/0")).toBeUndefined();
+  });
+
+  test("delete non-existent key after clear", () => {
+    const cache = new NavigationCache();
+    cache.set("/a", makePayload("/a"));
+    cache.clear();
+    expect(cache.delete("/a")).toBe(false);
+  });
+
+  test("get on empty cache returns undefined", () => {
+    const cache = new NavigationCache();
+    expect(cache.get("/any")).toBeUndefined();
+  });
+
+  test("set overwrites and resets TTL", async () => {
+    const cache = new NavigationCache(50, 100);
+    cache.set("/a", makePayload("/a"));
+    await new Promise((r) => setTimeout(r, 60));
+
+    // Re-set resets TTL
+    cache.set("/a", makePayload("/a", { loaderData: "v2" }));
+    await new Promise((r) => setTimeout(r, 60));
+
+    // 60ms after re-set, should still be within 100ms TTL
+    expect(cache.get("/a")).toBeDefined();
+    expect(cache.get("/a")!.loaderData).toBe("v2");
+  });
+
+  test("has triggers LRU promotion", () => {
+    const cache = new NavigationCache(3);
+    cache.set("/a", makePayload("/a"));
+    cache.set("/b", makePayload("/b"));
+    cache.set("/c", makePayload("/c"));
+
+    // has calls get which promotes /a
+    cache.has("/a");
+
+    // Add new entry — should evict /b (now oldest), not /a
+    cache.set("/d", makePayload("/d"));
+    expect(cache.get("/a")).toBeDefined();
+    expect(cache.get("/b")).toBeUndefined();
+  });
+
+  test("payload with loaderData preserved through cache", () => {
+    const cache = new NavigationCache();
+    const complex = makePayload("/data", {
+      loaderData: { users: [{ id: 1, name: "Alice" }], count: 42 },
+      metadata: { title: "Data Page" },
+    });
+    cache.set("/data", complex);
+    const retrieved = cache.get("/data")!;
+    expect(retrieved.loaderData).toEqual({ users: [{ id: 1, name: "Alice" }], count: 42 });
+    expect(retrieved.metadata).toEqual({ title: "Data Page" });
+  });
 });

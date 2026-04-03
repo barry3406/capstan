@@ -48,6 +48,42 @@ describe("urlToFilePath", () => {
       join("/out", "docs", "guide", "getting-started", "index.html"),
     );
   });
+
+  test("multiple consecutive slashes are collapsed", () => {
+    expect(urlToFilePath("///about///", "/dist/static")).toBe(
+      join("/dist/static", "about", "index.html"),
+    );
+  });
+
+  test("query string with multiple params", () => {
+    expect(urlToFilePath("/page?a=1&b=2&c=3", "/dist/static")).toBe(
+      join("/dist/static", "page", "index.html"),
+    );
+  });
+
+  test("hash with query string", () => {
+    expect(urlToFilePath("/about?tab=info#section", "/dist/static")).toBe(
+      join("/dist/static", "about", "index.html"),
+    );
+  });
+
+  test("path with numeric segments", () => {
+    expect(urlToFilePath("/blog/2024/01/15", "/out")).toBe(
+      join("/out", "blog", "2024", "01", "15", "index.html"),
+    );
+  });
+
+  test("path with hyphens and dots", () => {
+    expect(urlToFilePath("/docs/v2.0/getting-started", "/out")).toBe(
+      join("/out", "docs", "v2.0", "getting-started", "index.html"),
+    );
+  });
+
+  test("single character path", () => {
+    expect(urlToFilePath("/a", "/out")).toBe(
+      join("/out", "a", "index.html"),
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------

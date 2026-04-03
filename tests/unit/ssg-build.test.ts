@@ -551,4 +551,323 @@ describe("buildStaticPages", () => {
     const html2 = await readFile(join(outputDir, "docs", "guide", "setup", "index.html"), "utf-8");
     expect(html2.length).toBeGreaterThan(0);
   });
+
+  test("SSG manifest NOT written when no pages rendered", async () => {
+    await rm(outputDir, { recursive: true, force: true }).catch(() => {});
+
+    const manifest: RouteManifest = {
+      routes: [
+        {
+          filePath: join(tempDir, "routes", "index.page.js"),
+          type: "page",
+          urlPattern: "/",
+          layouts: [],
+          middlewares: [],
+          params: [],
+          isCatchAll: false,
+        },
+      ],
+      scannedAt: new Date().toISOString(),
+      rootDir: join(tempDir, "routes"),
+    };
+
+    const result = await buildStaticPages({
+      rootDir: tempDir,
+      outputDir,
+      manifest,
+    });
+
+    expect(result.pages).toBe(0);
+    expect(result.paths).toEqual([]);
+
+    // _ssg_manifest.json should NOT be written
+    try {
+      await access(join(outputDir, "_ssg_manifest.json"));
+      throw new Error("manifest should not exist");
+    } catch (err: unknown) {
+      expect((err as Error).message).not.toContain("manifest should not exist");
+    }
+  });
+
+  test("mixed SSG + non-SSG routes in same manifest", async () => {
+    await rm(outputDir, { recursive: true, force: true }).catch(() => {});
+
+    const manifest: RouteManifest = {
+      routes: [
+        {
+          filePath: join(tempDir, "routes", "about.page.js"),
+          type: "page",
+          urlPattern: "/about",
+          layouts: [],
+          middlewares: [],
+          params: [],
+          isCatchAll: false,
+        },
+        {
+          filePath: join(tempDir, "routes", "index.page.js"),
+          type: "page",
+          urlPattern: "/",
+          layouts: [],
+          middlewares: [],
+          params: [],
+          isCatchAll: false,
+        },
+        {
+          filePath: join(tempDir, "routes", "dashboard.page.js"),
+          type: "page",
+          urlPattern: "/dashboard",
+          layouts: [],
+          middlewares: [],
+          params: [],
+          isCatchAll: false,
+        },
+      ],
+      scannedAt: new Date().toISOString(),
+      rootDir: join(tempDir, "routes"),
+    };
+
+    const result = await buildStaticPages({
+      rootDir: tempDir,
+      outputDir,
+      manifest,
+    });
+
+    // Only about.page.js has renderMode="ssg"
+    expect(result.pages).toBe(1);
+    expect(result.paths).toContain("/about");
+    expect(result.paths).not.toContain("/");
+    expect(result.paths).not.toContain("/dashboard");
+  });
+
+  test("generateStaticParams with non-object items skips them", async () => {
+    // Use a separate file to avoid polluting the tags fixture
+    await mkdir(join(tempDir, "routes", "mixed"), { recursive: true });
+    await writeFile(
+      join(tempDir, "routes", "mixed", "[item].page.js"),
+      `
+export const renderMode = "ssg";
+export default function Mixed() { return null; }
+export async function generateStaticParams() {
+  return [{ item: "valid" }, null, "string", { item: "also-valid" }];
+}
+`,
+    );
+
+    const manifest: RouteManifest = {
+      routes: [
+        {
+          filePath: join(tempDir, "routes", "mixed", "[item].page.js"),
+          type: "page",
+          urlPattern: "/mixed/:item",
+          layouts: [],
+          middlewares: [],
+          params: ["item"],
+          isCatchAll: false,
+        },
+      ],
+      scannedAt: new Date().toISOString(),
+      rootDir: join(tempDir, "routes"),
+    };
+
+    const result = await buildStaticPages({
+      rootDir: tempDir,
+      outputDir,
+      manifest,
+    });
+
+    // Should only process valid objects
+    expect(result.pages).toBe(2);
+    expect(result.paths).toContain("/mixed/valid");
+    expect(result.paths).toContain("/mixed/also-valid");
+  });
+
+  test("generateStaticParams returning non-array → 0 pages", async () => {
+    await mkdir(join(tempDir, "routes", "nonarr"), { recursive: true });
+    await writeFile(
+      join(tempDir, "routes", "nonarr", "[x].page.js"),
+      `
+export const renderMode = "ssg";
+export default function NonArr() { return null; }
+export async function generateStaticParams() {
+  return "not-an-array";
+}
+`,
+    );
+
+    const manifest: RouteManifest = {
+      routes: [
+        {
+          filePath: join(tempDir, "routes", "nonarr", "[x].page.js"),
+          type: "page",
+          urlPattern: "/nonarr/:x",
+          layouts: [],
+          middlewares: [],
+          params: ["x"],
+          isCatchAll: false,
+        },
+      ],
+      scannedAt: new Date().toISOString(),
+      rootDir: join(tempDir, "routes"),
+    };
+
+    const result = await buildStaticPages({
+      rootDir: tempDir,
+      outputDir,
+      manifest,
+    });
+
+    expect(result.pages).toBe(0);
+    expect(result.errors).toEqual([]);
+  });
+
+  test("multiple dynamic SSG pages in same manifest", async () => {
+    await rm(outputDir, { recursive: true, force: true }).catch(() => {});
+
+    // tags file uses the original fixture (returns [])
+    // Create a separate dynamic page for this test
+    await mkdir(join(tempDir, "routes", "categories"), { recursive: true });
+    await writeFile(
+      join(tempDir, "routes", "categories", "[cat].page.js"),
+      `
+export const renderMode = "ssg";
+export default function Category() { return null; }
+export async function generateStaticParams() {
+  return [{ cat: "react" }, { cat: "vue" }];
+}
+`,
+    );
+
+    const manifest: RouteManifest = {
+      routes: [
+        {
+          filePath: join(tempDir, "routes", "blog", "[id].page.js"),
+          type: "page",
+          urlPattern: "/blog/:id",
+          layouts: [],
+          middlewares: [],
+          params: ["id"],
+          isCatchAll: false,
+        },
+        {
+          filePath: join(tempDir, "routes", "categories", "[cat].page.js"),
+          type: "page",
+          urlPattern: "/categories/:cat",
+          layouts: [],
+          middlewares: [],
+          params: ["cat"],
+          isCatchAll: false,
+        },
+      ],
+      scannedAt: new Date().toISOString(),
+      rootDir: join(tempDir, "routes"),
+    };
+
+    const result = await buildStaticPages({
+      rootDir: tempDir,
+      outputDir,
+      manifest,
+    });
+
+    // blog: 3 pages (id 1,2,3) + categories: 2 pages (react, vue) = 5
+    expect(result.pages).toBe(5);
+    expect(result.paths).toContain("/blog/1");
+    expect(result.paths).toContain("/blog/2");
+    expect(result.paths).toContain("/blog/3");
+    expect(result.paths).toContain("/categories/react");
+    expect(result.paths).toContain("/categories/vue");
+  });
+
+  test("empty manifest routes produces 0 pages", async () => {
+    const manifest: RouteManifest = {
+      routes: [],
+      scannedAt: new Date().toISOString(),
+      rootDir: join(tempDir, "routes"),
+    };
+
+    const result = await buildStaticPages({
+      rootDir: tempDir,
+      outputDir,
+      manifest,
+    });
+
+    expect(result.pages).toBe(0);
+    expect(result.paths).toEqual([]);
+    expect(result.errors).toEqual([]);
+  });
+
+  test("manifest with only api routes produces 0 pages", async () => {
+    const manifest: RouteManifest = {
+      routes: [
+        {
+          filePath: join(tempDir, "routes", "index.page.js"),
+          type: "api",
+          urlPattern: "/api/users",
+          methods: ["GET", "POST"],
+          layouts: [],
+          middlewares: [],
+          params: [],
+          isCatchAll: false,
+        },
+        {
+          filePath: join(tempDir, "routes", "index.page.js"),
+          type: "api",
+          urlPattern: "/api/health",
+          methods: ["GET"],
+          layouts: [],
+          middlewares: [],
+          params: [],
+          isCatchAll: false,
+        },
+      ],
+      scannedAt: new Date().toISOString(),
+      rootDir: join(tempDir, "routes"),
+    };
+
+    const result = await buildStaticPages({
+      rootDir: tempDir,
+      outputDir,
+      manifest,
+    });
+
+    expect(result.pages).toBe(0);
+    expect(result.errors).toEqual([]);
+  });
+
+  test("result accumulates errors from multiple routes", async () => {
+    const manifest: RouteManifest = {
+      routes: [
+        {
+          filePath: join(tempDir, "routes", "nonexistent1.page.js"),
+          type: "page",
+          urlPattern: "/bad1",
+          layouts: [],
+          middlewares: [],
+          params: [],
+          isCatchAll: false,
+        },
+        {
+          filePath: join(tempDir, "routes", "nonexistent2.page.js"),
+          type: "page",
+          urlPattern: "/bad2",
+          layouts: [],
+          middlewares: [],
+          params: [],
+          isCatchAll: false,
+        },
+      ],
+      scannedAt: new Date().toISOString(),
+      rootDir: join(tempDir, "routes"),
+    };
+
+    const result = await buildStaticPages({
+      rootDir: tempDir,
+      outputDir,
+      manifest,
+    });
+
+    expect(result.pages).toBe(0);
+    expect(result.errors.length).toBe(2);
+    expect(result.errors[0]).toContain("Failed to import");
+    expect(result.errors[1]).toContain("Failed to import");
+  });
 });

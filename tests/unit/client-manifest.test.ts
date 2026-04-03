@@ -111,4 +111,96 @@ describe("findSharedLayout", () => {
     const to = route("/about", { layouts: ["/_layout.tsx"] });
     expect(findSharedLayout(undefined, to)).toBe("/");
   });
+
+  test("both routes have empty layouts returns /", () => {
+    const from = route("/a", { layouts: [] });
+    const to = route("/b", { layouts: [] });
+    expect(findSharedLayout(from, to)).toBe("/");
+  });
+
+  test("from has layouts, to has none returns /", () => {
+    const from = route("/a", { layouts: ["/_layout.tsx"] });
+    const to = route("/b", { layouts: [] });
+    expect(findSharedLayout(from, to)).toBe("/");
+  });
+
+  test("to has layouts, from has none returns /", () => {
+    const from = route("/a", { layouts: [] });
+    const to = route("/b", { layouts: ["/_layout.tsx"] });
+    expect(findSharedLayout(from, to)).toBe("/");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// matchRoute — additional edge cases
+// ---------------------------------------------------------------------------
+
+describe("matchRoute edge cases", () => {
+  test("catch-all with no extra segments", () => {
+    const manifest = makeManifest([route("/docs/*")]);
+    const result = matchRoute(manifest, "/docs");
+    // Pattern is /docs/* — pathParts = ["docs"], patternParts = ["docs", "*"]
+    // hasCatchAll = true, pathParts.length (1) >= patternParts.length - 1 (1)
+    expect(result).toBeDefined();
+    expect(result!.params["*"]).toBe("");
+  });
+
+  test("catch-all with deep nesting", () => {
+    const manifest = makeManifest([route("/docs/*")]);
+    const result = matchRoute(manifest, "/docs/a/b/c/d");
+    expect(result).toBeDefined();
+    expect(result!.params["*"]).toBe("a/b/c/d");
+  });
+
+  test("catch-all too few segments returns null", () => {
+    // Pattern: /api/v1/* requires at least /api/v1
+    const manifest = makeManifest([route("/api/v1/*")]);
+    const result = matchRoute(manifest, "/api");
+    expect(result).toBeNull();
+  });
+
+  test("static segment mismatch returns null", () => {
+    const manifest = makeManifest([route("/posts/:id")]);
+    expect(matchRoute(manifest, "/users/42")).toBeNull();
+  });
+
+  test("empty manifest returns null", () => {
+    const manifest = makeManifest([]);
+    expect(matchRoute(manifest, "/")).toBeNull();
+  });
+
+  test("root pattern matches root path only", () => {
+    const manifest = makeManifest([route("/")]);
+    expect(matchRoute(manifest, "/about")).toBeNull();
+  });
+
+  test("dynamic + static segments mixed", () => {
+    const manifest = makeManifest([route("/users/:id/settings")]);
+    const result = matchRoute(manifest, "/users/abc/settings");
+    expect(result).toBeDefined();
+    expect(result!.params).toEqual({ id: "abc" });
+  });
+
+  test("dynamic segment with special characters", () => {
+    const manifest = makeManifest([route("/posts/:slug")]);
+    const result = matchRoute(manifest, "/posts/hello-world-2024");
+    expect(result).toBeDefined();
+    expect(result!.params).toEqual({ slug: "hello-world-2024" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getManifest
+// ---------------------------------------------------------------------------
+
+import { getManifest } from "@zauso-ai/capstan-react/client";
+
+describe("getManifest", () => {
+  test("function is exported and callable", () => {
+    expect(typeof getManifest).toBe("function");
+    // In bun:test without browser env, result depends on window state
+    const result = getManifest();
+    // Either null (no window) or null (no __CAPSTAN_MANIFEST__)
+    expect(result === null || result !== undefined).toBe(true);
+  });
 });
