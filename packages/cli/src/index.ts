@@ -321,6 +321,12 @@ async function runBuild(args: string[]): Promise<void> {
       middlewares: route.middlewares.map((m) =>
         m.replace(cwd, distDir).replace(/\.tsx$/, ".jsx").replace(/\.ts$/, ".js"),
       ),
+      ...(route.loading ? {
+        loading: route.loading.replace(cwd, distDir).replace(/\.tsx$/, ".jsx").replace(/\.ts$/, ".js"),
+      } : {}),
+      ...(route.error ? {
+        error: route.error.replace(cwd, distDir).replace(/\.tsx$/, ".jsx").replace(/\.ts$/, ".js"),
+      } : {}),
     })),
   };
 

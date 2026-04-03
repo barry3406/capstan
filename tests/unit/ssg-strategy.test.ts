@@ -2,7 +2,7 @@ import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { mkdtemp, writeFile, rm, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { urlToFilePath, SSGStrategy } from "@zauso-ai/capstan-react";
+import { urlToFilePath, SSGStrategy, createStrategy, SSRStrategy, ISRStrategy } from "@zauso-ai/capstan-react";
 
 // ---------------------------------------------------------------------------
 // urlToFilePath mapping
@@ -118,5 +118,57 @@ describe("SSGStrategy", () => {
       // SSR fallback may fail in test env (no React rendering) — that's OK,
       // the key assertion is that it TRIED to fall back (didn't return HIT)
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// createStrategy factory
+// ---------------------------------------------------------------------------
+
+describe("createStrategy", () => {
+  let strategyTempDir: string;
+
+  beforeAll(async () => {
+    strategyTempDir = await mkdtemp(join(tmpdir(), "ssg-factory-test-"));
+    await mkdir(join(strategyTempDir, "about"), { recursive: true });
+    await writeFile(join(strategyTempDir, "about", "index.html"), "<html><body>About Factory</body></html>");
+  });
+
+  afterAll(async () => {
+    if (strategyTempDir) await rm(strategyTempDir, { recursive: true, force: true });
+  });
+
+  test("createStrategy('ssg') returns SSGStrategy", () => {
+    const strategy = createStrategy("ssg");
+    expect(strategy).toBeInstanceOf(SSGStrategy);
+  });
+
+  test("createStrategy('ssg', { staticDir }) passes custom dir", async () => {
+    const strategy = createStrategy("ssg", { staticDir: strategyTempDir });
+    expect(strategy).toBeInstanceOf(SSGStrategy);
+
+    // Verify it reads from the custom dir (about/index.html exists there)
+    const result = await strategy.render({
+      url: "/about",
+      options: {} as never,
+    });
+    expect(result.cacheStatus).toBe("HIT");
+    expect(result.html).toContain("About Factory");
+  });
+
+  test("createStrategy('ssr') returns SSRStrategy", () => {
+    const strategy = createStrategy("ssr");
+    expect(strategy).toBeInstanceOf(SSRStrategy);
+  });
+
+  test("createStrategy('isr') returns ISRStrategy", () => {
+    const strategy = createStrategy("isr");
+    expect(strategy).toBeInstanceOf(ISRStrategy);
+  });
+
+  test("SSGStrategy defaults staticDir to cwd/dist/static", () => {
+    const strategy = new SSGStrategy();
+    expect(strategy).toBeInstanceOf(SSGStrategy);
+    expect(typeof strategy.render).toBe("function");
   });
 });

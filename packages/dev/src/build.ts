@@ -130,9 +130,14 @@ export async function buildStaticPages(
       for (const [key, value] of Object.entries(params)) {
         urlPath = urlPath.replace(`:${key}`, value);
       }
-      // Catch-all: replace trailing * with remaining value
-      if (route.isCatchAll && params["rest"]) {
-        urlPath = urlPath.replace("*", params["rest"]);
+      // Catch-all: replace trailing * with the actual param value
+      // (scanner names the param after the file, e.g. "slug" for [...slug])
+      if (route.isCatchAll && route.params.length > 0) {
+        const catchAllParam = route.params[route.params.length - 1]!;
+        const catchAllValue = params[catchAllParam];
+        if (catchAllValue) {
+          urlPath = urlPath.replace("*", catchAllValue);
+        }
       }
 
       const syntheticRequest = new Request(`http://localhost${urlPath}`);
