@@ -3,7 +3,7 @@
 <div align="center">
 
 <h1>
-⚓ Capstan
+Capstan
 </h1>
 
 **Bun 原生 AI Agent 全栈框架**
@@ -455,7 +455,7 @@ app/
 
 ---
 
-## 🚢 生产部署
+## 生产部署
 
 ```bash
 # 构建生产版本
@@ -585,7 +585,7 @@ bun run test:new     # 运行完整仓库测试套件
 
 <div align="center">
 
-**⚓ Capstan** — 人机共通的 API。
+**Capstan** — 人机共通的 API。
 
 [快速上手](#-快速上手) · [文档](#-文档) · [GitHub](https://github.com/barry3406/capstan) · [报告问题](https://github.com/barry3406/capstan/issues)
 

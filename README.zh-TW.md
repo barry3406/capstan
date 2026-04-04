@@ -3,7 +3,7 @@
 <div align="center">
 
 <h1>
-⚓ Capstan
+Capstan
 </h1>
 
 **Bun 原生 AI Agent 全端框架**
@@ -434,7 +434,7 @@ app/
 
 ---
 
-## 🚢 正式部署
+## 正式部署
 
 ```bash
 # 建置正式版本
@@ -548,7 +548,7 @@ bun run test:new     # 執行完整倉庫測試套件
 
 <div align="center">
 
-**⚓ Capstan** — 同時說人話與機器語言的 API。
+**Capstan** — 同時說人話與機器語言的 API。
 
 [立即開始](#-快速開始) · [文件](#-文件) · [GitHub](https://github.com/barry3406/capstan) · [回報問題](https://github.com/barry3406/capstan/issues)
 

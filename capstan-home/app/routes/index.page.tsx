@@ -29,7 +29,7 @@ export default function HomePage() {
         createElement("a", { href: `/docs/api-reference?lang=${locale}` }, l["nav.api"]),
         createElement("a", { href: "https://github.com/barry3406/capstan", target: "_blank", rel: "noopener noreferrer" }, l["nav.github"])
       ),
-      createElement("div", { className: "lang-switcher" },
+      createElement("div", { className: "lang-switcher desktop-only" },
         ...locales.map(loc => createElement("a", {
           key: loc,
           href: `?lang=${loc}`,
@@ -48,7 +48,7 @@ export default function HomePage() {
       createElement("a", { href: `/docs/getting-started?lang=${locale}` }, l["nav.docs"]),
       createElement("a", { href: `/docs/api-reference?lang=${locale}` }, l["nav.api"]),
       createElement("a", { href: "https://github.com/barry3406/capstan", target: "_blank", rel: "noopener noreferrer" }, l["nav.github"]),
-      createElement("div", { className: "mobile-nav-langs" },
+      createElement("div", { className: "lang-switcher mobile-nav-langs" },
         ...locales.map(loc => createElement("a", {
           key: loc,
           href: `?lang=${loc}`,

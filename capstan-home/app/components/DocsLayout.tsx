@@ -30,7 +30,7 @@ export default function DocsLayout({ children, request }: { children: React.Reac
         createElement("a", { href: `/docs/api-reference?lang=${locale}` }, l["sidebar.apiRef"]),
         createElement("a", { href: "https://github.com/barry3406/capstan", target: "_blank", rel: "noopener noreferrer" }, l["nav.github"])
       ),
-      createElement("div", { className: "lang-switcher" },
+      createElement("div", { className: "lang-switcher desktop-only" },
         ...locales.map(loc => createElement("a", {
           key: loc,
           href: `?lang=${loc}`,

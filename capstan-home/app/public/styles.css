@@ -732,7 +732,7 @@ tr:last-child td {
     display: none;
   }
 
-  .lang-switcher {
+  .lang-switcher.desktop-only {
     display: none;
   }
 
@@ -848,7 +848,7 @@ tr:last-child td {
     display: none;
   }
 
-  .lang-switcher {
+  .lang-switcher.desktop-only {
     display: none;
   }
 

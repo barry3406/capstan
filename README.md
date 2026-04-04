@@ -3,7 +3,7 @@
 <div align="center">
 
 <h1>
-⚓ Capstan
+Capstan
 </h1>
 
 **The Bun-Native AI Agent Full-Stack Framework**
@@ -459,7 +459,7 @@ app/
 
 ---
 
-## 🚢 Production Deployment
+## Production Deployment
 
 ```bash
 # Build for production
@@ -590,7 +590,7 @@ npm test             # Run the full repository test suite
 
 <div align="center">
 
-**⚓ Capstan** — APIs that speak human and machine.
+**Capstan** — APIs that speak human and machine.
 
 [Get Started](#-quick-start) · [Documentation](#-documentation) · [GitHub](https://github.com/barry3406/capstan) · [Report a Bug](https://github.com/barry3406/capstan/issues)
 
