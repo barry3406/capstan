@@ -140,18 +140,22 @@ describe("ops sqlite retention edges", () => {
       },
     });
 
-    const now = "2026-04-04T00:00:03.000Z";
-    const cutoffEvent = event("evt-cutoff", "2026-04-04T00:00:02.000Z");
-    const staleEvent = event("evt-stale", "2026-04-04T00:00:01.999Z");
-    const cutoffIncident = incident("inc-cutoff", "runtime:cutoff", "2026-04-04T00:00:02.000Z");
-    const staleIncident = incident("inc-stale", "runtime:stale", "2026-04-04T00:00:01.999Z");
+    const now = Date.now() + 60_000;
+    const nowIso = new Date(now).toISOString();
+    const cutoffTs = new Date(now - 1_000).toISOString();
+    const staleTs = new Date(now - 1_001).toISOString();
+
+    const cutoffEvent = event("evt-cutoff", cutoffTs);
+    const staleEvent = event("evt-stale", staleTs);
+    const cutoffIncident = incident("inc-cutoff", "runtime:cutoff", cutoffTs);
+    const staleIncident = incident("inc-stale", "runtime:stale", staleTs);
 
     await store.addEvent(cutoffEvent);
     await store.addEvent(staleEvent);
     await store.addIncident(cutoffIncident);
     await store.addIncident(staleIncident);
 
-    const pruned = await store.compact({ now });
+    const pruned = await store.compact({ now: nowIso });
 
     expect(pruned.eventsRemoved).toBe(1);
     expect(pruned.incidentsRemoved).toBe(1);

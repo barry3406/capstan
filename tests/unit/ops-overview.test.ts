@@ -54,15 +54,17 @@ function incident(id: string, fingerprint: string, kind: string, timestamp: stri
 describe("ops overview", () => {
   it("rolls up recent events, open incidents, and health status from the same store", () => {
     const store = new InMemoryOpsStore({
-      eventRetentionMs: 60_000,
-      incidentRetentionMs: 60_000,
+      eventRetentionMs: 600_000,
+      incidentRetentionMs: 600_000,
     });
 
-    store.addEvent(event("evt-1", "http.request", "2026-04-04T00:00:01.000Z", "info"));
-    store.addEvent(event("evt-2", "release.verify", "2026-04-04T00:00:02.000Z", "warning"));
-    store.addEvent(event("evt-3", "policy.deny", "2026-04-04T00:00:03.000Z", "error"));
-    store.addIncident(incident("inc-1", "release:missing-env", "release.verify", "2026-04-04T00:00:04.000Z", "warning", "open"));
-    store.addIncident(incident("inc-2", "policy:denied", "policy.deny", "2026-04-04T00:00:05.000Z", "critical", "suppressed"));
+    const base = Date.now() + 60_000;
+
+    store.addEvent(event("evt-1", "http.request", new Date(base + 1000).toISOString(), "info"));
+    store.addEvent(event("evt-2", "release.verify", new Date(base + 2000).toISOString(), "warning"));
+    store.addEvent(event("evt-3", "policy.deny", new Date(base + 3000).toISOString(), "error"));
+    store.addIncident(incident("inc-1", "release:missing-env", "release.verify", new Date(base + 4000).toISOString(), "warning", "open"));
+    store.addIncident(incident("inc-2", "policy:denied", "policy.deny", new Date(base + 5000).toISOString(), "critical", "suppressed"));
 
     const query = createOpsQuery(store);
     const overview = createOpsOverview(query, createOpsQueryIndex(store));

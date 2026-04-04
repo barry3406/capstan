@@ -146,6 +146,12 @@ describe("ops store extra", () => {
 
   it("keeps exact-cutoff rows during compaction and preserves fingerprint lookup after repacking", async () => {
     const sqlitePath = await createSqlitePath();
+
+    const now = Date.now() + 60_000;
+    const cutoffTs = new Date(now - 1000).toISOString();
+    const oldTs = new Date(now - 1001).toISOString();
+    const compactNow = new Date(now).toISOString();
+
     const stores = [
       new InMemoryOpsStore({
         retention: {
@@ -165,14 +171,14 @@ describe("ops store extra", () => {
     ];
 
     for (const store of stores) {
-      store.addEvent(event("evt-cutoff", "2026-04-04T00:00:02.500Z", { kind: "policy.decision", severity: "warning", status: "deny" }));
-      store.addEvent(event("evt-old", "2026-04-04T00:00:02.499Z", { kind: "policy.decision", severity: "warning", status: "deny" }));
-      store.addIncident(incident("inc-cutoff", "fingerprint:cutoff", "2026-04-04T00:00:02.500Z", { target: "runtime" }));
-      store.addIncident(incident("inc-old", "fingerprint:old", "2026-04-04T00:00:02.499Z", { target: "runtime" }));
-      store.addSnapshot(snapshot("snap-cutoff", "2026-04-04T00:00:02.500Z", "degraded"));
-      store.addSnapshot(snapshot("snap-old", "2026-04-04T00:00:02.499Z", "unhealthy"));
+      store.addEvent(event("evt-cutoff", cutoffTs, { kind: "policy.decision", severity: "warning", status: "deny" }));
+      store.addEvent(event("evt-old", oldTs, { kind: "policy.decision", severity: "warning", status: "deny" }));
+      store.addIncident(incident("inc-cutoff", "fingerprint:cutoff", cutoffTs, { target: "runtime" }));
+      store.addIncident(incident("inc-old", "fingerprint:old", oldTs, { target: "runtime" }));
+      store.addSnapshot(snapshot("snap-cutoff", cutoffTs, "degraded"));
+      store.addSnapshot(snapshot("snap-old", oldTs, "unhealthy"));
 
-      const pruned = store.compact({ now: "2026-04-04T00:00:03.500Z" });
+      const pruned = store.compact({ now: compactNow });
       expect(pruned.eventsRemoved).toBe(1);
       expect(pruned.incidentsRemoved).toBe(1);
       expect(pruned.snapshotsRemoved).toBe(1);

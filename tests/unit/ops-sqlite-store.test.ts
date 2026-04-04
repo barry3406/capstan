@@ -101,13 +101,18 @@ describe("ops sqlite store", () => {
       },
     });
 
-    await store.addEvent(event("evt-old", "2026-04-04T00:00:00.000Z"));
-    await store.addEvent(event("evt-new", "2026-04-04T00:00:03.000Z"));
-    await store.addIncident(incident("inc-old", "fingerprint:old", "2026-04-04T00:00:00.000Z"));
-    await store.addIncident(incident("inc-new", "fingerprint:new", "2026-04-04T00:00:03.000Z"));
+    const now = Date.now();
+    const oldTs = new Date(now - 5000).toISOString();
+    const newTs = new Date(now + 60_000).toISOString();
+    const compactNow = new Date(now).toISOString();
+
+    await store.addEvent(event("evt-old", oldTs));
+    await store.addEvent(event("evt-new", newTs));
+    await store.addIncident(incident("inc-old", "fingerprint:old", oldTs));
+    await store.addIncident(incident("inc-new", "fingerprint:new", newTs));
 
     const pruned = await store.compact({
-      now: "2026-04-04T00:00:03.500Z",
+      now: compactNow,
     });
 
     expect(pruned.eventsRemoved).toBeGreaterThanOrEqual(1);
