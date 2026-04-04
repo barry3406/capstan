@@ -768,6 +768,56 @@ function setResponseCacheStore(store: KeyValueStore<ResponseCacheEntry>): void
 
 ---
 
+### csrfProtection
+
+Hono middleware that enforces Double Submit Cookie CSRF protection on state-changing requests (POST/PUT/DELETE/PATCH). Issues fresh tokens on safe requests.
+
+```typescript
+function csrfProtection(): MiddlewareHandler
+```
+
+---
+
+### createRequestLogger
+
+Create structured JSON request logging middleware. Respects `LOG_LEVEL` env var (debug/info/warn/error).
+
+```typescript
+function createRequestLogger(): MiddlewareHandler
+```
+
+---
+
+### Cache Utilities
+
+```typescript
+// Invalidate a specific cache entry by key
+function cacheInvalidate(key: string): void
+
+// Invalidate a path-backed cache entry (data + response cache)
+function cacheInvalidatePath(urlPath: string): void
+
+// Clear all cache entries
+function cacheClear(): void
+
+// Invalidate response cache entry by path
+function responseCacheInvalidatePath(urlPath: string): void
+
+// Normalize a cache tag string; returns undefined for invalid tags
+function normalizeCacheTag(tag: string): string | undefined
+
+// Normalize and deduplicate an array of cache tags
+function normalizeCacheTags(tags: string[]): string[]
+
+// Normalize a URL path for cache key consistency
+function normalizeCachePath(urlOrPath: string): string
+
+// Create a page cache key from a URL path (prefixed with "page:")
+function createPageCacheKey(urlPath: string): string
+```
+
+---
+
 ## @zauso-ai/capstan-ops
 
 Semantic operations kernel used by the runtime and CLI.
@@ -818,6 +868,146 @@ class SqliteOpsStore implements OpsStore {
 Capstan dev and portable runtime builds use this store shape to persist
 structured data at `.capstan/ops/ops.db`, and the CLI inspects it with
 `ops:events`, `ops:incidents`, `ops:health`, and `ops:tail`.
+
+### createOpsQuery(store)
+
+Create a query interface for filtering events, incidents, and snapshots.
+
+```typescript
+function createOpsQuery(store: OpsStore): {
+  events(filter?: OpsEventFilter): OpsEventRecord[];
+  incidents(filter?: OpsIncidentFilter): OpsIncidentRecord[];
+  snapshots(filter?: OpsSnapshotFilter): OpsSnapshotRecord[];
+}
+```
+
+---
+
+### createOpsQueryIndex(store)
+
+Build an index of aggregate statistics from store contents.
+
+```typescript
+function createOpsQueryIndex(store: OpsStore): OpsQueryIndex
+
+interface OpsQueryIndex {
+  totalEvents: number;
+  totalIncidents: number;
+  totalSnapshots: number;
+  eventsBySeverity: Record<string, number>;
+  eventsByStatus: Record<string, number>;
+  incidentsBySeverity: Record<string, number>;
+  incidentsByStatus: Record<string, number>;
+  snapshotsByHealth: Record<string, number>;
+}
+```
+
+---
+
+### createOpsOverview(query, index)
+
+Generate a complete operational overview from query results and index.
+
+```typescript
+function createOpsOverview(
+  query: ReturnType<typeof createOpsQuery>,
+  index: OpsQueryIndex,
+): OpsOverview
+
+interface OpsOverview {
+  totals: { events: number; incidents: number; snapshots: number };
+  incidents: { open: number; acknowledged: number; resolved: number };
+  health: OpsHealthStatus;
+  recentWindows: { events: OpsEventRecord[]; incidents: OpsIncidentRecord[] };
+  index: OpsQueryIndex;
+}
+```
+
+---
+
+### deriveOpsHealthStatus(store, options?)
+
+Derive health status from recent events and incidents.
+
+```typescript
+function deriveOpsHealthStatus(
+  store: OpsStore,
+  options?: { windowMs?: number },
+): {
+  status: OpsHealthStatus;
+  summary: string;
+  signals: OpsHealthSignal[];
+}
+
+type OpsHealthStatus = "healthy" | "degraded" | "unhealthy";
+```
+
+---
+
+### Ops Types
+
+```typescript
+type OpsSeverity = "debug" | "info" | "warning" | "error" | "critical";
+type OpsIncidentStatus = "open" | "acknowledged" | "suppressed" | "resolved";
+type OpsTarget = "runtime" | "release" | "approval" | "policy" | "capability" | "cron" | "ops" | "cli";
+
+interface OpsEventRecord {
+  id: string;
+  kind: string;
+  timestamp: string;
+  severity: OpsSeverity;
+  status?: string;
+  target: OpsTarget;
+  scope?: OpsScope;
+  title: string;
+  summary?: string;
+  message?: string;
+  fingerprint?: string;
+  tags?: string[];
+  correlation?: OpsCorrelation;
+  metadata?: Record<string, unknown>;
+}
+
+interface OpsIncidentRecord extends OpsEventRecord {
+  incidentStatus: OpsIncidentStatus;
+  acknowledgedAt?: string;
+  resolvedAt?: string;
+}
+
+interface OpsRetentionConfig {
+  events?: { maxAgeMs: number };
+  incidents?: { maxAgeMs: number };
+  snapshots?: { maxAgeMs: number };
+}
+
+interface OpsEventFilter {
+  ids?: string[];
+  kinds?: string[];
+  severities?: OpsSeverity[];
+  statuses?: string[];
+  targets?: OpsTarget[];
+  tags?: string[];
+  scopes?: OpsScopeFilter[];
+  from?: string;
+  to?: string;
+  sort?: "asc" | "desc";
+  limit?: number;
+}
+
+interface OpsStore {
+  addEvent(record: OpsEventRecord): OpsEventRecord;
+  getEvent(id: string): OpsEventRecord | undefined;
+  listEvents(filter?: OpsEventFilter): OpsEventRecord[];
+  addIncident(record: OpsIncidentRecord): OpsIncidentRecord;
+  getIncident(id: string): OpsIncidentRecord | undefined;
+  getIncidentByFingerprint(fingerprint: string): OpsIncidentRecord | undefined;
+  listIncidents(filter?: OpsIncidentFilter): OpsIncidentRecord[];
+  addSnapshot(record: OpsSnapshotRecord): OpsSnapshotRecord;
+  listSnapshots(filter?: OpsSnapshotFilter): OpsSnapshotRecord[];
+  compact(options?: OpsCompactionOptions): OpsCompactionResult;
+  close(): void | Promise<void>;
+}
+```
 
 ---
 
@@ -1745,6 +1935,101 @@ interface ModelDefinition {
 
 ---
 
+### Schema Generation
+
+```typescript
+// Generate Drizzle ORM schema from model definitions
+function generateDrizzleSchema(
+  models: ModelDefinition[],
+  provider: "sqlite" | "postgres" | "mysql",
+): Record<string, DrizzleTable>
+```
+
+---
+
+### Migration Utilities
+
+```typescript
+// Plan migration from model diffs
+function planMigration(
+  oldModels: ModelDefinition[],
+  newModels: ModelDefinition[],
+): MigrationPlan
+
+// Generate SQL migration statements
+function generateMigration(
+  plan: MigrationPlan,
+  provider: "sqlite" | "postgres" | "mysql",
+): string[]
+
+// Execute SQL migrations in a transaction
+function applyMigration(db: DrizzleClient, statements: string[]): Promise<void>
+
+// Create migrations tracking table
+function ensureTrackingTable(db: DrizzleClient): Promise<void>
+
+// Get list of applied migration names
+function getAppliedMigrations(db: DrizzleClient): Promise<string[]>
+
+// Get full migration status (applied + pending)
+function getMigrationStatus(db: DrizzleClient, allMigrations: string[]): Promise<MigrationStatus>
+
+// Apply pending migrations with tracking
+function applyTrackedMigrations(db: DrizzleClient, migrationsDir: string): Promise<string[]>
+```
+
+---
+
+### Database Runtime
+
+```typescript
+// Create query runtime with ModelRepository pattern
+function createDatabaseRuntime(db: DrizzleClient, schema: Record<string, DrizzleTable>): DatabaseRuntime
+
+// Create CRUD repository for a single model
+function createCrudRepository(db: DrizzleClient, model: ModelDefinition, table: DrizzleTable): CrudRepository
+
+// Create CRUD runtime managing repositories for multiple models
+function createCrudRuntime(db: DrizzleClient, models: ModelDefinition[], schema: Record<string, DrizzleTable>): CrudRuntime
+```
+
+---
+
+### Vector Search
+
+```typescript
+// Calculate cosine distance between two vectors
+function cosineDistance(a: number[], b: number[]): number
+
+// Find K nearest neighbors by vector similarity
+function findNearest(
+  items: { id: string; vector: number[] }[],
+  query: number[],
+  k?: number,
+): { id: string; score: number }[]
+
+// Hybrid search combining vector similarity (0.7) + keyword matching (0.3)
+function hybridSearch(
+  items: { id: string; vector: number[]; text: string }[],
+  query: { vector: number[]; text: string },
+  k?: number,
+): { id: string; score: number }[]
+```
+
+---
+
+### Data Preparation
+
+```typescript
+// Prepare and validate input data for model creation
+function prepareCreateData(model: ModelDefinition, input: Record<string, unknown>): Record<string, unknown>
+
+// Prepare and validate input data for model updates
+function prepareUpdateData(model: ModelDefinition, input: Record<string, unknown>): Record<string, unknown>
+```
+
+---
+
 ## @zauso-ai/capstan-auth
 
 Authentication and authorization: JWT sessions, API keys, middleware, permissions.
@@ -1957,6 +2242,115 @@ interface AuthContext {
 
 ---
 
+### Grant-Based Authorization
+
+Fine-grained permission system for runtime and harness actions.
+
+```typescript
+// Evaluate whether a required grant matches any granted grants
+function authorizeGrant(
+  required: AuthGrant,
+  granted: AuthGrant[],
+): AuthorizationDecision
+
+// Boolean shorthand for authorizeGrant
+function checkGrant(required: AuthGrant, granted: AuthGrant[]): boolean
+
+// Convert permission strings ("resource:action") to AuthGrant objects
+function normalizePermissionsToGrants(permissions: (string | AuthGrant)[]): AuthGrant[]
+
+// Convert AuthGrant objects back to permission strings
+function serializeGrantsToPermissions(grants: AuthGrant[]): string[]
+
+// Create an AuthGrant from resource and action
+function createGrant(resource: string, action: string, scope?: Record<string, string>): AuthGrant
+
+interface AuthGrant {
+  resource: string;
+  action: string;
+  scope?: Record<string, string>;
+}
+```
+
+---
+
+### Runtime Grant Helpers
+
+Factory functions for common runtime action grants.
+
+```typescript
+function grantRunActions(actions?: string[], runId?: string): AuthGrant[]
+function grantRunCollectionActions(actions?: string[]): AuthGrant[]
+function grantApprovalActions(actions?: string[], approvalId?: string): AuthGrant[]
+function grantApprovalCollectionActions(actions?: string[]): AuthGrant[]
+function grantEventActions(actions?: string[]): AuthGrant[]
+function grantEventCollectionActions(actions?: string[]): AuthGrant[]
+function grantArtifactActions(actions?: string[]): AuthGrant[]
+function grantCheckpointActions(actions?: string[]): AuthGrant[]
+function grantTaskActions(actions?: string[]): AuthGrant[]
+function grantSummaryActions(actions?: string[]): AuthGrant[]
+function grantSummaryCollectionActions(actions?: string[]): AuthGrant[]
+function grantMemoryActions(actions?: string[]): AuthGrant[]
+function grantContextActions(actions?: string[]): AuthGrant[]
+function grantRuntimePathsActions(actions?: string[]): AuthGrant[]
+```
+
+---
+
+### Runtime Authorizer
+
+```typescript
+// Derive required grants for a runtime action
+function deriveRuntimeGrantRequirements(request: RuntimeActionRequest): AuthGrant[]
+
+// Evaluate whether grants satisfy runtime action requirements
+function authorizeRuntimeAction(request: RuntimeActionRequest, granted: AuthGrant[]): AuthorizationResult
+
+// Create reusable authorizer from a grant set
+function createRuntimeGrantAuthorizer(granted: AuthGrant[]): RuntimeGrantAuthorizer
+
+// Create harness-specific authorizer
+function createHarnessGrantAuthorizer(granted: AuthGrant[]): HarnessGrantAuthorizer
+
+// Convert harness request to runtime grant format
+function toRuntimeGrantRequest(request: HarnessAuthRequest): RuntimeActionRequest
+```
+
+---
+
+### Execution Identity
+
+```typescript
+// Create execution identity from kind and source
+function createExecutionIdentity(kind: string, source: string): ExecutionIdentity
+
+// Extract execution identity from a Request
+function createRequestExecution(request: Request): ExecutionIdentity
+
+// Create delegation link between identities
+function createDelegationLink(from: Identity, to: Identity): DelegationLink
+```
+
+---
+
+### DPoP & Workload Identity
+
+```typescript
+// Validate a DPoP proof JWT (RFC 9449)
+function validateDpopProof(proof: string, options: DpopValidationOptions): Promise<DpopResult>
+
+// Clear DPoP replay cache (for testing)
+function clearDpopReplayCache(): void
+
+// Extract SPIFFE workload identity from certificate
+function extractWorkloadIdentity(certOrClaim: string): WorkloadIdentity | null
+
+// Validate SPIFFE ID format
+function isValidSpiffeId(uri: string): boolean
+```
+
+---
+
 ## @zauso-ai/capstan-router
 
 File-based routing: directory scanning, URL matching, and manifest generation.
@@ -2024,6 +2418,100 @@ interface AgentApiRoute {
   method: string;
   path: string;
   filePath: string;
+}
+```
+
+---
+
+### canonicalizeRouteManifest(routes, rootDir)
+
+Canonicalize and validate route entries — detect conflicts, sort by specificity, generate diagnostics.
+
+```typescript
+function canonicalizeRouteManifest(
+  routes: RouteEntry[],
+  rootDir: string,
+): CanonicalizedRouteManifest
+
+interface CanonicalizedRouteManifest {
+  routes: RouteEntry[];
+  diagnostics: RouteDiagnostic[];
+}
+```
+
+---
+
+### validateRouteManifest(routes, rootDir)
+
+Validate route entries and return canonicalized routes with diagnostics. Wrapper for `canonicalizeRouteManifest`.
+
+```typescript
+function validateRouteManifest(
+  routes: RouteEntry[],
+  rootDir: string,
+): CanonicalizedRouteManifest
+```
+
+---
+
+### createRouteScanCache()
+
+Create a cache instance for storing route scan results to avoid redundant scanning.
+
+```typescript
+function createRouteScanCache(): RouteScanCache
+
+class RouteScanCache {
+  get(rootDir: string): RouteScanCacheState | undefined;
+  set(rootDir: string, state: RouteScanCacheState): void;
+  clear(rootDir?: string): void;
+}
+```
+
+---
+
+### createRouteConflictError(diagnostics)
+
+Create a structured error from route diagnostics for error handling.
+
+```typescript
+function createRouteConflictError(
+  diagnostics: RouteDiagnostic[],
+): RouteConflictError
+
+class RouteConflictError extends Error {
+  code: "ROUTE_CONFLICT";
+  conflicts: RouteConflict[];
+  diagnostics: RouteDiagnostic[];
+}
+```
+
+---
+
+### Router Types
+
+```typescript
+type RouteType = "page" | "api" | "layout" | "middleware" | "loading" | "error" | "not-found";
+
+type RouteDiagnosticSeverity = "error" | "warning";
+
+interface RouteDiagnostic {
+  code: RouteConflictReason;
+  severity: RouteDiagnosticSeverity;
+  message: string;
+  routeType: RouteType;
+  urlPattern: string;
+  canonicalPattern: string;
+  filePaths: string[];
+  directoryDepth?: number;
+}
+
+interface RouteStaticInfo {
+  exportNames: string[];
+  hasMetadata?: boolean;
+  renderMode?: "ssr" | "ssg" | "isr" | "streaming";
+  revalidate?: number;
+  hasGenerateStaticParams?: boolean;
 }
 ```
 
@@ -3171,6 +3659,471 @@ function printStartupBanner(config: { port: number; routes: number }): void
 
 ---
 
+### watchRoutes(routesDir, onChange)
+
+Watch a routes directory for file changes and trigger callback on add/change/unlink.
+
+```typescript
+function watchRoutes(
+  routesDir: string,
+  onChange: (event: string, filePath: string) => void,
+): FSWatcher
+```
+
+---
+
+### watchStyles(stylesDir, onChange)
+
+Watch a styles directory for CSS file changes.
+
+```typescript
+function watchStyles(
+  stylesDir: string,
+  onChange: (event: string, filePath: string) => void,
+): FSWatcher
+```
+
+---
+
+### buildCSS(entryFile, outFile, isDev)
+
+Build CSS using Lightning CSS with minification and modern syntax.
+
+```typescript
+function buildCSS(
+  entryFile: string,
+  outFile: string,
+  isDev?: boolean,
+): Promise<void>
+```
+
+---
+
+### detectCSSMode(rootDir)
+
+Detect CSS processing mode based on project configuration.
+
+```typescript
+function detectCSSMode(rootDir: string): CSSMode
+
+type CSSMode = "tailwind" | "lightningcss" | "none"
+```
+
+---
+
+### buildTailwind(entryFile, outFile)
+
+Build CSS using Tailwind CLI.
+
+```typescript
+function buildTailwind(entryFile: string, outFile: string): Promise<void>
+```
+
+---
+
+### startTailwindWatch(entryFile, outFile)
+
+Start Tailwind watch mode for development.
+
+```typescript
+function startTailwindWatch(entryFile: string, outFile: string): ChildProcess
+```
+
+---
+
+### createPageFetch(request, options)
+
+Create an in-process fetch client for page loaders (avoids HTTP round-trips).
+
+```typescript
+function createPageFetch(
+  request: Request,
+  options?: PageFetchOptions,
+): PageFetchClient
+
+interface PageFetchClient {
+  get(path: string, init?: RequestInit): Promise<Response>;
+  post(path: string, body?: unknown, init?: RequestInit): Promise<Response>;
+  put(path: string, body?: unknown, init?: RequestInit): Promise<Response>;
+  delete(path: string, init?: RequestInit): Promise<Response>;
+}
+```
+
+---
+
+### loadRouteMiddleware(filePath) / composeRouteMiddlewares(middlewares, handler)
+
+Load and compose route-scoped middlewares.
+
+```typescript
+function loadRouteMiddleware(filePath: string): Promise<MiddlewareHandler>
+function loadRouteMiddlewares(filePaths: string[]): Promise<MiddlewareHandler[]>
+function composeRouteMiddlewares(
+  middlewares: MiddlewareHandler[],
+  handler: RouteHandler,
+): RouteHandler
+function runRouteMiddlewares(
+  filePaths: string[],
+  args: RouteHandlerArgs,
+  handler: RouteHandler,
+): Promise<Response>
+```
+
+---
+
+### registerVirtualRouteModule(filePath, mod)
+
+Register in-memory virtual route modules for testing or dynamic routes.
+
+```typescript
+function registerVirtualRouteModule(filePath: string, mod: unknown): void
+function registerVirtualRouteModules(modules: Map<string, unknown>): void
+function clearVirtualRouteModules(filePath?: string): void
+```
+
+---
+
+### Platform Adapters
+
+Create adapters for deployment targets.
+
+```typescript
+function createNodeAdapter(): ServerAdapter
+function createBunAdapter(): ServerAdapter
+function createVercelHandler(): (req: Request) => Promise<Response>
+function createVercelNodeHandler(): (req: IncomingMessage, res: ServerResponse) => void
+function createCloudflareHandler(): ExportedHandler
+function createFlyAdapter(): ServerAdapter
+```
+
+---
+
+### Deployment Config Generators
+
+```typescript
+function generateVercelConfig(): object
+function generateFlyToml(config?: FlyConfig): string
+function generateWranglerConfig(): string
+function generateWranglerConfigWithOptions(options: WranglerOptions): string
+```
+
+---
+
+### Vite Integration
+
+```typescript
+function createViteConfig(config: CapstanViteConfig): ViteUserConfig
+function createViteDevMiddleware(config: CapstanViteConfig): Promise<ViteDevServer>
+function buildClient(config: CapstanViteConfig): Promise<void>
+```
+
+---
+
+### Static Site Generation
+
+```typescript
+function buildStaticPages(options: BuildStaticOptions): Promise<BuildStaticResult>
+
+interface BuildStaticOptions {
+  manifest: RouteManifest;
+  outDir: string;
+  baseUrl?: string;
+}
+
+interface BuildStaticResult {
+  pages: { urlPath: string; filePath: string }[];
+  errors: { urlPath: string; error: Error }[];
+}
+```
+
+---
+
+### buildPortableRuntimeApp(config)
+
+Build a portable runtime application without filesystem dependencies.
+
+```typescript
+function buildPortableRuntimeApp(config: PortableRuntimeConfig): RuntimeAppBuild
+```
+
+---
+
+### Dev Server Types
+
+```typescript
+interface DevServerConfig {
+  port?: number;
+  host?: string;
+  routesDir: string;
+  publicDir?: string;
+  stylesDir?: string;
+}
+
+interface DevServerInstance {
+  start(): Promise<void>;
+  stop(): Promise<void>;
+  port: number;
+}
+
+class PageFetchError extends Error {
+  method: string;
+  url: string;
+  phase: string;
+  status?: number;
+}
+
+class RouteMiddlewareLoadError extends Error { }
+class RouteMiddlewareExportError extends Error { }
+```
+
+---
+
+## @zauso-ai/capstan-cli
+
+Command-line interface for development, building, deployment, verification, and operations.
+
+### Development
+
+#### capstan dev
+
+Start development server with live reload.
+
+```bash
+capstan dev [--port <number>] [--host <string>]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--port` | 3000 | Server port |
+| `--host` | localhost | Server host |
+
+---
+
+#### capstan build
+
+Build for production.
+
+```bash
+capstan build [--static] [--target <target>]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--static` | Pre-render SSG pages |
+| `--target` | Build target: `node-standalone`, `docker`, `vercel-node`, `vercel-edge`, `cloudflare`, `fly` |
+
+Output: `dist/` with `_capstan_server.js`, `_capstan_manifest.json`, `openapi.json`, `deploy-manifest.json`, `public/`.
+
+---
+
+#### capstan start
+
+Start production server from built output.
+
+```bash
+capstan start [--from <dir>] [--port <number>] [--host <string>]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--from` | `.` | Directory containing dist/ |
+| `--port` | 3000 | Server port |
+| `--host` | 0.0.0.0 | Server host |
+
+---
+
+### Scaffolding
+
+#### capstan add
+
+Scaffold new components.
+
+```bash
+capstan add model <name>    # → app/models/<name>.model.ts
+capstan add api <name>      # → app/routes/<name>/index.api.ts
+capstan add page <name>     # → app/routes/<name>/index.page.tsx
+capstan add policy <name>   # → app/policies/index.ts (appends)
+```
+
+---
+
+### Database
+
+#### capstan db:migrate
+
+Generate migration SQL from model definitions.
+
+```bash
+capstan db:migrate --name <migration-name>
+```
+
+Creates timestamped migration file in `app/migrations/`.
+
+---
+
+#### capstan db:push
+
+Apply all pending migrations to the database.
+
+```bash
+capstan db:push
+```
+
+---
+
+#### capstan db:status
+
+Show migration status: applied, pending, and database state.
+
+```bash
+capstan db:status
+```
+
+---
+
+### Verification
+
+#### capstan verify
+
+Run 8-step verification cascade or deployment verification.
+
+```bash
+capstan verify [<path>] [--json] [--deployment] [--target <target>]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--json` | Output structured JSON for AI agents |
+| `--deployment` | Verify deployment mode (requires built dist/) |
+| `--target` | Specific deployment target to verify |
+
+Runtime mode cascade: structure → config → routes → models → typecheck → contracts → manifest → protocols.
+
+Deployment mode: validates integrity hashes, target compatibility, database provider, auth config.
+
+---
+
+### Deployment
+
+#### capstan deploy:init
+
+Generate root deployment files for a target.
+
+```bash
+capstan deploy:init [--target <target>] [--force]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--target` | docker | Deployment target: `docker`, `vercel-node`, `vercel-edge`, `cloudflare`, `fly` |
+| `--force` | false | Overwrite existing files |
+
+Generates platform-specific configs: Dockerfile, vercel.json, wrangler.toml, fly.toml, .dockerignore, .env.example.
+
+---
+
+### Agent / Protocol
+
+#### capstan mcp
+
+Start MCP server via stdio for Claude Desktop / Cursor.
+
+```bash
+capstan mcp
+```
+
+Scans routes, extracts defineAPI metadata, converts Zod schemas to JSON Schema, and serves MCP tools via stdio.
+
+---
+
+#### capstan agent:manifest
+
+Print the agent manifest JSON to stdout.
+
+```bash
+capstan agent:manifest
+```
+
+---
+
+#### capstan agent:openapi
+
+Print the OpenAPI 3.1 spec JSON to stdout.
+
+```bash
+capstan agent:openapi
+```
+
+---
+
+### Operations
+
+#### capstan ops:events
+
+List recent ops events.
+
+```bash
+capstan ops:events [<path>] [--kind <kind>] [--severity <severity>] [--limit <n>] [--since <timestamp>] [--json]
+```
+
+---
+
+#### capstan ops:incidents
+
+List incidents from the ops store.
+
+```bash
+capstan ops:incidents [<path>] [--status <status>] [--severity <severity>] [--limit <n>] [--since <timestamp>] [--json]
+```
+
+---
+
+#### capstan ops:health
+
+Show derived health snapshot.
+
+```bash
+capstan ops:health [<path>] [--json]
+```
+
+Reports: status (healthy/degraded/unhealthy), total events, incidents, open incidents, critical/warning counts, top issues.
+
+---
+
+#### capstan ops:tail
+
+Show latest ops feed (merged events + incidents).
+
+```bash
+capstan ops:tail [<path>] [--limit <n>] [--follow] [--json]
+```
+
+`--follow` polls every 1 second for new items.
+
+---
+
+### Harness Runtime
+
+Commands for managing durable AI agent runs. All accept `--root <dir>`, `--grants <json>`, `--subject <json>`, `--json`.
+
+```bash
+capstan harness:list                    # List persisted runs
+capstan harness:get <runId>             # Read one run record
+capstan harness:events [<runId>]        # Read runtime events
+capstan harness:artifacts <runId>       # List artifacts for a run
+capstan harness:checkpoint <runId>      # Read loop checkpoint
+capstan harness:approval <approvalId>   # Read one approval record
+capstan harness:approvals [<runId>]     # List approvals
+capstan harness:approve <runId> [--note <text>]  # Approve a blocked run
+capstan harness:deny <runId> [--note <text>]     # Deny and cancel
+capstan harness:pause <runId>           # Request cooperative pause
+capstan harness:cancel <runId>          # Request cancellation
+capstan harness:replay <runId>          # Replay events and verify state
+capstan harness:paths                   # Print harness filesystem paths
+```
+
+---
+
 ## create-capstan-app
 
 Project scaffolder CLI.
@@ -3209,4 +4162,76 @@ function scaffoldProject(config: {
   template: "blank" | "tickets";
   outputDir: string;
 }): Promise<void>
+```
+
+### Deploy Target Generation
+
+The scaffolder supports deployment target configuration:
+
+```typescript
+type DeployTarget = "none" | "docker" | "vercel-node" | "vercel-edge" | "cloudflare" | "fly"
+```
+
+```bash
+npx create-capstan-app my-app --template blank --deploy docker
+npx create-capstan-app my-app --template tickets --deploy vercel-node
+```
+
+---
+
+### Template Generators
+
+Programmatic template content generators for scaffolding:
+
+```typescript
+function packageJson(projectName: string, template?: Template): string
+function tsconfig(): string
+function capstanConfig(projectName: string, title: string, template?: Template): string
+function rootLayout(title: string): string
+function indexPage(title: string, projectName: string, template?: Template): string
+function healthApi(): string
+function policiesIndex(): string
+function gitignore(): string
+function dockerfile(): string
+function dockerignore(): string
+function envExample(): string
+function mainCss(): string
+function agentsMd(projectName: string, template: Template): string
+```
+
+Template-specific generators (tickets template):
+
+```typescript
+function ticketModel(): string
+function ticketsIndexApi(): string
+function ticketByIdApi(): string
+```
+
+Deployment config generators:
+
+```typescript
+function flyDockerfile(): string
+function flyToml(appName: string): string
+function vercelConfig(target: "vercel-node" | "vercel-edge"): string
+function wranglerConfig(appName: string): string
+```
+
+---
+
+### Interactive Prompts
+
+```typescript
+function runPrompts(): Promise<{
+  projectName: string;
+  template: Template;
+  deploy: DeployTarget;
+}>
+
+function detectPackageManagerRuntime(isBun?: boolean): PackageManagerRuntime
+
+interface PackageManagerRuntime {
+  installCommand: string;
+  runCommand: string;
+  devCommand: string;
+}
 ```

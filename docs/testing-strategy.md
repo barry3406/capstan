@@ -241,3 +241,265 @@ When deciding whether to add a test, ask:
    guesswork?
 
 If the answer is yes, the test belongs on the critical path.
+
+---
+
+## Testing Patterns and Helpers
+
+### Mock LLM for Agent Tests
+
+Use `mockLLM()` from `@zauso-ai/capstan-ai` to create deterministic LLM responses:
+
+```typescript
+import { mockLLM, createHarness } from "@zauso-ai/capstan-ai";
+
+const llm = mockLLM([
+  { role: "assistant", content: "Analysis complete." },
+  { role: "assistant", tool_calls: [{ name: "create_ticket", arguments: { title: "Bug" } }] },
+  { role: "assistant", content: "Ticket created." },
+]);
+
+const harness = createHarness({
+  appName: "test-app",
+  runtimeDir: tmpDir,
+});
+```
+
+### Testing defineAPI Routes
+
+Test an API handler directly by calling the handler function:
+
+```typescript
+import { describe, test, expect } from "bun:test";
+import { GET } from "../app/routes/api/tickets/index.api.ts";
+
+describe("GET /api/tickets", () => {
+  test("returns tickets filtered by status", async () => {
+    const result = await GET.handler({
+      input: { status: "open" },
+      params: {},
+      ctx: {
+        auth: { isAuthenticated: true, type: "human", userId: "u1" },
+        request: new Request("http://localhost/api/tickets?status=open"),
+        env: {},
+      },
+    });
+
+    expect(result.tickets).toBeArray();
+    expect(result.tickets.every(t => t.status === "open")).toBe(true);
+  });
+});
+```
+
+### Testing Policies
+
+```typescript
+import { definePolicy } from "@zauso-ai/capstan-core";
+
+const policy = definePolicy({
+  key: "testPolicy",
+  title: "Test",
+  effect: "deny",
+  async check({ ctx }) {
+    if (!ctx.auth.isAuthenticated) {
+      return { effect: "deny", reason: "Not authenticated" };
+    }
+    return { effect: "allow" };
+  },
+});
+
+test("denies unauthenticated requests", async () => {
+  const result = await policy.check({
+    ctx: { auth: { isAuthenticated: false, type: "anonymous" } },
+    input: {},
+  });
+  expect(result.effect).toBe("deny");
+});
+
+test("allows authenticated requests", async () => {
+  const result = await policy.check({
+    ctx: { auth: { isAuthenticated: true, type: "human", userId: "u1" } },
+    input: {},
+  });
+  expect(result.effect).toBe("allow");
+});
+```
+
+### Testing Model Data Preparation
+
+```typescript
+import { defineModel, field, prepareCreateData } from "@zauso-ai/capstan-db";
+
+const Ticket = defineModel("ticket", {
+  fields: {
+    id: field.id(),
+    title: field.string({ required: true, min: 1 }),
+    status: field.enum(["open", "closed"], { default: "open" }),
+    createdAt: field.datetime({ default: "now" }),
+  },
+});
+
+test("applies defaults on create", () => {
+  const data = prepareCreateData(Ticket, { title: "Bug report" });
+  expect(data.id).toBeString();
+  expect(data.status).toBe("open");
+  expect(data.createdAt).toBeString();
+});
+
+test("rejects missing required fields", () => {
+  expect(() => prepareCreateData(Ticket, {})).toThrow();
+});
+```
+
+### Integration Test with Dev Server
+
+```typescript
+import { createDevServer } from "@zauso-ai/capstan-dev";
+import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+let server: Awaited<ReturnType<typeof createDevServer>>;
+let projectDir: string;
+
+beforeAll(async () => {
+  projectDir = await mkdtemp(join(tmpdir(), "capstan-test-"));
+  await mkdir(join(projectDir, "app/routes/api"), { recursive: true });
+
+  // Write a test route
+  await writeFile(join(projectDir, "app/routes/api/health.api.ts"), `
+    import { defineAPI } from "@zauso-ai/capstan-core";
+    import { z } from "zod";
+    export const GET = defineAPI({
+      output: z.object({ ok: z.boolean() }),
+      description: "Health",
+      capability: "read",
+      async handler() { return { ok: true }; },
+    });
+  `);
+
+  server = await createDevServer({ routesDir: join(projectDir, "app/routes"), port: 0 });
+  await server.start();
+});
+
+afterAll(async () => {
+  await server.stop();
+  await rm(projectDir, { recursive: true });
+});
+
+test("health endpoint responds", async () => {
+  const res = await fetch(`http://localhost:${server.port}/api/health`);
+  expect(res.status).toBe(200);
+  const body = await res.json();
+  expect(body.ok).toBe(true);
+});
+```
+
+### Testing Approval Workflows
+
+```typescript
+import { createApproval, resolveApproval, clearApprovals } from "@zauso-ai/capstan-core";
+
+beforeEach(() => clearApprovals());
+
+test("approval lifecycle", async () => {
+  // Create approval
+  const approval = createApproval({
+    route: "POST /tickets",
+    input: { title: "New ticket" },
+    reason: "Agent write requires review",
+    requestedBy: { type: "agent", agentId: "agent_1" },
+  });
+
+  expect(approval.status).toBe("pending");
+
+  // Approve
+  const resolved = resolveApproval(approval.id, {
+    action: "approve",
+    reviewedBy: { type: "human", userId: "admin_1" },
+  });
+
+  expect(resolved.status).toBe("approved");
+});
+```
+
+### Testing Harness Runs
+
+```typescript
+import { createHarness, mockLLM } from "@zauso-ai/capstan-ai";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+let tmpDir: string;
+
+beforeEach(async () => {
+  tmpDir = await mkdtemp(join(tmpdir(), "harness-test-"));
+});
+
+afterEach(async () => {
+  await rm(tmpDir, { recursive: true });
+});
+
+test("harness run persists events", async () => {
+  const llm = mockLLM([
+    { role: "assistant", content: "Done." },
+  ]);
+
+  const harness = createHarness({
+    appName: "test",
+    runtimeDir: tmpDir,
+  });
+
+  const run = await harness.start({
+    trigger: "manual",
+    metadata: { test: true },
+  });
+
+  // Execute with mock LLM
+  await run.execute(llm, "Do something");
+
+  // Verify persistence
+  const events = await harness.getEvents(run.id);
+  expect(events.length).toBeGreaterThan(0);
+  expect(events.some(e => e.kind === "run.completed")).toBe(true);
+});
+```
+
+### Testing Route Scanning
+
+```typescript
+import { scanRoutes } from "@zauso-ai/capstan-router";
+
+test("scans routes correctly", async () => {
+  const manifest = await scanRoutes(join(projectDir, "app/routes"));
+
+  expect(manifest.routes.length).toBeGreaterThan(0);
+  expect(manifest.diagnostics?.length ?? 0).toBe(0); // No conflicts
+
+  const apiRoute = manifest.routes.find(r => r.type === "api");
+  expect(apiRoute).toBeDefined();
+  expect(apiRoute!.methods).toContain("GET");
+});
+```
+
+### waitFor Helper
+
+Poll until a condition is met (useful for async/eventual consistency):
+
+```typescript
+async function waitFor(
+  fn: () => boolean | Promise<boolean>,
+  { timeout = 5000, interval = 50 } = {},
+): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeout) {
+    if (await fn()) return;
+    await new Promise(r => setTimeout(r, interval));
+  }
+  throw new Error(`waitFor timed out after ${timeout}ms`);
+}
+
+// Usage
+await waitFor(() => harness.getStatus(runId) === "completed");
+```

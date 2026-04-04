@@ -522,7 +522,23 @@ Capstan ships 12 workspace packages:
 
 ## 📚 Documentation
 
-Detailed guides live in the [`docs/`](docs/) directory:
+### Online Docs (Recommended)
+
+Visit the **[Capstan Documentation Site](https://capstan.dev)** for the full interactive documentation with search, multi-language support (7 languages), and AI-agent-queryable MCP tools.
+
+### MCP Docs Service for Coding Agents
+
+The Capstan docs site exposes MCP tools that coding agents (Claude Code, Cursor, etc.) can use to query documentation while coding — similar to Context7:
+
+- **Search docs** — `GET /api/search?q=defineAPI` finds relevant documentation sections
+- **Query docs** — `GET /api/docs?slug=core-concepts&section=defineAPI` retrieves specific content
+- **Code examples** — `GET /api/examples?topic=defineModel` returns working code snippets
+
+Connect your coding agent to the Capstan docs MCP server for AI-assisted development with up-to-date framework knowledge.
+
+### Markdown Docs
+
+Detailed guides also live in the [`docs/`](docs/) directory:
 
 - [Getting Started](docs/getting-started.md) — Installation, first project, dev workflow
 - [Core Concepts](docs/core-concepts.md) — `defineAPI`, `defineModel`, `definePolicy`, capabilities

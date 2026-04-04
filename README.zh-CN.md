@@ -518,7 +518,23 @@ bunx capstan verify --deployment --target vercel-edge
 
 ## 📚 文档
 
-详细指南位于 [`docs/`](docs/) 目录：
+### 在线文档（推荐）
+
+访问 **[Capstan 官方文档站](https://capstan.dev)** 获取完整的交互式文档，支持搜索、多语言（7 种语言）和 AI 编码助手可查询的 MCP 工具。
+
+### 面向编码助手的 MCP 文档服务
+
+Capstan 文档站暴露 MCP 工具，编码 Agent（Claude Code、Cursor 等）可以在编码时查询文档 —— 类似 Context7 的体验：
+
+- **搜索文档** — `GET /api/search?q=defineAPI` 查找相关文档章节
+- **查询文档** — `GET /api/docs?slug=core-concepts&section=defineAPI` 获取具体内容
+- **代码示例** — `GET /api/examples?topic=defineModel` 返回可运行的代码片段
+
+将你的编码 Agent 连接到 Capstan 文档 MCP 服务，获取基于最新框架知识的 AI 辅助开发体验。
+
+### Markdown 文档
+
+详细指南也位于 [`docs/`](docs/) 目录：
 
 - [快速入门](docs/getting-started.md) — 安装、创建首个项目、开发工作流
 - [核心概念](docs/core-concepts.md) — `defineAPI`、`defineModel`、`definePolicy`、能力注册
