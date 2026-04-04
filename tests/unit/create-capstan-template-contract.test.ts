@@ -60,13 +60,16 @@ describe("create-capstan scaffold contract", () => {
     expect(pkg.dependencies["@zauso-ai/capstan-cli"]).toBe("^1.0.0-beta.8");
     expect(pkg.dependencies["@zauso-ai/capstan-auth"]).toBe("^1.0.0-beta.8");
     expect(pkg.dependencies["@zauso-ai/capstan-db"]).toBe("^1.0.0-beta.8");
+    expect(pkg.dependencies.zod).toBe("^4.0.0");
   });
 
   it("renders a friendlier blank starter page with actionable Capstan links", () => {
     const page = indexPage("Orbit Desk", "orbit-desk", "blank");
 
-    expect(page).toContain("Welcome aboard Orbit Desk");
+    expect(page).toContain("Make Orbit Desk feel like a product on day one.");
     expect(page).toContain("Capstan starter · Blank launchpad");
+    expect(page).toContain("Launch deck");
+    expect(page).toContain("One route, four surfaces");
     expect(page).toContain('href="/.well-known/capstan.json"');
     expect(page).toContain('href="/openapi.json"');
     expect(page).toContain('href="/health"');
@@ -78,6 +81,8 @@ describe("create-capstan scaffold contract", () => {
     const page = indexPage("Ticket Garden", "ticket-garden", "tickets");
 
     expect(page).toContain("Capstan starter · Tickets reference app");
+    expect(page).toContain("Make Ticket Garden feel like a product on day one.");
+    expect(page).toContain("Template briefing");
     expect(page).toContain("app/routes/tickets/index.api.ts");
     expect(page).toContain("app/models/ticket.model.ts");
     expect(page).toContain("capstan verify --json");
@@ -87,9 +92,11 @@ describe("create-capstan scaffold contract", () => {
     const css = mainCss();
 
     expect(css).toContain("--paper");
-    expect(css).toContain(".hero-card");
-    expect(css).toContain(".panel-grid");
+    expect(css).toContain(".landing-stage");
+    expect(css).toContain(".launch-deck");
+    expect(css).toContain(".feature-grid");
     expect(css).toContain("radial-gradient");
+    expect(css).toContain("@keyframes drift");
     expect(css).toContain("Iowan Old Style");
   });
 
@@ -126,9 +133,9 @@ describe("create-capstan scaffold contract", () => {
     const page = await readFile(join(outputDir, "app/routes/index.page.tsx"), "utf-8");
     const guide = await readFile(join(outputDir, "AGENTS.md"), "utf-8");
 
-    expect(page).toContain("Welcome aboard Storyboard");
-    expect(page).toContain("Good first moves");
-    expect(page).toContain("Capstan golden path");
+    expect(page).toContain("Make Storyboard feel like a product on day one.");
+    expect(page).toContain("Launch deck");
+    expect(page).toContain("Command rail");
     expect(guide).toContain("## Golden Paths");
     expect(guide).toContain("## Common Mistakes");
   });

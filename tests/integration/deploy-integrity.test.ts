@@ -207,10 +207,12 @@ describe("deployment integrity CLI integration", () => {
 
     const health = await fetch(`http://127.0.0.1:${productionPort}/health`);
     const home = await fetch(`http://127.0.0.1:${productionPort}/`);
+    const homeHtml = await home.text();
 
     expect(health.status).toBe(200);
     expect((await health.json()) as { status: string }).toMatchObject({ status: "ok" });
-    expect(await home.text()).toContain("Welcome to Integrity App");
+    expect(homeHtml).toContain("Integrity App");
+    expect(homeHtml).toContain("Launch deck");
 
     await stopProductionServer();
 

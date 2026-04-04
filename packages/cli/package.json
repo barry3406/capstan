@@ -21,7 +21,8 @@
     "@zauso-ai/capstan-ops": "1.0.0-beta.8",
     "@zauso-ai/capstan-router": "1.0.0-beta.8",
     "picocolors": "^1.1.1",
-    "tsx": "^4.19.0"
+    "tsx": "^4.19.0",
+    "zod": "^4.0.0"
   },
   "description": "CLI for Capstan — dev, build, verify, ops, add, mcp commands",
   "files": [

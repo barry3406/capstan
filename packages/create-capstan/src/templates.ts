@@ -14,7 +14,7 @@ export function packageJson(
     "@zauso-ai/capstan-dev": CAPSTAN_PACKAGE_RANGE,
     "@zauso-ai/capstan-react": CAPSTAN_PACKAGE_RANGE,
     "@zauso-ai/capstan-router": CAPSTAN_PACKAGE_RANGE,
-    zod: "^3.23.0",
+    zod: "^4.0.0",
   };
 
   // Only include capstan-db for templates that actually use it (native dep
@@ -161,46 +161,93 @@ export function indexPage(
   return `export default function HomePage() {
   return (
     <main className="landing-shell">
-      <section className="hero-card">
-        <p className="eyebrow">Capstan starter · ${templateTitle}</p>
-        <h1>Welcome aboard ${title}</h1>
-        <p className="hero-copy">
-          This app already ships with a page, an API route, agent-readable surfaces, deployment scripts,
-          and a project-level <code>AGENTS.md</code> that teaches coding agents how to extend it.
-        </p>
-        <div className="hero-actions">
-          <a className="button button-primary" href="/.well-known/capstan.json">Open agent manifest</a>
-          <a className="button button-secondary" href="/openapi.json">View OpenAPI</a>
-          <a className="button button-secondary" href="/health">Health check</a>
+      <section className="landing-stage">
+        <div className="stage-copy">
+          <div className="stage-ornament" aria-hidden="true">
+            <span />
+            <span />
+          </div>
+          <p className="eyebrow">Capstan starter · ${templateTitle}</p>
+          <h1>Make ${title} feel like a product on day one.</h1>
+          <p className="hero-copy">
+            Capstan already wired this project with a routed page, a typed API surface, agent-readable manifests,
+            deployment targets, and a project-level <code>AGENTS.md</code> so humans and coding agents can ship
+            from the same playbook.
+          </p>
+          <div className="hero-actions">
+            <a className="button button-primary" href="/.well-known/capstan.json">Inspect manifest</a>
+            <a className="button button-secondary" href="/openapi.json">Read OpenAPI</a>
+            <a className="button button-secondary" href="/health">Check health</a>
+          </div>
+          <div className="signal-row">
+            <article className="signal-card">
+              <p className="signal-label">Agent-ready</p>
+              <strong>Manifest, MCP, and OpenAPI stay aligned with your routes.</strong>
+            </article>
+            <article className="signal-card">
+              <p className="signal-label">Operational</p>
+              <strong>Verify, build targets, and deployment contracts are already in the loop.</strong>
+            </article>
+            <article className="signal-card">
+              <p className="signal-label">Supervised</p>
+              <strong>Use <code>AGENTS.md</code> to keep human and coding-agent workflows in sync.</strong>
+            </article>
+          </div>
         </div>
-      </section>
 
-      <section className="panel-grid">
-        <article className="panel panel-highlight">
-          <p className="panel-kicker">Project pulse</p>
+        <aside className="launch-deck">
+          <p className="panel-kicker">Launch deck</p>
           <h2>${projectName}</h2>
-          <p>${templateDescription}</p>
+          <p className="deck-copy">${templateDescription}</p>
           <ul className="resource-list">
             <li><span>Framework contract</span><a href="/.well-known/capstan.json">/.well-known/capstan.json</a></li>
             <li><span>HTTP + tool schema</span><a href="/openapi.json">/openapi.json</a></li>
             <li><span>Runtime status</span><a href="/health">/health</a></li>
           </ul>
-        </article>
+          <p className="deck-footnote">
+            Edit one route, run <code>capstan verify --json</code>, then widen the surface area on purpose.
+          </p>
+        </aside>
+      </section>
 
-        <article className="panel">
-          <p className="panel-kicker">Edit here first</p>
-          <h2>Good first moves</h2>
-          <ul className="code-list">
-            <li><code>app/routes/index.page.tsx</code> shapes the first impression.</li>
-            <li><code>capstan.config.ts</code> is where app metadata and providers live.</li>
-            <li><code>app/styles/main.css</code> controls the visual voice of the starter.</li>
-            <li><code>AGENTS.md</code> keeps human and coding-agent workflows aligned.</li>
+      <section className="feature-grid">
+        <article className="feature-panel feature-panel-wide">
+          <p className="panel-kicker">First moves that compound</p>
+          <h2>Start in the files that define the contract.</h2>
+          <ul className="step-list">
+            <li>
+              <strong>Shape the story.</strong>
+              <span><code>app/routes/index.page.tsx</code> owns the first impression and your visual voice.</span>
+            </li>
+            <li>
+              <strong>Set the operating envelope.</strong>
+              <span><code>capstan.config.ts</code> is where app metadata, providers, and manifests stay explicit.</span>
+            </li>
+            <li>
+              <strong>Style intentionally.</strong>
+              <span><code>app/styles/main.css</code> is the fastest place to make the starter unmistakably yours.</span>
+            </li>
+            <li>
+              <strong>Keep agents on the rails.</strong>
+              <span><code>AGENTS.md</code> tells coding agents where to look, what to change, and how to verify.</span>
+            </li>
           </ul>
         </article>
 
-        <article className="panel">
-          <p className="panel-kicker">Capstan golden path</p>
-          <h2>Use the framework, do not fight it</h2>
+        <article className="feature-panel">
+          <p className="panel-kicker">One route, four surfaces</p>
+          <h2>A single <code>defineAPI()</code> can become an operator-friendly system.</h2>
+          <div className="surface-grid">
+            <span>HTTP JSON</span>
+            <span>MCP tool</span>
+            <span>A2A skill</span>
+            <span>OpenAPI 3.1</span>
+          </div>
+        </article>
+
+        <article className="feature-panel feature-panel-command">
+          <p className="panel-kicker">Command rail</p>
+          <h2>Grow the app without losing the thread.</h2>
           <div className="command-stack">
             <code>capstan add api hello</code>
             <code>capstan add page dashboard</code>
@@ -209,10 +256,10 @@ export function indexPage(
           </div>
         </article>
 
-        <article className="panel">
-          <p className="panel-kicker">Template notes</p>
+        <article className="feature-panel">
+          <p className="panel-kicker">Template briefing</p>
           <h2>What this starter is trying to teach</h2>
-          <ul className="code-list">
+          <ul className="briefing-list">
 ${templatePointers}          </ul>
         </article>
       </section>
@@ -399,16 +446,22 @@ primary_region = "iad"
 export function mainCss(): string {
   return `/* app/styles/main.css — processed by Lightning CSS or Tailwind */
 :root {
-  --paper: #f4efe6;
-  --paper-strong: #fff9f0;
-  --ink: #1e2433;
-  --muted: #5e6575;
-  --accent: #0f766e;
-  --accent-strong: #0b4f4a;
-  --accent-soft: rgba(15, 118, 110, 0.14);
-  --line: rgba(30, 36, 51, 0.12);
-  --panel: rgba(255, 255, 255, 0.86);
-  --shadow: 0 24px 80px rgba(21, 27, 38, 0.14);
+  --paper: #efe6d5;
+  --paper-strong: #fbf7ef;
+  --paper-shadow: rgba(255, 248, 238, 0.72);
+  --ink: #172033;
+  --muted: #5f677a;
+  --navy: #10233f;
+  --navy-soft: rgba(16, 35, 63, 0.78);
+  --accent: #0f7c77;
+  --accent-strong: #0a5350;
+  --gold: #d6a55d;
+  --line: rgba(23, 32, 51, 0.12);
+  --line-strong: rgba(23, 32, 51, 0.22);
+  --panel: rgba(255, 252, 246, 0.86);
+  --panel-strong: rgba(255, 255, 255, 0.92);
+  --shadow: 0 28px 88px rgba(17, 25, 39, 0.14);
+  --shadow-soft: 0 16px 40px rgba(17, 25, 39, 0.08);
 }
 
 *,
@@ -428,13 +481,15 @@ body {
   line-height: 1.6;
   color: var(--ink);
   background:
-    radial-gradient(circle at top left, rgba(254, 240, 138, 0.45), transparent 26rem),
-    radial-gradient(circle at top right, rgba(45, 212, 191, 0.24), transparent 22rem),
-    linear-gradient(180deg, #fbf7f0 0%, var(--paper) 55%, #ede6d8 100%);
+    radial-gradient(circle at 12% 16%, rgba(214, 165, 93, 0.28), transparent 22rem),
+    radial-gradient(circle at 86% 14%, rgba(15, 124, 119, 0.2), transparent 24rem),
+    radial-gradient(circle at 50% 0%, rgba(16, 35, 63, 0.06), transparent 20rem),
+    linear-gradient(180deg, #f6f0e5 0%, var(--paper) 46%, #e8deca 100%);
 }
 
 .capstan-shell {
   position: relative;
+  overflow: hidden;
 }
 
 .capstan-shell::before {
@@ -443,10 +498,25 @@ body {
   inset: 0;
   pointer-events: none;
   background-image:
-    linear-gradient(rgba(30, 36, 51, 0.03) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(30, 36, 51, 0.03) 1px, transparent 1px);
-  background-size: 2rem 2rem;
-  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.35), transparent 70%);
+    linear-gradient(rgba(23, 32, 51, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(23, 32, 51, 0.025) 1px, transparent 1px);
+  background-size: 2.25rem 2.25rem;
+  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.5), transparent 72%);
+}
+
+.capstan-shell::after {
+  content: "";
+  position: fixed;
+  inset: auto -12rem -10rem auto;
+  width: 34rem;
+  height: 34rem;
+  border-radius: 999px;
+  background:
+    radial-gradient(circle at 30% 30%, rgba(214, 165, 93, 0.3), transparent 40%),
+    radial-gradient(circle at 60% 60%, rgba(15, 124, 119, 0.22), transparent 48%);
+  filter: blur(18px);
+  pointer-events: none;
+  animation: drift 18s ease-in-out infinite;
 }
 
 a {
@@ -468,39 +538,89 @@ code {
 }
 
 .landing-shell {
-  width: min(1120px, calc(100% - 2rem));
+  width: min(1220px, calc(100% - 2rem));
   margin: 0 auto;
-  padding: 4rem 0 5rem;
+  padding: clamp(1.1rem, 3vw, 2rem) 0 5rem;
 }
 
-.hero-card,
-.panel {
+.landing-stage {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(18rem, 0.9fr);
+  gap: 1rem;
+  align-items: stretch;
+}
+
+.stage-copy,
+.launch-deck,
+.feature-panel {
   position: relative;
   overflow: hidden;
   border: 1px solid var(--line);
-  border-radius: 1.75rem;
+  border-radius: 2rem;
   background: var(--panel);
-  backdrop-filter: blur(18px);
+  backdrop-filter: blur(20px);
   box-shadow: var(--shadow);
+  animation: rise-in 620ms ease both;
 }
 
-.hero-card {
-  padding: clamp(1.8rem, 4vw, 3.4rem);
+.stage-copy {
+  min-height: 36rem;
+  padding: clamp(1.6rem, 4vw, 3.1rem);
+  color: #f5ebdc;
   background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.94), rgba(255, 249, 240, 0.88)),
-    radial-gradient(circle at top right, rgba(15, 118, 110, 0.18), transparent 18rem);
+    linear-gradient(145deg, rgba(10, 25, 47, 0.98), rgba(17, 39, 63, 0.96) 52%, rgba(8, 76, 79, 0.92) 100%);
 }
 
-.hero-card::after {
+.stage-copy::before {
   content: "";
   position: absolute;
-  right: -3rem;
-  top: -4rem;
-  width: 12rem;
-  height: 12rem;
+  inset: 0;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.04), transparent 38%),
+    linear-gradient(0deg, rgba(255, 255, 255, 0.02), transparent 40%);
+  pointer-events: none;
+}
+
+.stage-copy::after {
+  content: "";
+  position: absolute;
+  inset: auto auto -8rem -6rem;
+  width: 19rem;
+  height: 19rem;
   border-radius: 999px;
-  background: rgba(15, 118, 110, 0.12);
-  filter: blur(8px);
+  background:
+    radial-gradient(circle at 45% 45%, rgba(214, 165, 93, 0.2), transparent 52%),
+    radial-gradient(circle at 65% 65%, rgba(76, 216, 210, 0.12), transparent 54%);
+  filter: blur(14px);
+  pointer-events: none;
+}
+
+.stage-ornament {
+  position: absolute;
+  inset: 1.25rem 1.25rem auto auto;
+  display: grid;
+  gap: 0.75rem;
+  pointer-events: none;
+}
+
+.stage-ornament span {
+  display: block;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.05);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+
+.stage-ornament span:first-child {
+  width: 9rem;
+  height: 9rem;
+  justify-self: end;
+}
+
+.stage-ornament span:last-child {
+  width: 5.25rem;
+  height: 5.25rem;
+  justify-self: start;
 }
 
 .eyebrow,
@@ -511,27 +631,40 @@ code {
   color: var(--accent-strong);
 }
 
-.hero-card h1,
-.panel h2 {
+.eyebrow {
+  position: relative;
+  z-index: 1;
+  color: rgba(245, 235, 220, 0.82);
+}
+
+.stage-copy h1,
+.launch-deck h2,
+.feature-panel h2 {
   font-family: "Iowan Old Style", "Palatino Linotype", Georgia, serif;
   letter-spacing: -0.03em;
 }
 
-.hero-card h1 {
+.stage-copy h1 {
+  position: relative;
+  z-index: 1;
   max-width: 11ch;
   margin-top: 0.55rem;
-  font-size: clamp(2.9rem, 8vw, 5.4rem);
-  line-height: 0.95;
+  font-size: clamp(3rem, 8vw, 5.8rem);
+  line-height: 0.92;
 }
 
 .hero-copy {
-  max-width: 48rem;
+  position: relative;
+  z-index: 1;
+  max-width: 43rem;
   margin-top: 1.15rem;
   font-size: 1.08rem;
-  color: var(--muted);
+  color: rgba(245, 235, 220, 0.8);
 }
 
 .hero-actions {
+  position: relative;
+  z-index: 1;
   display: flex;
   flex-wrap: wrap;
   gap: 0.9rem;
@@ -543,58 +676,127 @@ code {
   align-items: center;
   justify-content: center;
   min-height: 2.9rem;
-  padding: 0 1rem;
+  padding: 0 1.05rem;
   border-radius: 999px;
   border: 1px solid transparent;
   font-weight: 600;
-  transition: transform 150ms ease, border-color 150ms ease, background 150ms ease;
+  transition:
+    transform 160ms ease,
+    border-color 160ms ease,
+    background 160ms ease,
+    box-shadow 160ms ease;
 }
 
 .button:hover {
   transform: translateY(-1px);
+  box-shadow: var(--shadow-soft);
 }
 
 .button-primary {
-  color: white;
-  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-strong) 100%);
+  color: var(--navy);
+  background: linear-gradient(135deg, #f3d09b 0%, var(--gold) 100%);
 }
 
 .button-secondary {
-  color: var(--ink);
-  background: rgba(255, 255, 255, 0.68);
-  border-color: var(--line);
+  color: #f5ebdc;
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.16);
 }
 
-.panel-grid {
+.signal-row {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 1rem;
-  margin-top: 1rem;
+  margin-top: 2rem;
 }
 
-.panel {
-  padding: 1.4rem;
-}
-
-.panel-highlight {
+.signal-card {
+  position: relative;
+  z-index: 1;
+  min-height: 7.75rem;
+  padding: 1rem;
+  border-radius: 1.35rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
   background:
-    linear-gradient(180deg, rgba(15, 118, 110, 0.1), rgba(255, 255, 255, 0.92)),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02)),
+    rgba(7, 20, 37, 0.18);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.signal-label {
+  font-size: 0.74rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(245, 235, 220, 0.66);
+}
+
+.signal-card strong {
+  display: block;
+  margin-top: 0.55rem;
+  font-size: 1rem;
+  line-height: 1.45;
+  color: #fff7ea;
+}
+
+.launch-deck,
+.feature-panel {
+  padding: 1.45rem;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.7), rgba(255, 252, 246, 0.94)),
     var(--panel);
 }
 
-.panel h2 {
-  margin-top: 0.35rem;
-  font-size: 1.7rem;
+.launch-deck::before,
+.feature-panel::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.45), transparent 28%),
+    linear-gradient(0deg, rgba(255, 255, 255, 0.25), transparent 34%);
 }
 
-.panel p,
-.panel li,
+.launch-deck {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.launch-deck h2,
+.feature-panel h2 {
+  position: relative;
+  z-index: 1;
+  margin-top: 0.35rem;
+  font-size: 1.85rem;
+  line-height: 1.02;
+}
+
+.deck-copy,
+.step-list span,
+.briefing-list li,
 .resource-list span {
   color: var(--muted);
 }
 
+.deck-copy {
+  position: relative;
+  z-index: 1;
+  margin-top: 0.9rem;
+}
+
+.deck-footnote {
+  position: relative;
+  z-index: 1;
+  margin-top: 1.2rem;
+  padding-top: 1rem;
+  border-top: 1px solid rgba(23, 32, 51, 0.1);
+  color: var(--ink);
+}
+
 .resource-list,
-.code-list {
+.step-list,
+.briefing-list {
   display: grid;
   gap: 0.75rem;
   margin-top: 1rem;
@@ -603,6 +805,8 @@ code {
 }
 
 .resource-list li {
+  position: relative;
+  z-index: 1;
   display: grid;
   gap: 0.1rem;
   padding-bottom: 0.75rem;
@@ -619,7 +823,74 @@ code {
   font-weight: 600;
 }
 
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.feature-panel {
+  grid-column: span 6;
+}
+
+.feature-panel-wide {
+  grid-column: span 7;
+}
+
+.feature-panel-command {
+  grid-column: span 5;
+}
+
+.feature-panel h2 code {
+  font-size: 0.8em;
+}
+
+.step-list li {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: 0.25rem;
+  padding: 1rem 0;
+  border-top: 1px solid rgba(23, 32, 51, 0.08);
+}
+
+.step-list li:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.step-list strong {
+  color: var(--ink);
+  font-size: 1rem;
+}
+
+.surface-grid {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.8rem;
+  margin-top: 1.25rem;
+}
+
+.surface-grid span {
+  display: flex;
+  align-items: center;
+  min-height: 4.5rem;
+  padding: 0.95rem 1rem;
+  border-radius: 1.15rem;
+  border: 1px solid rgba(23, 32, 51, 0.08);
+  background:
+    linear-gradient(180deg, rgba(16, 35, 63, 0.05), rgba(255, 255, 255, 0.95)),
+    var(--panel-strong);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  font-weight: 600;
+}
+
 .command-stack {
+  position: relative;
+  z-index: 1;
   display: grid;
   gap: 0.7rem;
   margin-top: 1rem;
@@ -630,8 +901,45 @@ code {
   max-width: 100%;
   padding: 0.55rem 0.8rem;
   border-radius: 1rem;
-  background: var(--paper-strong);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(250, 243, 231, 0.88)),
+    var(--paper-strong);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+
+.briefing-list li {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: 0.2rem;
+  padding-bottom: 0.9rem;
+  border-bottom: 1px solid rgba(23, 32, 51, 0.08);
+}
+
+.briefing-list li:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+@keyframes drift {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+  50% {
+    transform: translate3d(-1rem, -1.2rem, 0);
+  }
+}
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 @media (max-width: 760px) {
@@ -640,7 +948,10 @@ code {
     padding: 1rem 0 2rem;
   }
 
-  .panel-grid {
+  .landing-stage,
+  .feature-grid,
+  .signal-row,
+  .surface-grid {
     grid-template-columns: 1fr;
   }
 
@@ -650,6 +961,21 @@ code {
 
   .button {
     width: 100%;
+  }
+
+  .feature-panel,
+  .feature-panel-wide,
+  .feature-panel-command {
+    grid-column: auto;
+  }
+
+  .stage-copy {
+    min-height: auto;
+  }
+
+  .stage-ornament {
+    inset: auto 1rem 1rem auto;
+    opacity: 0.5;
   }
 }
 `;

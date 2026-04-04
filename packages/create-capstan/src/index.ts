@@ -2,6 +2,7 @@
 
 import { runPrompts, select, confirmPrompt } from "./prompts.js";
 import { scaffoldProject } from "./scaffold.js";
+import { detectPackageManagerRuntime, runInstallCommand } from "./package-manager.js";
 import {
   deployOptions,
   templateOptions,
@@ -11,7 +12,6 @@ import {
   type Template,
 } from "./options.js";
 import { join } from "node:path";
-import { execSync } from "node:child_process";
 import * as p from "@clack/prompts";
 import pc from "picocolors";
 
@@ -186,20 +186,21 @@ async function main() {
     shouldInstall = await confirmPrompt("Install dependencies?");
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const isBun = typeof (globalThis as any).Bun !== "undefined";
-  const installCmd = isBun ? "bun install" : "npm install";
-  const runCmd = isBun ? "bun run" : "npx";
-  const devCmd = `${runCmd} capstan dev`;
+  const runtime = detectPackageManagerRuntime();
+  const installCmd = runtime.installCommand.display;
+  const runCmd = runtime.runCommand;
+  const devCmd = runtime.devCommand;
 
   if (shouldInstall) {
-    const s = p.spinner();
-    s.start("Installing dependencies...");
+    p.log.step(`Running ${pc.cyan(installCmd)} in ${pc.bold(projectName)}. This can take a minute on a fresh machine.`);
     try {
-      execSync(installCmd, { cwd: outputDir, stdio: "ignore" });
-      s.stop(pc.green("Dependencies installed."));
-    } catch {
-      s.stop(pc.red("Failed to install dependencies."));
+      await runInstallCommand(outputDir, runtime.installCommand);
+      p.log.success(pc.green("Dependencies installed."));
+    } catch (error) {
+      p.log.error(pc.red("Failed to install dependencies."));
+      if (error instanceof Error && error.message) {
+        p.log.warn(error.message);
+      }
       p.log.warn(`Run ${pc.cyan(installCmd)} manually in the project directory.`);
     }
   }

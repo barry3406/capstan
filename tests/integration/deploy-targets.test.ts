@@ -331,11 +331,13 @@ describe("deployment targets integration", () => {
 
     const health = await fetch(`http://127.0.0.1:${standalonePort}/health`);
     const home = await fetch(`http://127.0.0.1:${standalonePort}/`);
+    const homeHtml = await home.text();
 
     expect(health.status).toBe(200);
     expect(home.status).toBe(200);
     expect((await health.json()) as { status: string }).toMatchObject({ status: "ok" });
-    expect(await home.text()).toContain("Welcome to Standalone App");
+    expect(homeHtml).toContain("Standalone App");
+    expect(homeHtml).toContain("Launch deck");
   });
 
   it("builds a docker-ready standalone context with generated Docker assets", async () => {
@@ -489,12 +491,14 @@ describe("deployment targets integration", () => {
       join(standaloneProjectDir, "dist", "standalone", "api", "index.js"),
       "/",
     );
+    const homeHtml = await home.text();
 
     expect(rootManifest.build.target).toBe("vercel-edge");
     expect(rootManifest.targets?.vercelEdge?.entry).toBe("dist/standalone/api/index.js");
     expect(health.status).toBe(200);
     expect(await health.json()).toMatchObject({ status: "ok" });
-    expect(await home.text()).toContain("Welcome to Standalone App");
+    expect(homeHtml).toContain("Standalone App");
+    expect(homeHtml).toContain("Launch deck");
   });
 
   it("builds a cloudflare worker target with a runnable worker entry", async () => {
