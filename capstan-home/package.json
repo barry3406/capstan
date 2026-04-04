@@ -1,0 +1,32 @@
+{
+  "name": "capstan-home",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "capstan dev",
+    "build": "capstan build",
+    "build:standalone": "capstan build --target node-standalone",
+    "build:docker": "capstan build --target docker",
+    "build:vercel-node": "capstan build --target vercel-node",
+    "build:vercel-edge": "capstan build --target vercel-edge",
+    "build:cloudflare": "capstan build --target cloudflare",
+    "build:fly": "capstan build --target fly",
+    "start": "capstan start",
+    "start:standalone": "capstan start --from dist/standalone",
+    "deploy:init": "capstan deploy:init"
+  },
+  "dependencies": {
+    "@zauso-ai/capstan-cli": "^1.0.0-beta.8",
+    "@zauso-ai/capstan-core": "^1.0.0-beta.8",
+    "@zauso-ai/capstan-dev": "^1.0.0-beta.8",
+    "@zauso-ai/capstan-react": "^1.0.0-beta.8",
+    "@zauso-ai/capstan-router": "^1.0.0-beta.8",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.2.14",
+    "typescript": "^5.9.0"
+  }
+}
