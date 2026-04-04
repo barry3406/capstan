@@ -21,7 +21,7 @@ export default function DocsLayout({ children, request }: { children: React.Reac
     // Navbar
     createElement("header", { className: "navbar" },
       createElement("a", { href: `/?lang=${locale}`, className: "navbar-brand" },
-        createElement("img", { src: "/logo-icon.jpeg", alt: "Capstan", className: "navbar-logo-img" }),
+        createElement("span", { className: "navbar-logo" }, "\u2693"),
         createElement("span", { className: "navbar-title" }, "Capstan"),
         createElement("span", { className: "navbar-badge" }, "beta")
       ),
