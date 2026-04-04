@@ -20,7 +20,7 @@ export default function HomePage() {
     // 1. Navbar
     createElement("header", { className: "navbar" },
       createElement("a", { href: `/?lang=${locale}`, className: "navbar-brand" },
-        createElement("span", { className: "navbar-logo" }, "\u2693"),
+        createElement("img", { src: "/logo-icon.jpeg", alt: "Capstan", className: "navbar-logo-img" }),
         createElement("span", { className: "navbar-title" }, "Capstan"),
         createElement("span", { className: "navbar-badge" }, "beta")
       ),
@@ -77,6 +77,7 @@ export default function HomePage() {
 
       // 2. Hero
       createElement("div", { className: "hero" },
+        createElement("img", { src: "/logo-banner-1200.jpeg", alt: "Capstan", className: "hero-banner" }),
         createElement("h1", { className: "hero-title" },
           createElement("code", null, "defineAPI()"), " ", l["hero.title.once"],
           createElement("br", null),

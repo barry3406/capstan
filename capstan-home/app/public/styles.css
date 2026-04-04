@@ -177,6 +177,13 @@ hr {
   text-decoration: none;
 }
 
+.navbar-logo-img {
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  object-fit: cover;
+}
+
 .navbar-links {
   margin-left: auto;
   display: flex;
@@ -438,6 +445,14 @@ hr {
 .hero {
   text-align: center;
   padding: 4rem 0 2.5rem;
+}
+
+.hero-banner {
+  max-width: 560px;
+  width: 100%;
+  height: auto;
+  margin: 0 auto 1.5rem;
+  border-radius: 8px;
 }
 
 .hero h1 {
