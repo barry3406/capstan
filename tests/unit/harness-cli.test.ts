@@ -85,7 +85,10 @@ function lifecycleEventTypes(events: Array<{ type: string }>): string[] {
       (type) =>
         type !== "memory_stored" &&
         type !== "summary_created" &&
-        type !== "context_compacted",
+        type !== "context_compacted" &&
+        type !== "sidecar_started" &&
+        type !== "sidecar_completed" &&
+        type !== "sidecar_failed",
     );
 }
 
@@ -209,6 +212,7 @@ describe("capstan harness runtime CLI", () => {
     ).toEqual([
       "run_started",
       "tool_call",
+      "governance_decision",
       "artifact_created",
       "tool_result",
       "run_completed",

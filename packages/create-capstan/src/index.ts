@@ -24,7 +24,7 @@ function printHelp(): void {
 ${pc.bold("Usage:")} create-capstan-app [project-name] [options]
 
 ${pc.bold("Options:")}
-  ${pc.cyan("--template, -t")} <name>   Template to use (blank, tickets)
+  ${pc.cyan("--template, -t")} <name>   Template to use (agent, blank, tickets)
   ${pc.cyan("--deploy")} <target>       Deployment files to generate (none, docker, vercel-node, vercel-edge, cloudflare, fly)
   ${pc.cyan("--install")}              Auto-install dependencies after scaffolding
   ${pc.cyan("--no-install")}           Skip dependency install prompt
@@ -33,6 +33,7 @@ ${pc.bold("Options:")}
 ${pc.bold("Examples:")}
   npx create-capstan-app@beta
   npx create-capstan-app@beta my-app
+  npx create-capstan-app@beta my-agent --template agent
   npx create-capstan-app@beta my-app --template tickets
   npx create-capstan-app@beta my-app --template tickets --deploy docker
   npx create-capstan-app@beta my-app --template tickets --deploy vercel-node
@@ -213,6 +214,16 @@ async function main() {
         "app/models/ticket.model.ts",
         "AGENTS.md",
       ]
+    : template === "agent"
+      ? [
+          "app/routes/index.page.tsx",
+          "app/routes/api/agent/app.api.ts",
+          "app/agent/README.md",
+          "app/agent/index.ts",
+          "app/agent/contracts.ts",
+          "app/agent/runtime.ts",
+          "AGENTS.md",
+        ]
     : [
         "app/routes/index.page.tsx",
         "app/routes/api/health.api.ts",
@@ -230,6 +241,7 @@ async function main() {
       "http://localhost:3000/",
       "http://localhost:3000/.well-known/capstan.json",
       "http://localhost:3000/openapi.json",
+      ...(template === "agent" ? ["http://localhost:3000/api/agent/app"] : []),
       "",
       "Edit these first",
       ...firstFiles,

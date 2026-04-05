@@ -1,8 +1,14 @@
 import type {
   AgentTool,
   AgentToolCallRecord,
+  AgentToolExecutionContext,
+  AgentToolProgressUpdate,
 } from "../types.js";
 import type { PendingToolExecution, RunAgentLoopOptions, TurnEngineState } from "./state.js";
+import { createMailboxMessageId } from "./mailbox.js";
+import { resolveToolGovernanceDecision } from "./governance.js";
+
+const PARALLEL_ABORT_GRACE_MS = 50;
 
 export interface ToolExecutionOutcome {
   records: AgentToolCallRecord[];
@@ -65,15 +71,28 @@ export async function executeToolRequests(
         continue;
       }
 
+      await opts?.onToolCall?.(request.name, cloneArgs(request.args));
+
       const shouldSkipPolicy = skipPolicyForFirstPendingTool && !policySkipConsumed;
-      if (!shouldSkipPolicy && opts?.beforeToolCall) {
-        const policy = await opts.beforeToolCall(request.name, request.args);
-        if (!policy.allowed) {
+      const governance = await resolveToolGovernanceDecision(
+        opts,
+        {
+          runId: opts?.runId,
+          requestId: request.id,
+          order: request.order,
+          kind: "tool",
+          name: request.name,
+          args: cloneArgs(request.args),
+          assistantMessage: request.assistantMessage,
+        },
+        { skip: shouldSkipPolicy },
+      );
+      if (governance.action === "require_approval") {
           blockedApproval = {
             kind: "tool",
             tool: request.name,
             args: cloneArgs(request.args),
-            reason: policy.reason ?? "Tool call blocked by policy",
+            reason: governance.reason ?? "Tool call blocked by policy",
           };
           remaining = remaining.slice(
             remaining.findIndex((entry) => entry.id === request.id),
@@ -84,7 +103,29 @@ export async function executeToolRequests(
             haltedByHardFailure,
             remaining,
           };
+      }
+      if (governance.action === "deny") {
+        records.push({
+          tool: request.name,
+          args: cloneArgs(request.args),
+          result: {
+            error: governance.reason ?? `Tool "${request.name}" denied by governance`,
+            governance: governanceToResult(governance),
+          },
+          requestId: request.id,
+          order: request.order,
+          status: "error",
+        });
+        remaining = remaining.filter((entry) => entry.id !== request.id);
+        haltedByHardFailure = haltedByHardFailure || tool.failureMode === "hard";
+        if (haltedByHardFailure) {
+          return {
+            records: sortRecords(records),
+            haltedByHardFailure,
+            remaining,
+          };
         }
+        continue;
       }
       if (shouldSkipPolicy) {
         policySkipConsumed = true;
@@ -98,7 +139,7 @@ export async function executeToolRequests(
     }
 
     const executed = group.parallel
-      ? await Promise.all(approved.map((entry) => executeSingleTool(entry.tool, entry.request, opts)))
+      ? await executeInParallel(approved, opts)
       : await executeSerially(approved, opts);
 
     const orderedExecuted = executed
@@ -168,22 +209,62 @@ async function executeSerially(
 ): Promise<Array<{ request: PendingToolExecution; record: AgentToolCallRecord; hardFailure: boolean }>> {
   const records: Array<{ request: PendingToolExecution; record: AgentToolCallRecord; hardFailure: boolean }> = [];
   for (const entry of approved) {
-    records.push(await executeSingleTool(entry.tool, entry.request, opts));
+    records.push(await executeSingleTool(entry.tool, entry.request, opts, new AbortController()));
   }
   return records;
+}
+
+async function executeInParallel(
+  approved: Array<{ request: PendingToolExecution; tool: AgentTool }>,
+  opts: RunAgentLoopOptions | undefined,
+): Promise<Array<{ request: PendingToolExecution; record: AgentToolCallRecord; hardFailure: boolean }>> {
+  const controllers = new Map<string, AbortController>();
+  const settled = new Set<string>();
+  const executions = approved.map((entry) => {
+    const controller = new AbortController();
+    controllers.set(entry.request.id, controller);
+    return withAbortGuard(
+      entry,
+      controller,
+      executeSingleTool(entry.tool, entry.request, opts, controller),
+    ).then((result) => {
+      settled.add(entry.request.id);
+      if (result.hardFailure) {
+        for (const [requestId, siblingController] of controllers.entries()) {
+          if (requestId === entry.request.id || settled.has(requestId)) {
+            continue;
+          }
+          siblingController.abort(`Tool ${entry.tool.name} failed hard`);
+        }
+      }
+      return result;
+    });
+  });
+  return Promise.all(executions);
 }
 
 async function executeSingleTool(
   tool: AgentTool,
   request: PendingToolExecution,
-  _opts: RunAgentLoopOptions | undefined,
+  opts: RunAgentLoopOptions | undefined,
+  controller: AbortController,
 ): Promise<{ request: PendingToolExecution; record: AgentToolCallRecord; hardFailure: boolean }> {
   let result: unknown;
   let status: "success" | "error" = "success";
   let hardFailure = false;
 
   try {
-    result = await tool.execute(cloneArgs(request.args));
+    const context: AgentToolExecutionContext = {
+      signal: controller.signal,
+      runId: opts?.runId,
+      requestId: request.id,
+      order: request.order,
+    };
+    if (tool.executeStreaming) {
+      result = await executeStreamingTool(tool, request, opts, context);
+    } else {
+      result = await tool.execute(cloneArgs(request.args), context);
+    }
   } catch (error) {
     status = "error";
     result = {
@@ -204,6 +285,110 @@ async function executeSingleTool(
     },
     hardFailure,
   };
+}
+
+async function executeStreamingTool(
+  tool: AgentTool,
+  request: PendingToolExecution,
+  opts: RunAgentLoopOptions | undefined,
+  context: AgentToolExecutionContext,
+): Promise<unknown> {
+  let finalResult: unknown = undefined;
+  for await (const update of tool.executeStreaming!(
+    cloneArgs(request.args),
+    context,
+  )) {
+    if (update.type === "result") {
+      finalResult = cloneUnknown(update.result);
+      continue;
+    }
+    const progressUpdate: AgentToolProgressUpdate = {
+      type: "progress",
+      message: update.message,
+      ...(update.detail ? { detail: cloneUnknown(update.detail) as Record<string, unknown> } : {}),
+    };
+    await emitToolProgressSafely(tool, request, progressUpdate, opts);
+  }
+  if (finalResult === undefined) {
+    throw new Error(`Streaming tool "${tool.name}" completed without a result update`);
+  }
+  return finalResult;
+}
+
+function withAbortGuard(
+  entry: { request: PendingToolExecution; tool: AgentTool },
+  controller: AbortController,
+  execution: Promise<{ request: PendingToolExecution; record: AgentToolCallRecord; hardFailure: boolean }>,
+): Promise<{ request: PendingToolExecution; record: AgentToolCallRecord; hardFailure: boolean }> {
+  return Promise.race([
+    execution,
+    new Promise<{ request: PendingToolExecution; record: AgentToolCallRecord; hardFailure: boolean }>((resolve) => {
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      const onAbort = () => {
+        timeout = setTimeout(() => {
+          resolve({
+            request: entry.request,
+            record: {
+              tool: entry.tool.name,
+              args: cloneArgs(entry.request.args),
+              result: {
+                error: `Tool "${entry.tool.name}" aborted after sibling hard failure: ${String(controller.signal.reason ?? "aborted")}`,
+              },
+              requestId: entry.request.id,
+              order: entry.request.order,
+              status: "error",
+            },
+            hardFailure: false,
+          });
+        }, PARALLEL_ABORT_GRACE_MS);
+      };
+
+      if (controller.signal.aborted) {
+        onAbort();
+      } else {
+        controller.signal.addEventListener("abort", onAbort, { once: true });
+      }
+
+      void execution.finally(() => {
+        controller.signal.removeEventListener("abort", onAbort);
+        if (timeout) {
+          clearTimeout(timeout);
+        }
+      });
+    }),
+  ]);
+}
+
+async function emitToolProgressSafely(
+  tool: AgentTool,
+  request: PendingToolExecution,
+  progressUpdate: AgentToolProgressUpdate,
+  opts: RunAgentLoopOptions | undefined,
+): Promise<void> {
+  try {
+    await opts?.onToolProgress?.(tool.name, cloneArgs(request.args), progressUpdate);
+  } catch {
+    // Progress sinks are observational. A broken observer must not convert a
+    // successful tool execution into a tool failure.
+  }
+
+  if (opts?.mailbox && opts.runId) {
+    try {
+      await opts.mailbox.publish({
+        id: createMailboxMessageId("tool_progress"),
+        runId: opts.runId,
+        createdAt: new Date().toISOString(),
+        kind: "tool_progress",
+        tool: tool.name,
+        requestId: request.id,
+        order: request.order,
+        message: progressUpdate.message,
+        ...(progressUpdate.detail ? { detail: progressUpdate.detail } : {}),
+      });
+    } catch {
+      // Mailbox publication is best-effort for progress updates.
+    }
+  }
 }
 
 function sortRecords(records: AgentToolCallRecord[]): AgentToolCallRecord[] {
@@ -231,4 +416,22 @@ function cloneUnknown(value: unknown): unknown {
     );
   }
   return value;
+}
+
+function governanceToResult(value: {
+  action: string;
+  reason?: string;
+  policyId?: string;
+  risk?: string;
+  source?: string;
+  metadata?: Record<string, unknown>;
+}): Record<string, unknown> {
+  return {
+    action: value.action,
+    ...(value.reason ? { reason: value.reason } : {}),
+    ...(value.policyId ? { policyId: value.policyId } : {}),
+    ...(value.risk ? { risk: value.risk } : {}),
+    ...(value.source ? { source: value.source } : {}),
+    ...(value.metadata ? { metadata: cloneUnknown(value.metadata) as Record<string, unknown> } : {}),
+  };
 }

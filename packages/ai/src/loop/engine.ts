@@ -27,7 +27,9 @@ import {
   decideContinuation,
   shouldRetryAfterModelError,
 } from "./continuation.js";
+import { drainMailboxContextMessages, mailboxMessageToContextMessage } from "./mailbox.js";
 import { sampleModel } from "./sampler.js";
+import { flushPendingSidecars } from "./sidecars.js";
 import { submitTaskRequests, applyTaskNotification } from "./task-orchestrator.js";
 import { executeToolRequests } from "./tool-orchestrator.js";
 
@@ -84,11 +86,18 @@ export async function runTurnEngine(
           : { action: "continue" as const };
 
       if (decision.action === "pause") {
+        await drainMailboxAfterControlDecision(state, opts);
         updatePhase(state, "paused", "pause_requested");
-        const pausedCheckpoint = buildCheckpoint(
+        const pausedStage = checkpointStageForControl(phase, state);
+        await flushPendingSidecars({
           state,
-          checkpointStageForControl(phase, state),
-        );
+          stage: pausedStage,
+          transitionReason: "pause_requested",
+          opts,
+          persistCheckpoint,
+        });
+        updatePhase(state, "paused", "pause_requested");
+        const pausedCheckpoint = await persistCheckpoint(pausedStage);
         return {
           result: null,
           iterations: state.iterations,
@@ -100,6 +109,15 @@ export async function runTurnEngine(
       }
 
       if (decision.action === "cancel") {
+        await drainMailboxAfterControlDecision(state, opts);
+        updatePhase(state, "canceled", "cancel_requested");
+        await flushPendingSidecars({
+          state,
+          stage: "canceled",
+          transitionReason: "cancel_requested",
+          opts,
+          persistCheckpoint,
+        });
         updatePhase(state, "canceled", "cancel_requested");
         const canceledCheckpoint = await persistCheckpoint("canceled");
         return {
@@ -135,6 +153,15 @@ export async function runTurnEngine(
         const controlled = await evaluateControl("before_llm");
         if (controlled) {
           return controlled;
+        }
+
+        const mailboxControl = await consumeMailboxBeforeTurn(
+          state,
+          opts,
+          persistCheckpoint,
+        );
+        if (mailboxControl) {
+          return mailboxControl;
         }
 
         updatePhase(state, "preparing_context");
@@ -273,6 +300,24 @@ export async function runTurnEngine(
           skipPolicyForFirstPendingTask,
         );
         skipPolicyForFirstPendingTask = false;
+        for (const denied of submission.deniedNotifications) {
+          const record = applyTaskNotification(state, denied);
+          if (!state.orchestration.assistantMessagePersisted) {
+            appendAssistantResponse(
+              state,
+              group.requests[0]?.assistantMessage ?? state.lastAssistantResponse ?? "",
+            );
+          }
+          if (opts?.afterTaskCall) {
+            await opts.afterTaskCall(record.task, record.args, record.result);
+          }
+          if (opts?.onMemoryEvent) {
+            await opts.onMemoryEvent(
+              `Task ${record.task} called with ${JSON.stringify(record.args)} => ${JSON.stringify(record.result)}`,
+            );
+          }
+        }
+
         if (submission.blockedApproval) {
           updatePhase(state, "approval_blocked", "approval_required");
           const checkpoint = await persistCheckpoint("approval_required");
@@ -287,6 +332,11 @@ export async function runTurnEngine(
           };
         }
 
+        if (submission.haltedByHardFailure) {
+          haltedByHardFailure = true;
+          break;
+        }
+
         const waitingTaskIds = submission.submitted.records.map((record) => record.id);
         state.orchestration.waitingTaskIds = waitingTaskIds.slice();
         updatePhase(state, "waiting_on_tasks", "task_wait");
@@ -299,16 +349,38 @@ export async function runTurnEngine(
             taskRuntime,
             opts?.runId ?? "standalone-run",
             Array.from(pendingTaskIds),
-            evaluateControl,
+            opts,
+            persistCheckpoint,
           );
           if (controlled) {
             return controlled;
           }
 
-          const notification = await taskRuntime.nextNotification(opts?.runId ?? "standalone-run", {
-            timeoutMs: 25,
-          });
-          if (!notification || !pendingTaskIds.has(notification.taskId)) {
+          const queued = await nextTaskWaitMessage(
+            taskRuntime,
+            opts?.runId ?? "standalone-run",
+            opts,
+          );
+          if (!queued) {
+            continue;
+          }
+          if (queued.kind === "control") {
+            return await resolveMailboxControlDecision(
+              state,
+              taskRuntime,
+              opts?.runId ?? "standalone-run",
+              Array.from(pendingTaskIds),
+              queued.decision,
+              opts,
+              persistCheckpoint,
+            );
+          }
+          if (queued.kind === "context_message") {
+            state.messages.push({ ...queued.message });
+            continue;
+          }
+          const notification = queued.notification;
+          if (!pendingTaskIds.has(notification.taskId)) {
             continue;
           }
 
@@ -359,6 +431,14 @@ export async function runTurnEngine(
       }
       updatePhase(state, "applying_tool_results", "next_turn");
       clearContinuation(state);
+      await flushPendingSidecars({
+        state,
+        stage: "tool_result",
+        transitionReason: "next_turn",
+        opts,
+        persistCheckpoint,
+      });
+      updatePhase(state, "applying_tool_results", "next_turn");
       await persistCheckpoint("tool_result");
     }
 
@@ -384,20 +464,216 @@ async function evaluateTaskWaitControl(
   taskRuntime: AgentTaskRuntime,
   runId: string,
   waitingTaskIds: string[],
-  evaluateControl: (
-    phase: "before_llm" | "before_tool" | "after_tool" | "during_task_wait",
-  ) => Promise<AgentRunResult | undefined>,
+  opts: RunAgentLoopOptions | undefined,
+  persistCheckpoint: (stage: AgentLoopCheckpoint["stage"]) => Promise<AgentLoopCheckpoint>,
 ): Promise<AgentRunResult | undefined> {
-  const controlled = await evaluateControl("during_task_wait");
-  if (!controlled) {
+  const checkpoint = await persistCheckpoint("task_wait");
+  const decision = opts?.getControlState
+    ? await opts.getControlState("during_task_wait", checkpoint)
+    : opts?.control
+      ? { action: await opts.control.check() }
+      : { action: "continue" as const };
+
+  if (decision.action === "continue") {
     return undefined;
   }
+  await drainMailboxAfterControlDecision(state, opts);
+  if (opts?.runSidecars && opts.hasPendingSidecars && opts.hasPendingSidecars()) {
+    await flushPendingSidecars({
+      state,
+      stage: "task_wait",
+      transitionReason:
+        decision.action === "pause" ? "pause_requested" : "cancel_requested",
+      opts,
+      persistCheckpoint,
+    });
+  }
+  updatePhase(
+    state,
+    decision.action === "pause" ? "paused" : "canceled",
+    decision.action === "pause" ? "pause_requested" : "cancel_requested",
+  );
   await taskRuntime.cancelTasks(
     runId,
     waitingTaskIds,
-    controlled.status === "paused" ? "Task wait paused" : "Task wait canceled",
+    decision.action === "pause" ? "Task wait paused" : "Task wait canceled",
   ).catch(() => undefined);
-  return controlled;
+  const finalCheckpoint = await persistCheckpoint("task_wait");
+  return {
+    result:
+      decision.action === "pause"
+        ? null
+        : decision.reason ?? null,
+    iterations: state.iterations,
+    toolCalls: state.toolCalls,
+    taskCalls: state.taskCalls,
+    status: decision.action === "pause" ? "paused" : "canceled",
+    checkpoint: finalCheckpoint,
+  };
+}
+
+async function consumeMailboxBeforeTurn(
+  state: TurnEngineState,
+  opts: RunAgentLoopOptions | undefined,
+  persistCheckpoint: (stage: AgentLoopCheckpoint["stage"]) => Promise<AgentLoopCheckpoint>,
+): Promise<AgentRunResult | undefined> {
+  const drained = await drainMailboxContextMessages(
+    opts?.mailbox,
+    opts?.runId,
+    opts?.onMailboxMessage,
+    opts?.isMailboxControlSignalCurrent,
+  );
+  if (drained.messages.length > 0) {
+    state.messages.push(...drained.messages.map((message) => ({ ...message })));
+  }
+  if (!drained.control) {
+    return undefined;
+  }
+  updatePhase(
+    state,
+    drained.control.action === "pause" ? "paused" : "canceled",
+    drained.control.action === "pause" ? "pause_requested" : "cancel_requested",
+  );
+  const stage = drained.control.action === "pause" ? "paused" : "canceled";
+  await flushPendingSidecars({
+    state,
+    stage,
+    transitionReason:
+      drained.control.action === "pause" ? "pause_requested" : "cancel_requested",
+    opts,
+    persistCheckpoint,
+  });
+  updatePhase(
+    state,
+    drained.control.action === "pause" ? "paused" : "canceled",
+    drained.control.action === "pause" ? "pause_requested" : "cancel_requested",
+  );
+  const checkpoint = await persistCheckpoint(stage);
+  return {
+    result: drained.control.action === "pause" ? null : drained.control.reason ?? null,
+    iterations: state.iterations,
+    toolCalls: state.toolCalls,
+    taskCalls: state.taskCalls,
+    status: drained.control.action === "pause" ? "paused" : "canceled",
+    checkpoint,
+  };
+}
+
+async function drainMailboxAfterControlDecision(
+  state: TurnEngineState,
+  opts: RunAgentLoopOptions | undefined,
+): Promise<void> {
+  if (!opts?.mailbox || !opts.runId) {
+    return;
+  }
+
+  while (true) {
+    const message = await opts.mailbox.next(opts.runId, { timeoutMs: 0 });
+    if (!message) {
+      return;
+    }
+    await opts.onMailboxMessage?.(message);
+    if (message.kind === "control_signal") {
+      continue;
+    }
+    const forwarded = mailboxMessageToContextMessage(message);
+    if (forwarded) {
+      state.messages.push(forwarded);
+    }
+  }
+}
+
+async function nextTaskWaitMessage(
+  taskRuntime: AgentTaskRuntime,
+  runId: string,
+  opts: RunAgentLoopOptions | undefined,
+): Promise<
+  | { kind: "notification"; notification: import("../task/types.js").AgentTaskNotification }
+  | { kind: "control"; decision: { action: "pause" | "cancel"; reason?: string } }
+  | { kind: "context_message"; message: import("../types.js").LLMMessage }
+  | undefined
+> {
+  if (opts?.mailbox) {
+    while (true) {
+      const message = await opts.mailbox.next(runId, { timeoutMs: 25 });
+      if (!message) {
+        break;
+      }
+      await opts.onMailboxMessage?.(message);
+      if (message.kind === "task_notification") {
+        return { kind: "notification", notification: message.notification };
+      }
+      if (message.kind === "control_signal") {
+        if (
+          opts.isMailboxControlSignalCurrent &&
+          !(await opts.isMailboxControlSignalCurrent(message))
+        ) {
+          continue;
+        }
+        return {
+          kind: "control",
+          decision: {
+            action: message.action,
+            ...(message.reason ? { reason: message.reason } : {}),
+          },
+        };
+      }
+      if (message.kind === "context_message") {
+        return { kind: "context_message", message: message.message };
+      }
+      const forwarded = mailboxMessageToContextMessage(message);
+      if (forwarded) {
+        return { kind: "context_message", message: forwarded };
+      }
+    }
+  }
+
+  const notification = await taskRuntime.nextNotification(runId, { timeoutMs: 25 });
+  if (!notification) {
+    return undefined;
+  }
+  return { kind: "notification", notification };
+}
+
+async function resolveMailboxControlDecision(
+  state: TurnEngineState,
+  taskRuntime: AgentTaskRuntime,
+  runId: string,
+  waitingTaskIds: string[],
+  decision: { action: "pause" | "cancel"; reason?: string },
+  opts: RunAgentLoopOptions | undefined,
+  persistCheckpoint: (stage: AgentLoopCheckpoint["stage"]) => Promise<AgentLoopCheckpoint>,
+): Promise<AgentRunResult> {
+  await drainMailboxAfterControlDecision(state, opts);
+  if (opts?.runSidecars && opts.hasPendingSidecars && opts.hasPendingSidecars()) {
+    await flushPendingSidecars({
+      state,
+      stage: "task_wait",
+      transitionReason:
+        decision.action === "pause" ? "pause_requested" : "cancel_requested",
+      opts,
+      persistCheckpoint,
+    });
+  }
+  updatePhase(
+    state,
+    decision.action === "pause" ? "paused" : "canceled",
+    decision.action === "pause" ? "pause_requested" : "cancel_requested",
+  );
+  await taskRuntime.cancelTasks(
+    runId,
+    waitingTaskIds,
+    decision.action === "pause" ? "Task wait paused" : "Task wait canceled",
+  ).catch(() => undefined);
+  const finalCheckpoint = await persistCheckpoint("task_wait");
+  return {
+    result: decision.action === "pause" ? null : decision.reason ?? null,
+    iterations: state.iterations,
+    toolCalls: state.toolCalls,
+    taskCalls: state.taskCalls,
+    status: decision.action === "pause" ? "paused" : "canceled",
+    checkpoint: finalCheckpoint,
+  };
 }
 
 function appendAssistantResponse(state: TurnEngineState, content: string): void {

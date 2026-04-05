@@ -26,6 +26,11 @@ One `defineAPI()` call. Four protocol surfaces. Humans and AI agents, served sim
 
 **Capstan** is a Bun-native full-stack TypeScript framework for building applications that are agent-operable by default. The same `defineAPI()` contract can drive human-facing HTTP endpoints, AI-facing MCP/A2A/OpenAPI surfaces, operator workflows, and structured verification with zero adapter glue. It combines file-based routing, Zod-validated endpoints, Drizzle ORM models, built-in policy and approval primitives, and a verification loop that coding agents can use to converge on repairs.
 
+Capstan AI is organized in two layers:
+
+- **Runtime Layer** — the durable execution substrate for runs, turns, tasks, checkpoints, sidecars, mailbox/event flow, governance, memory, and sandboxed execution
+- **Framework Layer** — the explicit contracts developers define on top of that runtime: capability, workflow, policy, memory space, and operator view
+
 Production-ready: `capstan build` compiles your app, `capstan start` serves it, and the framework ships with deployable build outputs, structured manifests, CSRF protection, configurable CORS, request body limits, and JSON logging out of the box. Bun is the primary runtime; Node.js is also supported.
 
 Think of it as a full-stack framework built for a world where humans, coding agents, and operator tooling all need to consume the same application contract.
@@ -89,11 +94,14 @@ Think of it as a full-stack framework built for a world where humans, coding age
 - **Shared application contract** — `defineAPI()` produces HTTP, MCP, A2A, OpenAPI, and capability metadata from one definition
 - **Policy and approval primitives** — `definePolicy()` and approval workflows keep human supervision in the same execution model as agent actions
 - **Structured verification loop** — `capstan verify --json` emits repair-oriented diagnostics for coding agents instead of ad hoc test output
-- **Durable agent runtime** — `createHarness()` provides persisted runs, checkpoints, task records, artifacts, event streams, browser sandboxes, and filesystem sandboxes
+- **Durable agent runtime** — `createHarness()` provides persisted runs, checkpoints, mailbox/event fabric, task records, artifacts, browser sandboxes, filesystem sandboxes, and resumable control-plane state
+- **Governed execution pipeline** — tool/task calls flow through explicit governance, approval, and progress reporting instead of ad hoc hook chains
+- **Agentic sidecars** — post-turn and run-boundary sidecars can execute inline or in background workers for verification, context capture, and durable memory extraction
+- **Graph-scoped runtime read model** — harness runs, turns, tasks, approvals, artifacts, and promoted memory are projected into stable graph queries and feeds
 - **First-class task fabric** — long-running shell, workflow, remote, and subagent work can be submitted as persisted tasks that flow back into the host turn engine
 - **Operator-facing foundations** — generated control-plane and human-surface building blocks keep supervision tied to the same runtime contracts
 - **Multi-protocol discovery and execution** — built-in manifests, MCP, A2A, and OpenAPI make capabilities legible to external agents
-- **AI toolkit (`@zauso-ai/capstan-ai`)** — `createAI()`, `think()`, `generate()`, memory, and agent loops for standalone or in-framework use
+- **AI toolkit (`@zauso-ai/capstan-ai`)** — `createAI()`, `think()`, `generate()`, host-driven agent loops, streaming tool execution, first-class tasks, and durable harness runtime with runtime-managed context/memory
 - **Scheduled agent work (`@zauso-ai/capstan-cron`)** — cron trigger adapter for recurring or continuous harness/runtime runs
 - **MCP Client** — consume external MCP servers from within your handlers via `connectMCP()`
 - **Vector fields & RAG primitives** — `field.vector()`, `defineEmbedding`, and hybrid search built into the ORM
@@ -125,6 +133,27 @@ Think of it as a full-stack framework built for a world where humans, coding age
 - **Client-side SPA router** — `<Link>` component with prefetch (`hover` / `viewport` / `none`), `useNavigate()`, `useRouterState()`, history-based scroll restoration, zero-config View Transitions
 - **Interactive CLI** — colored output, grouped help, fuzzy command matching, `@clack/prompts` interactive scaffolder with auto-install
 
+### Capstan AI Layers
+
+Capstan AI is not framed as a single built-in agent. It is a framework for building agentic applications with a stable split between runtime concerns and developer-facing contracts.
+
+| Layer | Purpose | Current primitives |
+|---|---|---|
+| **Runtime Layer** | Execute and recover long-running agent work | `createHarness()`, `runAgentLoop()`, task fabric, mailbox/event fabric, checkpoints, sidecars, graph projections, control plane, browser/fs sandbox |
+| **Framework Layer** | Define what the agent is allowed to do and how humans supervise it | `defineCapability()`, `defineWorkflow()`, `defineAgentPolicy()`, `defineMemorySpace()`, `defineOperatorView()`, `defineAgentApp()`, `summarizeAgentApp()` |
+
+### Agent-First Golden Path
+
+The intended path for developers building with Capstan AI is:
+
+1. **Define capabilities** with `defineCapability()` and connect them to the underlying `defineAPI()` surfaces you want the agent to use.
+2. **Define workflows** with `defineWorkflow()` so scheduled triggers, retries, completion rules, and durable run semantics stay explicit.
+3. **Define policies** with `defineAgentPolicy()` so allow, deny, and approval decisions are first-class contracts.
+4. **Define memory spaces** with `defineMemorySpace()` so retrieval, summaries, promoted memories, and artifacts stay attached to the right scope.
+5. **Define operator views** with `defineOperatorView()` so inboxes, task boards, and artifact feeds come from the same runtime graph.
+6. **Compose the app** with `defineAgentApp()` and run it through the harness runtime so verification, recovery, sidecars, and supervision stay inside one execution model.
+7. **Summarize the contract graph** with `summarizeAgentApp()` when you need a stable read model for onboarding routes, docs, or operator-facing metadata.
+
 ---
 
 ## 🚀 Quick Start
@@ -135,6 +164,7 @@ bunx create-capstan-app@beta my-app
 cd my-app
 
 # Or start from a template
+bunx create-capstan-app@beta my-agent --template agent
 bunx create-capstan-app@beta my-app --template tickets
 
 # 2. Start the dev server (live reload via SSE)
@@ -509,13 +539,13 @@ Capstan ships 12 workspace packages:
 | `@zauso-ai/capstan-db` | Drizzle ORM, `defineModel`, field/relation helpers, migrations, auto CRUD, vector fields, `defineEmbedding`, hybrid search (SQLite, PostgreSQL, MySQL) |
 | `@zauso-ai/capstan-auth` | JWT sessions, API key auth, OAuth providers (Google, GitHub), DPoP (RFC 9449), SPIFFE/mTLS, token-aware rate limiting (`"human"` / `"agent"` / `"anonymous"`) |
 | `@zauso-ai/capstan-agent` | `CapabilityRegistry`, MCP server (stdio + Streamable HTTP), MCP client, A2A adapter (SSE), OpenAPI generator, LangChain integration |
-| `@zauso-ai/capstan-ai` | Standalone AI toolkit: `createAI`, `think`/`generate` (structured + streaming), scoped memory primitives, host-driven `agent.run()` with first-class tasks, and durable `createHarness()` runtime with context assembly, control-plane inspection, persisted task records, and browser/fs sandboxes |
+| `@zauso-ai/capstan-ai` | Agent runtime and framework contracts: `createAI`, `think`/`generate`, host-driven `agent.run()`, governed tool/task execution, first-class tasks, agentic sidecars, durable `createHarness()` runtime, scoped context/memory, graph-aware control-plane inspection, and operator-facing runtime projections |
 | `@zauso-ai/capstan-cron` | Recurring job scheduler: `defineCron`, `createCronRunner`, `createBunCronRunner`, `createAgentCron` |
 | `@zauso-ai/capstan-react` | SSR with loaders, layouts, scoped `not-found` boundaries, automatic metadata/head management, selective hydration, ISR render strategies, `<Link>` SPA router with prefetch & View Transitions, `Image`, `defineFont`, `defineMetadata`, `ErrorBoundary` |
 | `@zauso-ai/capstan-dev` | Dev server with file watching, hot route reload, MCP/A2A endpoints |
 | `@zauso-ai/capstan-ops` | Semantic ops runtime: events, incidents, snapshots, queries, SQLite persistence |
 | `@zauso-ai/capstan-cli` | CLI: `dev`, `build`, `start`, `deploy:init`, `verify`, `ops:*`, `add`, `mcp`, `db:*` |
-| `create-capstan-app` | Project scaffolder (`--template blank`, `--template tickets`) |
+| `create-capstan-app` | Project scaffolder (`--template agent`, `--template blank`, `--template tickets`) |
 
 
 ---
@@ -541,6 +571,7 @@ Connect your coding agent to the Capstan docs MCP server for AI-assisted develop
 Detailed guides also live in the [`docs/`](docs/) directory:
 
 - [Getting Started](docs/getting-started.md) — Installation, first project, dev workflow
+- [Agent Framework Guide](docs/agent-framework.md) — The contract-first golden path for agent apps
 - [Core Concepts](docs/core-concepts.md) — `defineAPI`, `defineModel`, `definePolicy`, capabilities
 - [Architecture](docs/architecture/) — System design, multi-protocol registry, route scanning
 - [Authentication](docs/authentication.md) — JWT sessions, API keys, auth types

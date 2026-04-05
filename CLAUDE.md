@@ -6,6 +6,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A Bun-native AI agent full-stack framework built around a shared application contract. One `defineAPI()` call can drive HTTP, MCP, A2A, and OpenAPI interfaces, while the wider product loop also includes durable harness execution, operator supervision, structured verification, and explicit release output. Bun is the primary runtime; Node.js is also supported.
 
+Capstan AI should be read in two layers:
+
+- **Runtime Layer** — turns, runs, checkpoints, tasks, sidecars, mailbox/event flow, governance, memory, graph projections, and sandboxes
+- **Framework Layer** — the contracts developers define on top: capability, workflow, policy, memory space, and operator view
+
+When discussing or changing AI features, keep that split explicit.
+
 ## Commands
 
 ```bash
@@ -48,7 +55,7 @@ bunx create-capstan-app
 - `@zauso-ai/capstan-db` — data modeling, Drizzle integration, migrations, vector search, and generated CRUD route helpers
 - `@zauso-ai/capstan-auth` — human and agent auth primitives: JWT sessions, API keys, OAuth, DPoP, SPIFFE/mTLS
 - `@zauso-ai/capstan-agent` — machine surfaces and interop: capability registry, MCP, A2A, OpenAPI, LangChain, testing helpers
-- `@zauso-ai/capstan-ai` — AI toolkit plus durable harness runtime: think/generate, scoped memory primitives, host-driven agent loop, task fabric, context assembly, browser/filesystem sandboxes, persisted runs
+- `@zauso-ai/capstan-ai` — agent runtime plus framework contracts: think/generate, host-driven agent loop, mailbox/event fabric, governed tool/task execution, task fabric, agentic sidecars, scoped context/memory, graph-scoped runtime projections, browser/filesystem sandboxes, persisted runs
 - `@zauso-ai/capstan-cron` — recurring execution for agent jobs and long-running automation
 - `@zauso-ai/capstan-ops` — semantic operations kernel: events, incidents, snapshots, SQLite persistence, querying, and CLI/operator consumption
 - `@zauso-ai/capstan-react` — human application shell: streaming SSR, selective hydration, layouts, metadata, image/font helpers, error/loading boundaries
@@ -84,8 +91,20 @@ Auto-generated endpoints:
 - A2A adapter: `packages/agent/src/a2a.ts`
 - MCP adapter: `packages/agent/src/mcp.ts`
 - Generated CRUD helpers: `packages/db/src/crud.ts`
-- AI toolkit & harness: `packages/ai/src/` (ai.ts, memory.ts, agent.ts, harness/)
+- AI toolkit & harness: `packages/ai/src/` (ai.ts, agent-loop.ts, loop/, task/, harness/)
 - Cron scheduler: `packages/cron/src/` (cron.ts, ai-loop.ts)
+
+### Agent-First Golden Path
+
+For Capstan AI work, prefer this order:
+
+1. **Capability** — define what the application exposes with `defineAPI()` and shared metadata.
+2. **Workflow** — define how work runs with tasks, triggers, and harness runs.
+3. **Policy** — define allow/deny/approval behavior with app policies and runtime governance hooks.
+4. **Memory space** — define scopes for context, summaries, artifacts, and promoted memory.
+5. **Operator view** — define supervision surfaces from graph projections and control-plane queries.
+
+Do not collapse these contracts into one opaque “agent config” concept. Keep them explicit and machine-readable.
 
 ## Verifier (AI TDD Self-Loop)
 

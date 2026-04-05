@@ -1,13 +1,14 @@
 import type {
   AgentLoopCheckpoint,
+  AgentLoopGovernanceDecision,
   LLMMessage,
   LLMProvider,
-  AIConfig,
   AgentRunConfig,
   AgentRunResult,
   MemoryScope,
+  AgentTaskWorker,
 } from "../types.js";
-import type { AgentTaskRecord } from "../task/types.js";
+import type { AgentTaskRecord, AgentTaskRuntime } from "../task/types.js";
 
 // ---------------------------------------------------------------------------
 // Browser sandbox config
@@ -96,9 +97,14 @@ export interface HarnessEvent {
     | "approval_denied"
     | "artifact_created"
     | "tool_call"
+    | "tool_progress"
     | "tool_result"
     | "task_call"
     | "task_result"
+    | "governance_decision"
+    | "sidecar_started"
+    | "sidecar_completed"
+    | "sidecar_failed"
     | "verify_pass"
     | "verify_fail"
     | "summary_created"
@@ -220,9 +226,14 @@ export type HarnessRunEventType =
   | "run_started"
   | "run_resumed"
   | "tool_call"
+  | "tool_progress"
   | "tool_result"
   | "task_call"
   | "task_result"
+  | "governance_decision"
+  | "sidecar_started"
+  | "sidecar_completed"
+  | "sidecar_failed"
   | "verify_pass"
   | "verify_fail"
   | "artifact_created"
@@ -245,6 +256,7 @@ export interface HarnessRuntimePaths {
   rootDir: string;
   runsDir: string;
   eventsDir: string;
+  mailboxDir: string;
   globalEventsPath: string;
   artifactsDir: string;
   tasksDir: string;
@@ -253,6 +265,9 @@ export interface HarnessRuntimePaths {
   summariesDir: string;
   sessionMemoryDir: string;
   memoryDir: string;
+  graphDir: string;
+  graphNodesDir: string;
+  graphEdgesDir: string;
   sandboxesDir: string;
 }
 
@@ -262,6 +277,30 @@ export type HarnessMemoryKind =
   | "summary"
   | "observation"
   | "artifact";
+
+export type HarnessSidecarMode =
+  | "inline"
+  | "background"
+  | "trailing";
+
+export type HarnessSidecarSchedule =
+  | "turn"
+  | "boundary";
+
+export interface HarnessSidecarRetryConfig {
+  maxAttempts?: number;
+  backoffMs?: number;
+  backoffMultiplier?: number;
+  maxBackoffMs?: number;
+}
+
+export interface HarnessSidecarPolicyConfig {
+  mode?: HarnessSidecarMode;
+  schedule?: HarnessSidecarSchedule;
+  priority?: number;
+  bestEffort?: boolean;
+  retry?: HarnessSidecarRetryConfig;
+}
 
 export type HarnessApprovalKind = "tool" | "task";
 
@@ -290,6 +329,7 @@ export type HarnessContextBlockKind =
   | "session_memory"
   | "summary"
   | "memory"
+  | "graph"
   | "artifact"
   | "transcript";
 
@@ -320,6 +360,7 @@ export interface HarnessMemoryRecord {
   runId?: string | undefined;
   sourceSummaryId?: string | undefined;
   importance?: "low" | "medium" | "high" | "critical" | undefined;
+  graphScopes?: HarnessGraphScope[] | undefined;
   metadata?: Record<string, unknown> | undefined;
 }
 
@@ -331,6 +372,7 @@ export interface HarnessMemoryInput {
   sourceSummaryId?: string;
   importance?: "low" | "medium" | "high" | "critical";
   metadata?: Record<string, unknown>;
+  graphScopes?: HarnessGraphScope[];
 }
 
 export interface HarnessMemoryQuery {
@@ -388,6 +430,21 @@ export interface HarnessSummaryRecord {
   compactedMessages: number;
 }
 
+export interface HarnessLongTermMemoryExtractionInput {
+  runId: string;
+  runtimeRootDir: string;
+  sessionMemory: HarnessSessionMemoryRecord;
+  summary?: HarnessSummaryRecord | undefined;
+  graphScopes: HarnessGraphScope[];
+}
+
+export type HarnessLongTermMemoryExtractor = (
+  input: HarnessLongTermMemoryExtractionInput,
+) =>
+  | HarnessMemoryInput[]
+  | void
+  | Promise<HarnessMemoryInput[] | void>;
+
 export interface HarnessContextBlock {
   kind: HarnessContextBlockKind;
   title: string;
@@ -406,6 +463,7 @@ export interface HarnessContextPackage {
   transcriptTail: LLMMessage[];
   artifactRefs: HarnessContextArtifactRef[];
   memories: HarnessMemoryMatch[];
+  graphNodes: HarnessGraphNodeRecord[];
   sessionMemory?: HarnessSessionMemoryRecord | undefined;
   summary?: HarnessSummaryRecord | undefined;
   omitted: Array<{
@@ -420,6 +478,139 @@ export interface HarnessContextAssembleOptions {
   scopes?: MemoryScope[];
   maxMemories?: number;
   maxArtifacts?: number;
+  graphScopes?: HarnessGraphScope[];
+  maxGraphNodes?: number;
+  graphKinds?: HarnessGraphNodeKind[];
+}
+
+export type HarnessGraphScope =
+  | { kind: "project"; projectId: string }
+  | { kind: "app"; appId: string }
+  | { kind: "run"; runId: string }
+  | { kind: "resource"; resourceType: string; resourceId: string }
+  | { kind: "capability"; capabilityId: string }
+  | { kind: "policy"; policyId: string }
+  | { kind: "entity"; entityType: string; entityId: string };
+
+export type HarnessGraphNodeKind =
+  | "run"
+  | "turn"
+  | "checkpoint"
+  | "task"
+  | "artifact"
+  | "memory"
+  | "approval";
+
+export type HarnessGraphEdgeKind =
+  | "contains"
+  | "follows"
+  | "references"
+  | "generates"
+  | "summarizes"
+  | "promotes"
+  | "approves"
+  | "blocks";
+
+export interface HarnessGraphNodeRecord {
+  id: string;
+  kind: HarnessGraphNodeKind;
+  scope: HarnessGraphScope;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  runId?: string | undefined;
+  status?: string | undefined;
+  summary?: string | undefined;
+  content?: string | undefined;
+  order?: number | undefined;
+  sourceId?: string | undefined;
+  relatedIds?: string[] | undefined;
+  metadata?: Record<string, unknown> | undefined;
+}
+
+export interface HarnessGraphEdgeRecord {
+  id: string;
+  kind: HarnessGraphEdgeKind;
+  scope: HarnessGraphScope;
+  from: string;
+  to: string;
+  createdAt: string;
+  updatedAt: string;
+  runId?: string | undefined;
+  metadata?: Record<string, unknown> | undefined;
+}
+
+export interface HarnessGraphNodeQuery {
+  kinds?: HarnessGraphNodeKind[];
+  runId?: string;
+  scopes?: HarnessGraphScope[];
+  ids?: string[];
+  text?: string;
+  relatedTo?: string;
+  minScore?: number;
+  limit?: number;
+}
+
+export interface HarnessGraphEdgeQuery {
+  kinds?: HarnessGraphEdgeKind[];
+  runId?: string;
+  scopes?: HarnessGraphScope[];
+  fromIds?: string[];
+  toIds?: string[];
+  ids?: string[];
+  limit?: number;
+}
+
+export interface HarnessRunTimelineItem {
+  id: string;
+  nodeId: string;
+  kind: HarnessGraphNodeKind;
+  title: string;
+  scope: HarnessGraphScope;
+  createdAt: string;
+  updatedAt: string;
+  status?: string | undefined;
+  summary?: string | undefined;
+  metadata?: Record<string, unknown> | undefined;
+}
+
+export interface HarnessTaskBoardEntry {
+  taskId: string;
+  nodeId: string;
+  name: string;
+  status: string;
+  scope: HarnessGraphScope;
+  createdAt: string;
+  order: number;
+  updatedAt: string;
+  summary?: string | undefined;
+  metadata?: Record<string, unknown> | undefined;
+}
+
+export interface HarnessApprovalInboxEntry {
+  approvalId: string;
+  nodeId: string;
+  tool: string;
+  status: HarnessApprovalStatus;
+  scope: HarnessGraphScope;
+  requestedAt: string;
+  updatedAt: string;
+  reason: string;
+  metadata?: Record<string, unknown> | undefined;
+}
+
+export interface HarnessArtifactFeedItem {
+  artifactId: string;
+  nodeId: string;
+  kind: string;
+  scope: HarnessGraphScope;
+  createdAt: string;
+  updatedAt: string;
+  mimeType: string;
+  size: number;
+  path: string;
+  preview?: string | undefined;
+  metadata?: Record<string, unknown> | undefined;
 }
 
 export type HarnessAuthorizedAction =
@@ -442,6 +633,8 @@ export type HarnessAuthorizedAction =
   | "memory:read"
   | "memory:write"
   | "context:read"
+  | "graph:list"
+  | "graph:read"
   | "approval:approve"
   | "approval:deny"
   | "runtime_paths:read";
@@ -532,6 +725,11 @@ export interface HarnessRuntimeStore {
   replayRun(runId: string): Promise<HarnessReplayReport>;
   clearRunArtifacts(runId: string): Promise<void>;
   requireRun(runId: string): Promise<HarnessRunRecord>;
+  upsertGraphNode(node: HarnessGraphNodeRecord): Promise<void>;
+  getGraphNode(nodeId: string): Promise<HarnessGraphNodeRecord | undefined>;
+  listGraphNodes(query?: HarnessGraphNodeQuery): Promise<HarnessGraphNodeRecord[]>;
+  upsertGraphEdge(edge: HarnessGraphEdgeRecord): Promise<void>;
+  listGraphEdges(query?: HarnessGraphEdgeQuery): Promise<HarnessGraphEdgeRecord[]>;
 }
 
 export interface HarnessRunRecord {
@@ -565,6 +763,7 @@ export interface HarnessRunRecord {
   latestSummaryId?: string | undefined;
   trigger?: HarnessRunTrigger | undefined;
   metadata?: Record<string, unknown> | undefined;
+  graphScopes?: HarnessGraphScope[] | undefined;
   control?: {
     pauseRequestedAt?: string;
     cancelRequestedAt?: string;
@@ -661,11 +860,32 @@ export type HarnessToolPolicyFn = (ctx: {
   args: unknown;
 }) => Promise<{ allowed: boolean; reason?: string }>;
 
+export type HarnessToolGovernanceFn = (ctx: {
+  runId: string;
+  tool: string;
+  args: unknown;
+  requestId?: string | undefined;
+  order?: number | undefined;
+}) => Promise<AgentLoopGovernanceDecision>;
+
 export type HarnessTaskPolicyFn = (ctx: {
   runId: string;
   task: string;
   args: unknown;
 }) => Promise<{ allowed: boolean; reason?: string }>;
+
+export type HarnessTaskGovernanceFn = (ctx: {
+  runId: string;
+  task: string;
+  args: unknown;
+  requestId?: string | undefined;
+  order?: number | undefined;
+}) => Promise<AgentLoopGovernanceDecision>;
+
+export interface HarnessTaskRuntimeFactoryResult {
+  runtime: AgentTaskRuntime;
+  destroyOnExit?: boolean;
+}
 
 export interface HarnessRuntimeConfig {
   /** Root directory under which .capstan/harness/ is persisted (default: process.cwd()) */
@@ -676,10 +896,30 @@ export interface HarnessRuntimeConfig {
   driver?: HarnessSandboxDriver;
   /** Override the default file-backed runtime store */
   storeFactory?: (rootDir: string) => HarnessRuntimeStore;
+  /** Configure the task runtime used for task fabric execution */
+  tasks?: {
+    /** Defaults to durable for harness-backed runs. */
+    mode?: "durable" | "in_memory";
+    /** Override the durable task runtime root directory. */
+    rootDir?: string;
+    /** Route task execution through an external worker adapter. */
+    worker?: AgentTaskWorker;
+    /** Provide a fully custom task runtime implementation. */
+    runtimeFactory?: (input: {
+      runId: string;
+      runtimeRootDir: string;
+      paths: HarnessRuntimePaths;
+      store: HarnessRuntimeStore;
+    }) => AgentTaskRuntime | HarnessTaskRuntimeFactoryResult;
+  };
   /** Optional policy hook that can block tool calls and force approval_required */
   beforeToolCall?: HarnessToolPolicyFn;
   /** Optional policy hook that can block task calls and force approval_required */
   beforeTaskCall?: HarnessTaskPolicyFn;
+  /** Governance v2 hook for tool calls: allow, deny, or require approval. */
+  governToolCall?: HarnessToolGovernanceFn;
+  /** Governance v2 hook for task calls: allow, deny, or require approval. */
+  governTaskCall?: HarnessTaskGovernanceFn;
   /** Optional authorization hook for external run/control-plane actions */
   authorize?: HarnessAuthorizationHook;
 }
@@ -701,6 +941,7 @@ export interface HarnessRunTrigger {
 export interface HarnessRunStartOptions {
   trigger?: HarnessRunTrigger;
   metadata?: Record<string, unknown>;
+  graphScopes?: HarnessGraphScope[];
   access?: HarnessAccessContext;
 }
 
@@ -736,13 +977,13 @@ export interface HarnessConfig {
     logger?: HarnessLogger;
     onEvent?: (event: HarnessEvent) => void;
   };
-  memory?: AIConfig["memory"];
   context?: {
     enabled?: boolean;
     maxPromptTokens?: number;
     reserveOutputTokens?: number;
     maxMemories?: number;
     maxArtifacts?: number;
+    maxGraphNodes?: number;
     maxRecentMessages?: number;
     maxRecentToolResults?: number;
     microcompactToolResultChars?: number;
@@ -750,6 +991,18 @@ export interface HarnessConfig {
     defaultScopes?: MemoryScope[];
     autoPromoteObservations?: boolean;
     autoPromoteSummaries?: boolean;
+  };
+  sidecars?: {
+    observations?: (HarnessSidecarPolicyConfig & { enabled?: boolean }) | undefined;
+    verification?: (HarnessSidecarPolicyConfig & { enabled?: boolean }) | undefined;
+    sessionMemory?: (HarnessSidecarPolicyConfig & { enabled?: boolean }) | undefined;
+    longTermMemory?: (HarnessSidecarPolicyConfig & {
+      enabled?: boolean;
+      agentic?: boolean;
+      llm?: LLMProvider;
+      scopes?: MemoryScope[];
+      extract?: HarnessLongTermMemoryExtractor;
+    }) | undefined;
   };
   runtime?: HarnessRuntimeConfig;
 }
@@ -792,6 +1045,38 @@ export interface Harness {
   getArtifacts(runId: string, access?: HarnessAccessContext): Promise<HarnessArtifactRecord[]>;
   /** Read persisted task records for a run */
   getTasks(runId: string, access?: HarnessAccessContext): Promise<HarnessTaskRecord[]>;
+  /** Read one graph node */
+  getGraphNode(
+    nodeId: string,
+    access?: HarnessAccessContext,
+  ): Promise<HarnessGraphNodeRecord | undefined>;
+  /** List graph nodes */
+  listGraphNodes(
+    query?: HarnessGraphNodeQuery,
+    access?: HarnessAccessContext,
+  ): Promise<HarnessGraphNodeRecord[]>;
+  /** List graph edges */
+  listGraphEdges(
+    query?: HarnessGraphEdgeQuery,
+    access?: HarnessAccessContext,
+  ): Promise<HarnessGraphEdgeRecord[]>;
+  /** Project a run timeline from graph nodes */
+  getRunTimeline(runId: string, access?: HarnessAccessContext): Promise<HarnessRunTimelineItem[]>;
+  /** Project task board entries */
+  getTaskBoard(
+    query?: HarnessGraphNodeQuery,
+    access?: HarnessAccessContext,
+  ): Promise<HarnessTaskBoardEntry[]>;
+  /** Project approval inbox entries */
+  getApprovalInbox(
+    query?: HarnessGraphNodeQuery,
+    access?: HarnessAccessContext,
+  ): Promise<HarnessApprovalInboxEntry[]>;
+  /** Project artifact feed entries */
+  getArtifactFeed(
+    query?: HarnessGraphNodeQuery,
+    access?: HarnessAccessContext,
+  ): Promise<HarnessArtifactFeedItem[]>;
   /** Read the persisted loop checkpoint for a run */
   getCheckpoint(runId: string, access?: HarnessAccessContext): Promise<AgentLoopCheckpoint | undefined>;
   /** Read the latest structured session memory for a run */
@@ -853,6 +1138,38 @@ export interface HarnessControlPlane {
   getArtifacts(runId: string, access?: HarnessAccessContext): Promise<HarnessArtifactRecord[]>;
   /** Read persisted task records for a run */
   getTasks(runId: string, access?: HarnessAccessContext): Promise<HarnessTaskRecord[]>;
+  /** Read one graph node */
+  getGraphNode(
+    nodeId: string,
+    access?: HarnessAccessContext,
+  ): Promise<HarnessGraphNodeRecord | undefined>;
+  /** List graph nodes */
+  listGraphNodes(
+    query?: HarnessGraphNodeQuery,
+    access?: HarnessAccessContext,
+  ): Promise<HarnessGraphNodeRecord[]>;
+  /** List graph edges */
+  listGraphEdges(
+    query?: HarnessGraphEdgeQuery,
+    access?: HarnessAccessContext,
+  ): Promise<HarnessGraphEdgeRecord[]>;
+  /** Project a run timeline from graph nodes */
+  getRunTimeline(runId: string, access?: HarnessAccessContext): Promise<HarnessRunTimelineItem[]>;
+  /** Project task board entries */
+  getTaskBoard(
+    query?: HarnessGraphNodeQuery,
+    access?: HarnessAccessContext,
+  ): Promise<HarnessTaskBoardEntry[]>;
+  /** Project approval inbox entries */
+  getApprovalInbox(
+    query?: HarnessGraphNodeQuery,
+    access?: HarnessAccessContext,
+  ): Promise<HarnessApprovalInboxEntry[]>;
+  /** Project artifact feed entries */
+  getArtifactFeed(
+    query?: HarnessGraphNodeQuery,
+    access?: HarnessAccessContext,
+  ): Promise<HarnessArtifactFeedItem[]>;
   /** Read the persisted loop checkpoint for a run */
   getCheckpoint(runId: string, access?: HarnessAccessContext): Promise<AgentLoopCheckpoint | undefined>;
   /** Read the latest structured session memory for a run */

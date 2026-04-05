@@ -1,5 +1,5 @@
 import { describe, it, expect } from "bun:test";
-import { runAgentLoop, createAI, BuiltinMemoryBackend, createMemoryAccessor } from "@zauso-ai/capstan-ai";
+import { runAgentLoop, createAI } from "@zauso-ai/capstan-ai";
 import type { LLMProvider, LLMMessage, LLMResponse, LLMOptions, AgentTool } from "@zauso-ai/capstan-ai";
 
 // ---------------------------------------------------------------------------
@@ -1221,7 +1221,7 @@ describe("runAgentLoop", () => {
 // ---------------------------------------------------------------------------
 
 describe("createAI", () => {
-  it("returns an object with all AIContext methods", () => {
+  it("returns a lean standalone AI context without the legacy memory surface", () => {
     const llm = mockLLM(["ok"]);
     const ai = createAI({ llm });
 
@@ -1229,12 +1229,10 @@ describe("createAI", () => {
     expect(typeof ai.generate).toBe("function");
     expect(typeof ai.thinkStream).toBe("function");
     expect(typeof ai.generateStream).toBe("function");
-    expect(typeof ai.remember).toBe("function");
-    expect(typeof ai.recall).toBe("function");
-    expect(typeof ai.memory.about).toBe("function");
-    expect(typeof ai.memory.forget).toBe("function");
-    expect(typeof ai.memory.assembleContext).toBe("function");
     expect(typeof ai.agent.run).toBe("function");
+    expect("remember" in ai).toBe(false);
+    expect("recall" in ai).toBe(false);
+    expect("memory" in ai).toBe(false);
   });
 
   it("think delegates to the LLM provider", async () => {
@@ -1253,50 +1251,6 @@ describe("createAI", () => {
     expect(text).toBe("Generated text.");
   });
 
-  it("remember stores content in memory and recall retrieves it", async () => {
-    const llm = mockLLM([]);
-    const ai = createAI({ llm });
-
-    const id = await ai.remember("User likes TypeScript");
-    expect(typeof id).toBe("string");
-    expect(id.length).toBeGreaterThan(0);
-
-    const results = await ai.recall("TypeScript");
-    expect(results.length).toBeGreaterThanOrEqual(1);
-    expect(results[0]!.content).toBe("User likes TypeScript");
-  });
-
-  it("memory.about creates an accessor for a different scope", async () => {
-    const llm = mockLLM([]);
-    const ai = createAI({ llm });
-
-    const userMemory = ai.memory.about("user", "u-456");
-    await userMemory.remember("Prefers dark mode");
-
-    // Recall in the user scope should find it
-    const results = await userMemory.recall("dark mode");
-    expect(results.length).toBeGreaterThanOrEqual(1);
-    expect(results[0]!.content).toBe("Prefers dark mode");
-
-    // Recall in the default scope should NOT find it
-    const defaultResults = await ai.recall("dark mode");
-    const match = defaultResults.find(r => r.content === "Prefers dark mode");
-    expect(match).toBeUndefined();
-  });
-
-  it("memory.forget removes a memory entry", async () => {
-    const llm = mockLLM([]);
-    const ai = createAI({ llm });
-
-    const id = await ai.remember("Temporary note");
-    const removed = await ai.memory.forget(id);
-    expect(removed).toBe(true);
-
-    // Second forget should return false
-    const removedAgain = await ai.memory.forget(id);
-    expect(removedAgain).toBe(false);
-  });
-
   it("agent.run executes an agent loop", async () => {
     const llm = mockLLM(["The final answer is 7."]);
     const ai = createAI({ llm });
@@ -1304,69 +1258,6 @@ describe("createAI", () => {
     const result = await ai.agent.run({ goal: "Compute something" });
     expect(result.status).toBe("completed");
     expect(result.result).toBe("The final answer is 7.");
-  });
-
-  it("with no memory config → memory still works (BuiltinMemoryBackend created)", async () => {
-    const llm = mockLLM([]);
-    // No memory config at all
-    const ai = createAI({ llm });
-
-    const id = await ai.remember("test memory");
-    expect(typeof id).toBe("string");
-
-    const results = await ai.recall("test memory");
-    expect(results.length).toBe(1);
-    expect(results[0]!.content).toBe("test memory");
-  });
-
-  it("with no defaultScope → uses { type: 'default', id: 'default' }", async () => {
-    const llm = mockLLM([]);
-    const ai = createAI({ llm }); // no defaultScope
-
-    await ai.remember("default scoped entry keyword");
-    const results = await ai.recall("default scoped entry keyword");
-    expect(results.length).toBe(1);
-    // The entry should be stored under the default scope
-    expect(results[0]!.scope).toEqual({ type: "default", id: "default" });
-  });
-
-  it("memory.about creates independent accessor (store in about scope, recall from default returns nothing)", async () => {
-    const llm = mockLLM([]);
-    const ai = createAI({ llm });
-
-    const projectMemory = ai.memory.about("project", "p-999");
-    await projectMemory.remember("project specific data keyword");
-
-    // Recall from default scope should NOT find it
-    const defaultResults = await ai.recall("project specific data keyword");
-    expect(defaultResults).toEqual([]);
-
-    // Recall from the about scope should find it
-    const projectResults = await projectMemory.recall("project specific data keyword");
-    expect(projectResults.length).toBe(1);
-    expect(projectResults[0]!.content).toBe("project specific data keyword");
-  });
-
-  it("memory.forget delegates to backend", async () => {
-    const llm = mockLLM([]);
-    const ai = createAI({ llm });
-
-    const id = await ai.remember("to be forgotten keyword");
-    // Verify it exists
-    const before = await ai.recall("to be forgotten keyword");
-    expect(before.length).toBe(1);
-
-    // Forget via memory.forget
-    const removed = await ai.memory.forget(id);
-    expect(removed).toBe(true);
-
-    // Verify it's gone
-    const after = await ai.recall("to be forgotten keyword");
-    expect(after).toEqual([]);
-
-    // Second forget returns false
-    const removedAgain = await ai.memory.forget(id);
-    expect(removedAgain).toBe(false);
   });
 
   it("agent.run passes tools from config", async () => {
@@ -1394,71 +1285,5 @@ describe("createAI", () => {
     expect(result.toolCalls[0]!.tool).toBe("multiply");
     expect(result.toolCalls[0]!.result).toBe(12);
     expect(result.result).toBe("The result is 12.");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// BuiltinMemoryBackend & createMemoryAccessor (direct usage)
-// ---------------------------------------------------------------------------
-
-describe("BuiltinMemoryBackend", () => {
-  it("store and query round-trip works", async () => {
-    const backend = new BuiltinMemoryBackend();
-    const scope = { type: "test", id: "t-1" };
-
-    const id = await backend.store({
-      content: "Hello world",
-      scope,
-    });
-
-    expect(typeof id).toBe("string");
-
-    const results = await backend.query(scope, "Hello", 5);
-    expect(results.length).toBe(1);
-    expect(results[0]!.content).toBe("Hello world");
-    expect(results[0]!.id).toBe(id);
-  });
-
-  it("remove deletes an entry", async () => {
-    const backend = new BuiltinMemoryBackend();
-    const scope = { type: "test", id: "t-2" };
-
-    const id = await backend.store({ content: "To be deleted", scope });
-    expect(await backend.remove(id)).toBe(true);
-    expect(await backend.remove(id)).toBe(false);
-
-    const results = await backend.query(scope, "deleted", 5);
-    expect(results).toHaveLength(0);
-  });
-
-  it("clear removes all entries for a scope", async () => {
-    const backend = new BuiltinMemoryBackend();
-    const scope1 = { type: "user", id: "u-1" };
-    const scope2 = { type: "user", id: "u-2" };
-
-    await backend.store({ content: "Entry 1", scope: scope1 });
-    await backend.store({ content: "Entry 2", scope: scope1 });
-    await backend.store({ content: "Entry 3", scope: scope2 });
-
-    await backend.clear(scope1);
-
-    const r1 = await backend.query(scope1, "Entry", 10);
-    const r2 = await backend.query(scope2, "Entry", 10);
-    expect(r1).toHaveLength(0);
-    expect(r2).toHaveLength(1);
-  });
-});
-
-describe("createMemoryAccessor", () => {
-  it("assembleContext builds a context string from stored memories", async () => {
-    const backend = new BuiltinMemoryBackend();
-    const scope = { type: "session", id: "s-1" };
-    const accessor = createMemoryAccessor(scope, backend);
-
-    await accessor.remember("The user is a developer");
-    await accessor.remember("The user prefers TypeScript");
-
-    const ctx = await accessor.assembleContext({ query: "developer" });
-    expect(ctx).toContain("The user is a developer");
   });
 });

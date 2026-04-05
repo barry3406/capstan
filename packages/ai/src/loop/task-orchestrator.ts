@@ -1,6 +1,8 @@
 import type { AgentTaskCallRecord } from "../types.js";
 import type { AgentTaskNotification, AgentTaskRuntime, AgentTaskSubmitResult } from "../task/types.js";
 import type { PendingTaskExecution, RunAgentLoopOptions, TurnEngineState } from "./state.js";
+import { createMailboxMessageId } from "./mailbox.js";
+import { resolveTaskGovernanceDecision } from "./governance.js";
 
 export interface TaskExecutionOutcome {
   records: AgentTaskCallRecord[];
@@ -19,25 +21,69 @@ export async function submitTaskRequests(
 ): Promise<{
   submitted: AgentTaskSubmitResult;
   blockedApproval?: { kind: "task"; tool: string; args: unknown; reason: string } | undefined;
+  deniedNotifications: AgentTaskNotification[];
+  haltedByHardFailure: boolean;
 }> {
+  const availableTasks = new Map(state.availableTasks.map((task) => [task.name, task] as const));
   const approved: PendingTaskExecution[] = [];
   let policySkipConsumed = false;
+  const deniedNotifications: AgentTaskNotification[] = [];
+  let haltedByHardFailure = false;
 
   for (const request of requests) {
+    const task = availableTasks.get(request.name);
+    await opts?.onTaskCall?.(request.name, cloneArgs(request.args));
+
     const shouldSkipPolicy = skipPolicyForFirstPendingTask && !policySkipConsumed;
-    if (!shouldSkipPolicy && opts?.beforeTaskCall) {
-      const policy = await opts.beforeTaskCall(request.name, request.args);
-      if (!policy.allowed) {
+    const governance = await resolveTaskGovernanceDecision(
+      opts,
+      {
+        runId: opts?.runId,
+        requestId: request.id,
+        order: request.order,
+        kind: "task",
+        name: request.name,
+        args: cloneArgs(request.args),
+        assistantMessage: request.assistantMessage,
+      },
+      { skip: shouldSkipPolicy },
+    );
+    if (governance.action === "require_approval") {
+      return {
+        submitted: { records: [] },
+        blockedApproval: {
+          kind: "task",
+          tool: request.name,
+          args: cloneArgs(request.args),
+          reason: governance.reason ?? "Task call blocked by policy",
+        },
+        deniedNotifications,
+        haltedByHardFailure,
+      };
+    }
+    if (governance.action === "deny") {
+      const hardFailure = task?.failureMode === "hard";
+      deniedNotifications.push({
+        runId: opts?.runId ?? "standalone-run",
+        taskId: `denied_${request.id}`,
+        requestId: request.id,
+        name: request.name,
+        kind: task?.kind ?? "custom",
+        order: request.order,
+        status: "failed",
+        args: cloneArgs(request.args),
+        error: governance.reason ?? `Task "${request.name}" denied by governance`,
+        hardFailure,
+      });
+      if (hardFailure) {
+        haltedByHardFailure = true;
         return {
           submitted: { records: [] },
-          blockedApproval: {
-            kind: "task",
-            tool: request.name,
-            args: cloneArgs(request.args),
-            reason: policy.reason ?? "Task call blocked by policy",
-          },
+          deniedNotifications,
+          haltedByHardFailure,
         };
       }
+      continue;
     }
     if (shouldSkipPolicy) {
       policySkipConsumed = true;
@@ -74,7 +120,7 @@ export async function submitTaskRequests(
           hardFailure: record.hardFailure,
         });
       },
-      onSettled: async (record) => {
+      onSettled: async (record, notification) => {
         const payload = {
           id: record.id,
           runId: record.runId,
@@ -91,11 +137,20 @@ export async function submitTaskRequests(
           ...(record.error ? { error: record.error } : {}),
         };
         await opts?.onTaskSettled?.(payload);
+        if (opts?.mailbox && opts.runId) {
+          await opts.mailbox.publish({
+            id: createMailboxMessageId("task_notification"),
+            runId: opts.runId,
+            createdAt: new Date().toISOString(),
+            kind: "task_notification",
+            notification: cloneTaskNotification(notification),
+          });
+        }
       },
     },
   });
 
-  return { submitted };
+  return { submitted, deniedNotifications, haltedByHardFailure };
 }
 
 export function applyTaskNotification(
@@ -170,4 +225,15 @@ function cloneUnknown(value: unknown): unknown {
     );
   }
   return value;
+}
+
+function cloneTaskNotification(
+  notification: AgentTaskNotification,
+): AgentTaskNotification {
+  return {
+    ...notification,
+    args: cloneArgs(notification.args),
+    ...(notification.result !== undefined ? { result: cloneUnknown(notification.result) } : {}),
+    ...(notification.error ? { error: notification.error } : {}),
+  };
 }

@@ -687,17 +687,18 @@ describe("HarnessContextKernel", () => {
       query: "deterministic runtime preview",
       maxTokens: 400,
       maxArtifacts: 4,
+      maxGraphNodes: 0,
     });
 
     expect(contextPackage.blocks.map((block) => block.title)).toEqual([
       "Session Memory",
       "Run Summary",
-      "Relevant Memory",
       "Artifacts",
+      "Relevant Memory",
     ]);
-    expect(contextPackage.blocks[2]!.content).toContain("deterministic state");
-    expect(contextPackage.blocks[3]!.content).toContain("Artifact body for preview");
-    expect(contextPackage.blocks[3]!.content).toContain("image/png");
+    expect(contextPackage.blocks[2]!.content).toContain("Artifact body for preview");
+    expect(contextPackage.blocks[3]!.content).toContain("deterministic state");
+    expect(contextPackage.blocks[2]!.content).toContain("image/png");
     expect(contextPackage.omitted).toEqual([]);
   });
 
@@ -741,6 +742,37 @@ describe("HarnessContextKernel", () => {
     expect(contextPackage.blocks.length).toBeLessThanOrEqual(1);
     expect(contextPackage.omitted.length).toBeGreaterThan(0);
     expect(contextPackage.omitted.every((entry) => entry.reason === "token_budget_exceeded")).toBe(true);
+  });
+
+  it("assembleContext includes graph-scoped runtime nodes in the graph context block", async () => {
+    const { kernel, runId, store } = await persistRunAndCheckpoint({
+      run: {
+        goal: "inspect graph-aware runtime context",
+      },
+    });
+
+    await store.upsertGraphNode({
+      id: "turn:run-1:graph-note",
+      kind: "turn",
+      scope: { kind: "run", runId },
+      title: "Graph note: runtime context",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      runId,
+      status: "sampling_model",
+      summary: "graph-aware runtime context",
+      content: "This node should be selected by graph-aware retrieval.",
+      metadata: { source: "test" },
+    });
+
+    const contextPackage = await kernel.assembleContext(runId, {
+      query: "runtime context",
+      maxTokens: 400,
+    });
+
+    expect(contextPackage.graphNodes.map((node) => node.id)).toContain("turn:run-1:graph-note");
+    expect(contextPackage.blocks.map((block) => block.kind)).toContain("graph");
+    expect(contextPackage.blocks.map((block) => block.title)).toContain("Graph State");
   });
 
   it("prepareMessages injects runtime context and trims stale transcript middle sections", async () => {

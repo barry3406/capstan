@@ -6,7 +6,7 @@ const CAPSTAN_PACKAGE_RANGE = "^1.0.0-beta.8";
 
 export function packageJson(
   projectName: string,
-  template: "blank" | "tickets" = "blank",
+  template: "agent" | "blank" | "tickets" = "blank",
 ): string {
   const deps: Record<string, string> = {
     "@zauso-ai/capstan-cli": CAPSTAN_PACKAGE_RANGE,
@@ -16,6 +16,10 @@ export function packageJson(
     "@zauso-ai/capstan-router": CAPSTAN_PACKAGE_RANGE,
     zod: "^4.0.0",
   };
+
+  if (template === "agent") {
+    deps["@zauso-ai/capstan-ai"] = CAPSTAN_PACKAGE_RANGE;
+  }
 
   // Only include capstan-db for templates that actually use it (native dep
   // issues with better-sqlite3 make it a poor default).
@@ -76,7 +80,7 @@ export function tsconfig(): string {
 export function capstanConfig(
   projectName: string,
   title: string,
-  template: "blank" | "tickets" = "blank",
+  template: "agent" | "blank" | "tickets" = "blank",
 ): string {
   const dbBlock =
     template === "tickets"
@@ -138,13 +142,17 @@ export default function RootLayout() {
 export function indexPage(
   title: string,
   projectName: string,
-  template: "blank" | "tickets" = "blank",
+  template: "agent" | "blank" | "tickets" = "blank",
 ): string {
   const templateTitle = template === "tickets"
     ? "Tickets reference app"
+    : template === "agent"
+      ? "Agent-first workspace"
     : "Blank launchpad";
   const templateDescription = template === "tickets"
     ? "A realistic starting point with CRUD routes, auth, and a model you can copy with confidence."
+    : template === "agent"
+      ? "A contract-first workspace with capability, workflow, policy, memory, and operator-view files already laid out."
     : "A clean Capstan shell with just enough surface area to ship your first route fast.";
   const templatePointers = template === "tickets"
     ? `
@@ -152,11 +160,69 @@ export function indexPage(
           <li><code>app/models/ticket.model.ts</code> is the reference model and migration starting point.</li>
           <li><code>capstan verify --json</code> is the quickest way to check contracts after edits.</li>
 `
+    : template === "agent"
+      ? `
+          <li><code>app/agent/index.ts</code> is the composition root for the agent contract graph.</li>
+          <li><code>app/agent/README.md</code> is the quickest map of the contract graph and recommended edit order.</li>
+          <li><code>app/agent/capabilities/index.ts</code> defines what the agent can do.</li>
+          <li><code>app/agent/workflows/index.ts</code> defines durable work sequences.</li>
+          <li><code>app/agent/policies/index.ts</code> governs allow / deny / approval decisions.</li>
+          <li><code>app/agent/memory/index.ts</code> separates run, project, and operator memory.</li>
+          <li><code>app/agent/views/index.ts</code> projects the same state for human operators.</li>
+          <li><code>app/agent/runtime.ts</code> adapts the contract graph into a harness runtime.</li>
+          <li><code>app/routes/api/agent/app.api.ts</code> exposes the contract graph as a machine-readable surface.</li>
+`
     : `
           <li><code>app/routes/api/health.api.ts</code> is the smallest complete <code>defineAPI()</code> example.</li>
           <li><code>capstan add api hello</code> is the fastest way to grow from one route to many.</li>
           <li><code>AGENTS.md</code> teaches coding agents the golden path for this app.</li>
 `;
+  const heroCopy = template === "agent"
+    ? "Capstan wired this project with explicit agent contracts, a machine-readable operator surface, and a runtime adapter so humans and coding agents can share the same operating model."
+    : "Capstan already wired this project with a routed page, a typed API surface, agent-readable manifests, deployment targets, and a project-level AGENTS.md so humans and coding agents can ship from the same playbook.";
+  const heroAction = template === "agent"
+    ? `<a className="button button-secondary" href="/api/agent/app">Inspect agent graph</a>`
+    : `<a className="button button-secondary" href="/health">Check health</a>`;
+  const signalCards = template === "agent"
+    ? `
+                <article className="signal-card">
+                  <p className="signal-label">Capability layer</p>
+                  <strong>Capabilities describe what the agent can do and how to verify it.</strong>
+                </article>
+                <article className="signal-card">
+                  <p className="signal-label">Workflow layer</p>
+                  <strong>Workflows stitch capabilities into durable, recoverable work.</strong>
+                </article>
+                <article className="signal-card">
+                  <p className="signal-label">Operator layer</p>
+                  <strong>Views project the same runtime state for human supervision.</strong>
+                </article>
+`
+    : `
+                <article className="signal-card">
+                  <p className="signal-label">Agent-ready</p>
+                  <strong>Manifest, MCP, and OpenAPI stay aligned with your routes.</strong>
+                </article>
+                <article className="signal-card">
+                  <p className="signal-label">Operational</p>
+                  <strong>Verify, build targets, and deployment contracts are already in the loop.</strong>
+                </article>
+                <article className="signal-card">
+                  <p className="signal-label">Supervised</p>
+                  <strong>Use <code>AGENTS.md</code> to keep human and coding-agent workflows in sync.</strong>
+                </article>
+`;
+  const resourceLabel = template === "agent" ? "Agent graph" : "Runtime status";
+  const resourceHref = template === "agent" ? "/api/agent/app" : "/health";
+  const deckFootnote = template === "agent"
+    ? "Edit one contract file, inspect the graph route, run capstan verify --json, then widen the surface area on purpose."
+    : "Edit one route, run capstan verify --json, then widen the surface area on purpose.";
+  const briefingTitle = template === "agent"
+    ? "What this starter is trying to teach"
+    : "What this starter is trying to teach";
+  const heroHeading = template === "agent"
+    ? `Make ${title} feel like a supervised agent system on day one.`
+    : `Make ${title} feel like a product on day one.`;
 
   return `export default function HomePage() {
   return (
@@ -168,30 +234,17 @@ export function indexPage(
             <span />
           </div>
           <p className="eyebrow">Capstan starter · ${templateTitle}</p>
-          <h1>Make ${title} feel like a product on day one.</h1>
+          <h1>${heroHeading}</h1>
           <p className="hero-copy">
-            Capstan already wired this project with a routed page, a typed API surface, agent-readable manifests,
-            deployment targets, and a project-level <code>AGENTS.md</code> so humans and coding agents can ship
-            from the same playbook.
+            ${heroCopy}
           </p>
           <div className="hero-actions">
             <a className="button button-primary" href="/.well-known/capstan.json">Inspect manifest</a>
             <a className="button button-secondary" href="/openapi.json">Read OpenAPI</a>
-            <a className="button button-secondary" href="/health">Check health</a>
+            ${heroAction}
           </div>
           <div className="signal-row">
-            <article className="signal-card">
-              <p className="signal-label">Agent-ready</p>
-              <strong>Manifest, MCP, and OpenAPI stay aligned with your routes.</strong>
-            </article>
-            <article className="signal-card">
-              <p className="signal-label">Operational</p>
-              <strong>Verify, build targets, and deployment contracts are already in the loop.</strong>
-            </article>
-            <article className="signal-card">
-              <p className="signal-label">Supervised</p>
-              <strong>Use <code>AGENTS.md</code> to keep human and coding-agent workflows in sync.</strong>
-            </article>
+            ${signalCards}
           </div>
         </div>
 
@@ -202,10 +255,10 @@ export function indexPage(
           <ul className="resource-list">
             <li><span>Framework contract</span><a href="/.well-known/capstan.json">/.well-known/capstan.json</a></li>
             <li><span>HTTP + tool schema</span><a href="/openapi.json">/openapi.json</a></li>
-            <li><span>Runtime status</span><a href="/health">/health</a></li>
+            <li><span>${resourceLabel}</span><a href="${resourceHref}">${resourceHref}</a></li>
           </ul>
           <p className="deck-footnote">
-            Edit one route, run <code>capstan verify --json</code>, then widen the surface area on purpose.
+            ${deckFootnote}
           </p>
         </aside>
       </section>
@@ -258,7 +311,7 @@ export function indexPage(
 
         <article className="feature-panel">
           <p className="panel-kicker">Template briefing</p>
-          <h2>What this starter is trying to teach</h2>
+          <h2>${briefingTitle}</h2>
           <ul className="briefing-list">
 ${templatePointers}          </ul>
         </article>
@@ -2038,28 +2091,26 @@ for await (const chunk of ai.generateStream("Write a report...")) {
 }
 \`\`\`
 
-### Memory (remember / recall)
+### Durable Context And Memory
 
 \`\`\`typescript
-// Store memories (auto-dedup: >0.92 cosine similarity → merge)
-await ai.remember("Customer prefers email communication");
+const harness = await createHarness({
+  llm: openaiProvider({ apiKey: process.env.OPENAI_API_KEY! }),
+  context: {
+    enabled: true,
+    defaultScopes: [{ type: "customer", id: "cust_123" }],
+  },
+});
 
-// Retrieve relevant memories (hybrid: vector 0.7 + keyword 0.3 + recency)
-const memories = await ai.recall("contact preferences");
+const run = await harness.run({
+  goal: "Review the customer's recent issues and draft an email reply",
+  about: ["customer", "cust_123"],
+});
 
-// Scoped memory — isolate per entity
-const customerMem = ai.memory.about("customer", "cust_123");
-await customerMem.remember("VIP since 2022");
-const relevant = await customerMem.recall("status");
-
-// Build LLM context from memories
-const context = await ai.memory.assembleContext({
+const context = await harness.assembleContext(run.runId, {
   query: "customer preferences",
   maxTokens: 2000,
 });
-
-// Delete a memory
-await ai.memory.forget(memoryId);
 \`\`\`
 
 ### Agent Loop (self-orchestrating)
@@ -2135,16 +2186,10 @@ export const POST = defineAPI({
     const analysis = await ctx.think(input.message, {
       schema: z.object({ intent: z.string(), confidence: z.number() }),
     });
-    await ctx.remember(\`User asked about: \${analysis.intent}\`);
-    const history = await ctx.recall(input.message);
-    return { analysis, relatedHistory: history };
+    return { analysis };
   },
 });
 \`\`\`
-
-### Memory Backend
-
-The default \`BuiltinMemoryBackend\` stores in memory. For production, implement the \`MemoryBackend\` interface for Mem0, Hindsight, Redis, or any custom store.
 
 ## Build Pipeline (Optional Vite Integration)
 
@@ -2367,7 +2412,7 @@ View Transitions (\`document.startViewTransition()\`) are applied automatically 
 
 export function agentsMd(
   projectName: string,
-  template: "blank" | "tickets",
+  template: "agent" | "blank" | "tickets",
 ): string {
   const templateNotes = template === "tickets"
     ? `
@@ -2381,6 +2426,25 @@ Use these files as the canonical Capstan examples before inventing a new pattern
 - \`app/routes/tickets/[id].api.ts\` — dynamic route params and record fetch
 
 If you need to add another resource, copy the shape of the tickets flow first.
+`
+    : template === "agent"
+      ? `
+## Template Notes
+
+This app was scaffolded from the **agent** template.
+
+Use the generated contract layer as the first place to add or change behavior:
+- \`app/agent/contracts.ts\` — contract builders, validation, and summaries
+- \`app/agent/index.ts\` — composition root for the contract graph
+- \`app/agent/runtime.ts\` — harness adapter with contract-aware defaults
+- \`app/agent/capabilities/index.ts\` — capability definitions
+- \`app/agent/workflows/index.ts\` — durable workflows and handoff points
+- \`app/agent/policies/index.ts\` — allow / deny / approval guardrails
+- \`app/agent/memory/index.ts\` — run, project, and operator memory spaces
+- \`app/agent/views/index.ts\` — human-facing projections of the same runtime state
+- \`app/routes/api/agent/app.api.ts\` — machine-readable contract graph
+
+When the behavior matters, give it a contract file and keep the projection in sync.
 `
     : `
 ## Template Notes
@@ -2406,6 +2470,7 @@ Read these files first, in order:
 1. \`capstan.config.ts\`
 2. \`app/routes/\`
 3. \`AGENTS.md\`
+${template === "agent" ? "4. `app/agent/index.ts`\n5. `app/agent/contracts.ts`\n6. `app/agent/runtime.ts`\n7. `app/routes/api/agent/app.api.ts`" : ""}
 
 Then use this loop:
 1. Run \`capstan dev\`
@@ -2447,7 +2512,7 @@ app/
     [...rest]/         # Catch-all segment
   models/              # defineModel() files
   policies/            # definePolicy() files
-  migrations/          # SQL migrations
+${template === "agent" ? "  agent/               # Agent contract graph (capabilities, workflows, policies, memory, views)\n" : ""}  migrations/          # SQL migrations
   public/              # Static assets, served from /
 capstan.config.ts      # App config, providers, metadata
 \`\`\`
@@ -2472,6 +2537,32 @@ capstan verify --deployment --target <target>
 \`\`\`
 
 ## Golden Paths
+
+${template === "agent" ? `
+### Add or change agent behavior
+
+Prefer editing the contract layer before inventing ad hoc runtime state:
+
+\`\`\`bash
+open app/agent/capabilities/index.ts
+open app/agent/workflows/index.ts
+open app/agent/policies/index.ts
+open app/agent/memory/index.ts
+open app/agent/views/index.ts
+open app/agent/index.ts
+open app/routes/api/agent/app.api.ts
+\`\`\`
+
+When you change agent behavior, keep these five contract kinds in mind:
+- \`capabilities\` describe what the agent can do.
+- \`workflows\` describe durable work and recovery points.
+- \`policies\` describe allow, deny, and approval decisions.
+- \`memory spaces\` describe what state is durable and how it is retrieved.
+- \`operator views\` describe how humans inspect the same runtime state.
+
+Update the smallest contract file first, wire it through \`app/agent/index.ts\`,
+then keep the operator projection in \`app/routes/api/agent/app.api.ts\` in sync.
+` : ""}
 
 ### Add an API route
 
@@ -2607,6 +2698,7 @@ Avoid these mistakes unless there is a strong reason:
 - Do not put static assets under \`/public/...\` in links; use root paths like \`/logo.svg\`
 - Do not rename route files casually; filenames are the routing contract
 - Do not add write endpoints without thinking through policy and verification
+${template === "agent" ? "- Do not hide agent behavior in prose when it belongs in a named capability, workflow, policy, memory space, or operator view" : ""}
 
 ## Capstan File Conventions That Matter
 
@@ -2644,14 +2736,407 @@ If a user asks for "a page", remember to check:
 - \`app/routes/api/health.api.ts\`
 - \`app/styles/main.css\`
 - \`capstan.config.ts\`
+${template === "agent" ? "- `app/agent/index.ts`\n- `app/agent/contracts.ts`\n- `app/agent/runtime.ts`\n- `app/routes/api/agent/app.api.ts`" : ""}
+${template === "agent" ? "- `app/agent/README.md`" : ""}
 
 Keep this file aligned with the project as the app grows.
 `;
 }
 
 // ---------------------------------------------------------------------------
-// Tickets template extras
+// Agent-first template extras
 // ---------------------------------------------------------------------------
+
+export function agentContracts(): string {
+  return `export {
+  defineAgentApp,
+  defineCapability,
+  defineWorkflow,
+  defineAgentPolicy,
+  defineMemorySpace,
+  defineOperatorView,
+  summarizeAgentApp,
+  type AgentAppContract,
+  type AgentAppSummary,
+  type AgentCapabilityContract,
+  type AgentWorkflowContract,
+  type AgentPolicyContract,
+  type AgentMemorySpaceContract,
+  type AgentOperatorViewContract,
+} from "@zauso-ai/capstan-ai";
+`;
+}
+
+export function agentReadme(projectName: string, title: string): string {
+  return `# Agent App Guide
+
+This project uses Capstan's **agent-first** scaffold. The fastest way to stay productive is to treat the agent system as a graph of explicit contracts, not as prompt glue.
+
+## Golden Path
+
+Work in this order:
+
+1. Edit \`app/agent/capabilities/index.ts\` to define what the agent can do.
+2. Edit \`app/agent/workflows/index.ts\` to define how those capabilities compose into durable work.
+3. Edit \`app/agent/policies/index.ts\` to define allow / deny / approval rules.
+4. Edit \`app/agent/memory/index.ts\` to define where context and promoted memories live.
+5. Edit \`app/agent/views/index.ts\` to define the operator projections humans will supervise.
+6. Edit \`app/agent/index.ts\` to compose the app with \`defineAgentApp()\`.
+7. Edit \`app/agent/runtime.ts\` only when you need runtime wiring changes.
+
+## File Map
+
+- \`app/agent/contracts.ts\` — official framework builders re-exported from \`@zauso-ai/capstan-ai\`
+- \`app/agent/capabilities/index.ts\` — capability contracts
+- \`app/agent/workflows/index.ts\` — workflow contracts
+- \`app/agent/policies/index.ts\` — policy contracts
+- \`app/agent/memory/index.ts\` — memory-space contracts
+- \`app/agent/views/index.ts\` — operator-view contracts
+- \`app/agent/index.ts\` — composed agent app + summary
+- \`app/agent/runtime.ts\` — harness runtime adapter
+- \`app/routes/api/agent/app.api.ts\` — machine-readable contract graph route
+
+## Recommended First Checks
+
+\`\`\`bash
+npm run dev
+npx capstan verify --json
+\`\`\`
+
+Then open:
+
+- \`http://localhost:3000/\`
+- \`http://localhost:3000/.well-known/capstan.json\`
+- \`http://localhost:3000/openapi.json\`
+- \`http://localhost:3000/api/agent/app\`
+
+## Working Rules
+
+- Keep capabilities narrow and named for work, not implementation details.
+- Prefer attaching tools/tasks/policies/memory spaces explicitly instead of hiding behavior in prose.
+- Add a policy before adding risky write behavior.
+- Add an operator view whenever a human needs to supervise, approve, or recover a run.
+- Keep the runtime adapter thin. Most changes should happen in contracts, not in \`runtime.ts\`.
+
+## First Useful Edit For ${title}
+
+Rename the sample capabilities and workflows to match the first real job ${title} should do, then run \`npx capstan verify --json\` again and inspect \`/api/agent/app\`.
+
+This repository is meant to be easy for coding agents to navigate. If you add a new core concept, update:
+
+- \`AGENTS.md\`
+- \`app/agent/README.md\`
+- the relevant contract file
+- the operator-facing projection if supervision changes
+`;
+}
+
+export function agentCapabilitiesIndex(): string {
+  return `import { defineCapability } from "../contracts.js";
+
+export const inspectMailbox = defineCapability({
+  id: "inspect-mailbox",
+  title: "Inspect mailbox",
+  description: "Read the agent mailbox and current runtime graph to decide what needs attention next.",
+  tools: ["read_mailbox", "summarize_run"],
+  defaultPolicies: ["require-review"],
+  defaultMemorySpaces: ["run-notes"],
+  artifactKinds: ["summary"],
+  operatorSignals: ["approval_requested", "blocked"],
+});
+
+export const resolveIssue = defineCapability({
+  id: "resolve-issue",
+  title: "Resolve issue",
+  description: "Repair a blocking issue and leave a durable operator handoff.",
+  tools: ["inspect_artifact", "write_repair_note"],
+  tasks: ["repair-task"],
+  defaultPolicies: ["require-review", "protect-secrets"],
+  defaultMemorySpaces: ["run-notes", "project-memory"],
+  artifactKinds: ["patch", "summary"],
+  operatorSignals: ["approval_requested", "task_wait"],
+});
+
+export const capabilities = [inspectMailbox, resolveIssue] as const;
+`;
+}
+
+export function agentWorkflowsIndex(): string {
+  return `import { defineWorkflow } from "../contracts.js";
+
+export const triageLoop = defineWorkflow({
+  id: "triage-loop",
+  title: "Triage loop",
+  description: "Review the queue, prioritize the next action, and request human review when needed.",
+  entryCapability: "inspect-mailbox",
+  stages: [
+    {
+      id: "scan",
+      capability: "inspect-mailbox",
+      description: "Read the current mailbox, turn state, and graph projections.",
+    },
+    {
+      id: "repair",
+      capability: "resolve-issue",
+      description: "Repair or hand off the highest-priority issue.",
+    },
+  ],
+  triggers: [{ type: "manual" }],
+  defaultPolicies: ["require-review"],
+  defaultMemorySpaces: ["run-notes", "project-memory"],
+});
+
+export const incidentRepair = defineWorkflow({
+  id: "incident-repair",
+  title: "Incident repair",
+  description: "Resume a broken run, gather context, and produce a supervised repair handoff.",
+  entryCapability: "resolve-issue",
+  stages: [
+    {
+      id: "inspect",
+      capability: "inspect-mailbox",
+      description: "Collect the minimum evidence needed to act safely.",
+    },
+    {
+      id: "resolve",
+      capability: "resolve-issue",
+      description: "Apply the repair path and summarize the outcome.",
+    },
+  ],
+  triggers: [{ type: "cron", schedule: "FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0" }],
+  defaultPolicies: ["require-review", "protect-secrets"],
+  defaultMemorySpaces: ["run-notes", "operator-history"],
+});
+
+export const workflows = [triageLoop, incidentRepair] as const;
+`;
+}
+
+export function agentPoliciesIndex(): string {
+  return `import { defineAgentPolicy } from "../contracts.js";
+
+export const requireReview = defineAgentPolicy({
+  id: "require-review",
+  title: "Require review",
+  description: "Pause risky or ambiguous work until an operator reviews it.",
+  rules: [
+    {
+      id: "review-repairs",
+      appliesTo: [{ kind: "capability", ids: ["resolve-issue"] }],
+      action: "require_approval",
+      reason: "Repair steps may mutate external state and must be reviewed.",
+      risk: "high",
+    },
+  ],
+});
+
+export const protectSecrets = defineAgentPolicy({
+  id: "protect-secrets",
+  title: "Protect secrets",
+  description: "Deny unsafe disclosure of secret-bearing artifacts and memory.",
+  rules: [
+    {
+      id: "deny-secret-surfaces",
+      appliesTo: [
+        { kind: "capability", ids: ["resolve-issue"] },
+        { kind: "memory_space", ids: ["project-memory"] },
+      ],
+      action: "deny",
+      reason: "Secret-bearing artifacts stay behind explicit operator-reviewed paths.",
+      risk: "critical",
+    },
+  ],
+});
+
+export const policies = [requireReview, protectSecrets] as const;
+`;
+}
+
+export function agentMemoryIndex(): string {
+  return `import { defineMemorySpace } from "../contracts.js";
+
+export const runNotes = defineMemorySpace({
+  id: "run-notes",
+  title: "Run notes",
+  description: "Short-lived notes for the current run, turn, and active investigation.",
+  scope: "run",
+  recordKinds: ["note", "decision", "blocker"],
+  retention: { mode: "session" },
+  retrieval: { strategy: "recent_first", maxItems: 6 },
+});
+
+export const projectMemory = defineMemorySpace({
+  id: "project-memory",
+  title: "Project memory",
+  description: "Stable project facts that survive across runs.",
+  scope: "project",
+  recordKinds: ["fact", "constraint"],
+  retention: { mode: "ttl", ttlDays: 30 },
+  retrieval: { strategy: "priority_first", maxItems: 8 },
+});
+
+export const operatorHistory = defineMemorySpace({
+  id: "operator-history",
+  title: "Operator history",
+  description: "Supervision history, approvals, and human interventions.",
+  scope: "project",
+  recordKinds: ["approval", "handoff", "operator-note"],
+  retention: { mode: "ttl", ttlDays: 14 },
+  retrieval: { strategy: "recent_first", maxItems: 5 },
+});
+
+export const memorySpaces = [runNotes, projectMemory, operatorHistory] as const;
+`;
+}
+
+export function agentViewsIndex(): string {
+  return `import { defineOperatorView } from "../contracts.js";
+
+export const commandCenter = defineOperatorView({
+  id: "command-center",
+  title: "Command center",
+  description: "A high-level projection of the current run, workflow, and artifact feed.",
+  scope: "run",
+  projection: "run_timeline",
+  filters: {
+    capabilityIds: ["inspect-mailbox", "resolve-issue"],
+    memorySpaceIds: ["run-notes"],
+    nodeKinds: ["run", "task", "artifact"],
+    artifactKinds: ["summary", "patch"],
+  },
+  actions: ["pause", "resume", "retry", "open_artifact"],
+});
+
+export const approvalInbox = defineOperatorView({
+  id: "approval-inbox",
+  title: "Approval inbox",
+  description: "A narrow surface for blocked actions and operator decisions.",
+  scope: "project",
+  projection: "approval_inbox",
+  filters: {
+    capabilityIds: ["resolve-issue"],
+    policyIds: ["require-review"],
+    memorySpaceIds: ["operator-history"],
+    nodeKinds: ["approval", "run"],
+    artifactKinds: ["summary"],
+  },
+  actions: ["approve", "deny", "request_input", "resume"],
+});
+
+export const operatorViews = [commandCenter, approvalInbox] as const;
+`;
+}
+
+export function agentAppIndex(projectName: string, title: string): string {
+  return `import { defineAgentApp, summarizeAgentApp } from "./contracts.js";
+import { capabilities } from "./capabilities/index.js";
+import { workflows } from "./workflows/index.js";
+import { policies } from "./policies/index.js";
+import { memorySpaces } from "./memory/index.js";
+import { operatorViews } from "./views/index.js";
+
+export const agentApp = defineAgentApp({
+  id: "${projectName}",
+  title: "${title} Agent App",
+  description: "A contract-first agent workspace with explicit capabilities, workflows, policies, memory spaces, and operator views.",
+  capabilities,
+  workflows,
+  policies,
+  memorySpaces,
+  operatorViews,
+  defaults: {
+    defaultWorkflow: workflows[0]!.id,
+    defaultPolicies: [policies[0]!.id],
+    defaultMemorySpaces: [memorySpaces[0]!.id],
+  },
+});
+
+export const agentAppSummary = summarizeAgentApp(agentApp);
+`;
+}
+
+export function agentRuntime(): string {
+  return `import { createHarness } from "@zauso-ai/capstan-ai";
+import type { Harness, HarnessConfig } from "@zauso-ai/capstan-ai";
+import { agentApp } from "./index.js";
+
+export async function createAgentRuntime(config: HarnessConfig): Promise<Harness> {
+  return createHarness({
+    ...config,
+    context: config.context
+      ? {
+          ...config.context,
+          enabled: config.context.enabled ?? true,
+          defaultScopes: config.context.defaultScopes?.length
+            ? config.context.defaultScopes
+            : [{ type: "project", id: agentApp.id }],
+        }
+      : {
+          enabled: true,
+          defaultScopes: [{ type: "project", id: agentApp.id }],
+        },
+  });
+}
+`;
+}
+
+export function agentContractApi(): string {
+  return `import { defineAPI } from "@zauso-ai/capstan-core";
+import { z } from "zod";
+import { agentAppSummary } from "../../../agent/index.js";
+
+const contractSummary = z.object({
+  id: z.string(),
+  title: z.string(),
+  description: z.string(),
+  defaults: z.object({
+    defaultWorkflow: z.string().optional(),
+    defaultPolicies: z.array(z.string()),
+    defaultMemorySpaces: z.array(z.string()),
+  }),
+  capabilities: z.array(z.object({
+    id: z.string(),
+    title: z.string(),
+    description: z.string(),
+  })),
+  workflows: z.array(z.object({
+    id: z.string(),
+    title: z.string(),
+    description: z.string(),
+    entryCapability: z.string(),
+  })),
+  policies: z.array(z.object({
+    id: z.string(),
+    title: z.string(),
+    description: z.string(),
+  })),
+  memorySpaces: z.array(z.object({
+    id: z.string(),
+    title: z.string(),
+    description: z.string(),
+    scope: z.string(),
+  })),
+  operatorViews: z.array(z.object({
+    id: z.string(),
+    title: z.string(),
+    description: z.string(),
+    scope: z.string(),
+    projection: z.string(),
+  })),
+});
+
+export const GET = defineAPI({
+  output: contractSummary,
+  description: "Inspect the agent app contract graph",
+  capability: "read",
+  resource: "agent-app",
+  async handler() {
+    return agentAppSummary;
+  },
+});
+`;
+}
+
 
 export function ticketModel(): string {
   return `import { defineModel, field, relation } from "@zauso-ai/capstan-db";

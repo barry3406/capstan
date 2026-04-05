@@ -97,6 +97,9 @@ export function assertValidMemoryRecord(
   requireNonEmptyString(record.updatedAt, `${context} is invalid: updatedAt`);
   requireNonNegativeInteger(record.accessCount, `${context} is invalid: accessCount`);
   requireNonEmptyString(record.lastAccessedAt, `${context} is invalid: lastAccessedAt`);
+  if (record.graphScopes != null) {
+    requireGraphScopes(record.graphScopes, `${context} is invalid: graphScopes`);
+  }
 }
 
 function requireArtifactRefs(value: unknown, context: string): void {
@@ -112,6 +115,18 @@ function requireArtifactRefs(value: unknown, context: string): void {
     requireNonEmptyString(entry.path, `${context}[${index}].path`);
     requireNonEmptyString(entry.mimeType, `${context}[${index}].mimeType`);
     requireNonNegativeInteger(entry.size, `${context}[${index}].size`);
+  }
+}
+
+function requireGraphScopes(value: unknown, context: string): void {
+  if (!Array.isArray(value)) {
+    throw new Error(`${context} must be an array`);
+  }
+  for (const [index, entry] of value.entries()) {
+    if (!isPlainObject(entry)) {
+      throw new Error(`${context}[${index}] must be an object`);
+    }
+    requireNonEmptyString(entry.kind, `${context}[${index}].kind`);
   }
 }
 

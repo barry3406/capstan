@@ -789,7 +789,43 @@ The `LLMProvider` interface can be implemented for other providers. Both provide
 
 ## AI Toolkit (@zauso-ai/capstan-ai)
 
-`@zauso-ai/capstan-ai` is a standalone AI agent toolkit that works independently OR with the Capstan framework. It provides structured reasoning, text generation, scoped memory primitives with pluggable backends, a host-driven agent loop, first-class task execution, and `createHarness()` for browser/filesystem sandboxing. For recurring runs, pair it with `@zauso-ai/capstan-cron`.
+`@zauso-ai/capstan-ai` is the agentic execution stack for Capstan. It can be used standalone, but the intended framing is two-layered:
+
+- **Runtime Layer** — durable runs, turns, tasks, checkpoints, mailbox/event flow, governance, sidecars, graph projections, and browser/filesystem sandboxing
+- **Framework Layer** — explicit developer contracts built on that runtime: capability, workflow, policy, memory space, and operator view
+
+This split matters because Capstan is not trying to ship one built-in agent. It is trying to give developers a stable way to build their own agents on top of a shared runtime.
+
+### Runtime Layer vs Framework Layer
+
+| Layer | What it owns | Current Capstan primitives |
+| --- | --- | --- |
+| **Runtime Layer** | Execution, recovery, supervision, background work, and state projection | `createHarness()`, `runAgentLoop()`, task fabric, sidecar scheduler, mailbox/event fabric, checkpoints, graph store, browser/fs sandbox |
+| **Framework Layer** | The contracts an application exposes to agents and operators | `defineCapability()`, `defineWorkflow()`, `defineAgentPolicy()`, `defineMemorySpace()`, `defineOperatorView()`, `defineAgentApp()`, `summarizeAgentApp()` |
+
+### Explicit Contracts
+
+Capstan AI uses a small set of explicit contracts. Today they map to the following primitives:
+
+- **Capability** — what the agent can do. Expressed through `defineCapability()` and typically backed by one or more `defineAPI()` surfaces or runtime tools/tasks.
+- **Workflow** — how work is sequenced and persisted. Expressed through `defineWorkflow()` plus task definitions, host-driven turns, harness runs, and trigger adapters such as cron.
+- **Policy** — what is allowed, denied, or requires approval. Expressed through `defineAgentPolicy()` in the framework layer and `governToolCall` / `governTaskCall` in the runtime layer.
+- **Memory space** — where durable context belongs. Expressed through `defineMemorySpace()` plus harness context scopes, summaries, promoted memory, artifacts, and graph-aware retrieval.
+- **Operator view** — how a human supervises state. Expressed through `defineOperatorView()` plus the harness control plane, graph projections, approval inbox, task board, artifact feed, and run timeline.
+
+### Agent-First Golden Path
+
+When building an agentic system on Capstan, the recommended path is:
+
+1. Define **capabilities** with `defineCapability()` and point them at the APIs, tools, and tasks that implement them.
+2. Define **workflows** with `defineWorkflow()` and durable runs instead of embedding background behavior in ad hoc tool code.
+3. Define **policies** with `defineAgentPolicy()` before adding autonomy so governance and approvals are explicit.
+4. Define **memory spaces** with `defineMemorySpace()` using scopes that match your project, entity, resource, or run boundaries.
+5. Define **operator views** with `defineOperatorView()` from runtime projections instead of transcript scraping.
+6. Compose the app with `defineAgentApp()` and only then add browser automation, sidecars, and scheduled triggers on top of the harness runtime.
+7. Use **`summarizeAgentApp()`** when you need a stable, machine-readable read model for documentation routes, onboarding views, or generated operator metadata.
+
+For the recommended file layout and first-edit order, see the [Agent Framework Guide](./agent-framework.md).
 
 ### Standalone Usage (No Capstan Required)
 
@@ -829,38 +865,36 @@ const summary = await ai.generate("Summarize this document in 3 bullet points...
 
 Both `think()` and `generate()` have streaming variants -- `thinkStream()` and `generateStream()` -- that yield partial results as the LLM generates tokens.
 
-### Memory System
+### Context And Memory
 
-The memory system provides searchable memory scoped to any entity. The built-in backend is in-memory; persistence depends on the configured backend:
+Standalone `createAI()` is intentionally stateless. Durable memory, summaries, promoted observations, graph-scoped retrieval, and context packing now live in the harness runtime:
 
 ```typescript
-// Store memories
-await ai.remember("Customer prefers email communication");
-await ai.remember("Last order was #4521, shipped 2024-03-15");
-
-// Retrieve relevant memories (hybrid search: vector + keyword + recency)
-const memories = await ai.recall("How does the customer want to be contacted?");
-
-// Scope memory to a specific entity
-const customerMemory = ai.memory.about("customer", "cust_123");
-await customerMemory.remember("VIP customer since 2022");
-const relevant = await customerMemory.recall("customer status");
-
-// Build LLM context from memories
-const context = await ai.memory.assembleContext({
-  query: "customer communication preferences",
-  maxTokens: 2000,
+const harness = await createHarness({
+  llm,
+  context: {
+    enabled: true,
+    defaultScopes: [{ type: "customer", id: "cust_123" }],
+  },
 });
 
-// Delete a memory
-await ai.memory.forget(memoryId);
+const run = await harness.run({
+  goal: "Research the customer's recent issues and draft a response email",
+  about: ["customer", "cust_123"],
+});
+
+const context = await harness.assembleContext(run.runId, {
+  query: "customer communication preferences",
+});
 ```
 
-Memory features:
-- **Auto-dedup**: memories with >0.92 cosine similarity are merged
-- **Hybrid recall**: vector similarity (0.7 weight) + keyword matching (0.3 weight) + recency decay
-- **Entity scoping**: `memory.about(type, id)` isolates memory per entity
-- **Pluggable backends**: implement `MemoryBackend` for Mem0, Hindsight, Redis, or custom storage
+Runtime context features:
+- **Session memory**: every checkpoint updates a structured session snapshot
+- **Promoted memories**: summaries and observations can be promoted into durable runtime memory
+- **Graph-aware retrieval**: context assembly pulls from run, resource, capability, and project scopes
+- **Artifact packing**: screenshots, task results, and previews are packed into the context budget instead of raw transcript spam
+
+In Capstan terms, these are **memory spaces**. A memory space is not a separate product concept or vector database. It is the runtime scope that determines where summaries, memories, and artifacts belong and how they are recalled later.
 
 ### Agent Loop
 
@@ -880,6 +914,8 @@ Agent loop features:
 - **Configurable iteration limit**: `maxIterations` (default: 10)
 - **Entity-scoped memory**: `about` option automatically scopes all memory operations
 - **Task-aware turns**: tools and long-running tasks share one orchestration state machine
+
+This is runtime behavior, not a framework contract. The framework contract is the capability/workflow/policy definition that the loop is allowed to execute.
 
 ### Task Fabric
 
@@ -917,6 +953,8 @@ Task features:
 - **Task families**: shell, workflow, remote, and subagent tasks share one contract and can be mixed in a single run
 - **Cooperative recovery**: paused or canceled runs cancel in-flight tasks, persist task records, and can replay pending task requests from checkpoints
 
+In framework terms, tasks are how you define a **workflow** that can be supervised and replayed, instead of burying long-running work inside one tool call.
+
 ### Agent Harness Mode
 
 `createHarness()` wraps the agent loop with an isolated runtime substrate that long-running agents typically need:
@@ -950,11 +988,26 @@ Harness features:
 - **Filesystem sandbox**: scoped reads/writes with traversal protection
 - **Durable runtime**: each run gets a persisted run record, event log, task store, artifact store, and resumable checkpoint under `.capstan/harness/`
 - **Lifecycle control**: `startRun()`, `pauseRun()`, `cancelRun()`, `resumeRun()`, `getCheckpoint()`, and `replayRun()` make supervision and recovery explicit
+- **Mailbox + event fabric**: triggers, operator context, task notifications, system events, and control signals all flow through the same run-scoped mailbox contract
+- **Governed execution**: tool/task calls pass through explicit governance decisions, approval requests, denial handling, and progress events before they mutate run state
+- **Streaming execution pipeline**: concurrency-safe tools can stream progress updates while the host preserves request ordering and hard-failure semantics
 - **Context kernel**: session memory, persisted summaries, long-term runtime memory, artifact-aware context assembly, and transcript compaction all live under `.capstan/harness/`
+- **Sidecar scheduler**: post-turn and run-boundary work such as observation promotion, verifier passes, checkpoint context persistence, final summary capture, and agentic long-term memory extraction run as explicit sidecars instead of blocking the main turn state machine
 - **Task fabric**: `getTasks()` exposes persisted task execution records so supervision surfaces can inspect in-flight and settled background work
+- **Graph read model**: runs, turns, tasks, approvals, artifacts, and memory are also written into a graph-scoped read model that powers `getRunTimeline()`, `getTaskBoard()`, `getApprovalInbox()`, `getArtifactFeed()`, and graph-aware context retrieval
 - **Pluggable sandbox driver**: local isolation by default, with a runtime driver contract for custom execution backends
 - **Verification layer**: post-tool validation hooks plus LLM-based pass/fail classification
 - **Observability layer**: event stream, metrics, and trace-friendly lifecycle events
+
+`createHarness()` is the center of the **Runtime Layer**. It should be the default starting point for long-running agentic applications that need supervision, recovery, memory, artifacts, and explicit control.
+
+The **Framework Layer** sits on top of it:
+
+- Capabilities come from your API contracts
+- Workflows come from your task definitions and trigger wiring
+- Policies come from app policies plus runtime governance hooks
+- Memory spaces come from harness scopes
+- Operator views come from graph projections and control-plane queries
 
 ### Scheduled Agent Runs (@zauso-ai/capstan-cron)
 

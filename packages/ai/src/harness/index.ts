@@ -8,10 +8,9 @@ import { resolve } from "node:path";
 import type { AgentLoopCheckpoint, AgentRunConfig } from "../types.js";
 import type {
   Harness,
-  HarnessAccessContext,
-  HarnessAuthorizedAction,
-  HarnessAction,
-  HarnessApprovalRecord,
+    HarnessAccessContext,
+    HarnessAuthorizedAction,
+    HarnessApprovalRecord,
   HarnessApprovalResolutionOptions,
   HarnessAuthorizationRequest,
   HarnessContextAssembleOptions,
@@ -30,10 +29,16 @@ import type {
   HarnessVerifierFn,
 } from "./types.js";
 import { runAgentLoop } from "../agent-loop.js";
-import { InMemoryAgentTaskRuntime } from "../task/runtime.js";
+import {
+  DurableAgentTaskRuntime,
+  InMemoryAgentTaskRuntime,
+} from "../task/runtime.js";
+import type { AgentTaskRuntime } from "../task/types.js";
 import { HarnessObserver } from "./observe/index.js";
 import { FileHarnessRuntimeStore } from "./runtime/store.js";
 import { LocalHarnessSandboxDriver } from "./runtime/local-driver.js";
+import { FileHarnessRunMailbox } from "./runtime/mailbox.js";
+import { HarnessSidecarScheduler } from "./runtime/sidecars.js";
 import {
   buildApprovalDetail,
   ensureRunApprovalRecord,
@@ -54,6 +59,12 @@ import {
 } from "./runtime/utils.js";
 import { assertHarnessAuthorized, filterHarnessAuthorizedItems } from "./runtime/authz.js";
 import { HarnessVerifier } from "./verify/index.js";
+import {
+  projectApprovalInbox,
+  projectArtifactFeed,
+  projectRunTimeline,
+  projectTaskBoard,
+} from "./graph/projectors.js";
 
 export async function createHarness(config: HarnessConfig): Promise<Harness> {
   const observer = new HarnessObserver();
@@ -70,6 +81,7 @@ export async function createHarness(config: HarnessConfig): Promise<Harness> {
     config.runtime?.storeFactory?.(runtimeRootDir) ??
     new FileHarnessRuntimeStore(runtimeRootDir);
   await runtimeStore.initialize();
+  const mailbox = new FileHarnessRunMailbox(runtimeStore.paths);
   const contextKernel = new HarnessContextKernel(runtimeStore, config.context);
   await contextKernel.initialize();
 
@@ -95,6 +107,25 @@ export async function createHarness(config: HarnessConfig): Promise<Harness> {
 
   const emit = (event: HarnessEvent): void => {
     observer.log(event);
+  };
+
+  const publishMailboxMessage = async (
+    runId: string,
+    message:
+      | { kind: "control_signal"; action: "pause" | "cancel"; reason?: string }
+      | { kind: "context_message"; message: { role: "system" | "user" | "assistant"; content: string }; source?: string }
+      | { kind: "trigger"; trigger: { type: string; source: string; metadata?: Record<string, unknown> } }
+      | { kind: "system"; event: string; detail?: Record<string, unknown> },
+  ): Promise<void> => {
+    const envelope = Object.assign(
+      {
+        id: `${message.kind}_${randomUUID()}`,
+        runId,
+        createdAt: new Date().toISOString(),
+      },
+      message,
+    );
+    await mailbox.publish(envelope);
   };
 
   const buildAuthorizationRequest = (input: {
@@ -208,6 +239,7 @@ export async function createHarness(config: HarnessConfig): Promise<Harness> {
         contextUpdatedAt: memory.updatedAt,
       },
       {
+        runId,
         memoryId: memory.id,
         kind: memory.kind,
         scope: memory.scope,
@@ -273,7 +305,34 @@ export async function createHarness(config: HarnessConfig): Promise<Harness> {
         : undefined;
     let sandboxContext: HarnessSandboxContext | undefined;
     let retainSandbox = false;
-    const taskRuntime = new InMemoryAgentTaskRuntime();
+    const taskRuntimeFactoryResult =
+      config.runtime?.tasks?.runtimeFactory?.({
+        runId,
+        runtimeRootDir,
+        paths: runtimeStore.paths,
+        store: runtimeStore,
+      });
+    const ownsTaskRuntime = taskRuntimeFactoryResult == null
+      ? true
+      : hasWrappedTaskRuntime(taskRuntimeFactoryResult)
+        ? taskRuntimeFactoryResult.destroyOnExit === true
+        : false;
+    const taskRuntime =
+      taskRuntimeFactoryResult == null
+        ? config.runtime?.tasks?.mode === "in_memory"
+          ? new InMemoryAgentTaskRuntime()
+          : new DurableAgentTaskRuntime({
+              rootDir: resolve(
+                config.runtime?.tasks?.rootDir ?? runtimeStore.paths.rootDir,
+                config.runtime?.tasks?.rootDir ? "" : "task-runtime",
+              ),
+              ...(config.runtime?.tasks?.worker
+                ? { worker: config.runtime.tasks.worker }
+                : {}),
+            })
+        : hasWrappedTaskRuntime(taskRuntimeFactoryResult)
+          ? taskRuntimeFactoryResult.runtime
+          : taskRuntimeFactoryResult;
 
     const patchRun = async (
       patch: Partial<Omit<HarnessRunRecord, "id" | "createdAt">>,
@@ -355,6 +414,31 @@ export async function createHarness(config: HarnessConfig): Promise<Harness> {
         await persistGlobalMemoryLifecycleEvent(runId, promotedMemory);
       }
     };
+
+    const sidecarScheduler = new HarnessSidecarScheduler({
+      emit,
+      patchRun: async (scheduledRunId, patch) => {
+        if (scheduledRunId !== runId) {
+          return runtimeStore.patchRun(scheduledRunId, patch);
+        }
+        await patchRun(patch);
+        return runtimeStore.requireRun(runId);
+      },
+      transitionRun,
+      persistGlobalMemoryLifecycleEvent,
+      persistGlobalCapturedContext,
+      persistCheckpointContext: async (scheduledRunId, contextUpdate) => {
+        await persistCheckpointContext(contextUpdate);
+      },
+      contextKernel,
+      verifier,
+      taskRuntime,
+      llm: config.llm,
+      runtimeRootDir: runtimeStore.paths.rootDir,
+      getRun: async (scheduledRunId) => runtimeStore.requireRun(scheduledRunId),
+      contextEnabled: config.context?.enabled !== false,
+      sidecars: config.sidecars,
+    });
 
     try {
       if (mode === "start") {
@@ -497,6 +581,8 @@ export async function createHarness(config: HarnessConfig): Promise<Harness> {
               ? { scopes: [{ type: runConfig.about[0], id: runConfig.about[1] }] }
               : {}),
           }),
+        hasPendingSidecars: () => sidecarScheduler.hasPendingTurnSidecars(runId),
+        runSidecars: async (request) => sidecarScheduler.flushTurnSidecars(runId, request),
         getControlState: async () => {
           const inMemoryRequest = requestedControls.get(runId);
           if (inMemoryRequest === "cancel") {
@@ -520,7 +606,7 @@ export async function createHarness(config: HarnessConfig): Promise<Harness> {
             runId,
             checkpoint: nextCheckpoint,
           });
-          await persistCheckpointContext(contextUpdate);
+          await sidecarScheduler.persistCheckpointContext(runId, contextUpdate);
 
           const checkpointRecord = await runtimeStore.persistCheckpoint(
             runId,
@@ -583,53 +669,136 @@ export async function createHarness(config: HarnessConfig): Promise<Harness> {
             throw error;
           }
         },
-        beforeToolCall: async (tool, args) => {
+        mailbox,
+        onToolCall: async (tool, args) => {
           emit({
             type: "tool_call",
             timestamp: Date.now(),
             data: { runId, tool, args },
           });
           await transitionRun("tool_call", {}, { tool, args });
-
-          if (config.runtime?.beforeToolCall) {
-            const decision = await config.runtime.beforeToolCall({
-              runId,
-              tool,
-              args,
-            });
-            if (!decision.allowed) {
-              return {
-                allowed: false,
-                reason: decision.reason ?? `Tool "${tool}" requires approval`,
-              };
-            }
-          }
-
-          return { allowed: true };
         },
-        beforeTaskCall: async (task, args) => {
+        ...(config.runtime?.governToolCall || config.runtime?.beforeToolCall
+          ? {
+              governToolCall: config.runtime?.governToolCall
+                ? async (input: {
+                    name: string;
+                    args: unknown;
+                    requestId: string;
+                    order: number;
+                  }) =>
+                    config.runtime!.governToolCall!({
+                      runId,
+                      tool: input.name,
+                      args: input.args,
+                      requestId: input.requestId,
+                      order: input.order,
+                    })
+                : async (input: {
+                    name: string;
+                    args: unknown;
+                  }) => {
+                    const decision = await config.runtime!.beforeToolCall!({
+                      runId,
+                      tool: input.name,
+                      args: input.args,
+                    });
+                    return decision.allowed
+                      ? { action: "allow" as const, source: "runtime_policy" }
+                      : {
+                          action: "require_approval" as const,
+                          reason: decision.reason ?? `Tool "${input.name}" requires approval`,
+                          source: "runtime_policy",
+                        };
+                  },
+            }
+          : {}),
+        onTaskCall: async (task, args) => {
           emit({
             type: "task_call",
             timestamp: Date.now(),
             data: { runId, task, args },
           });
           await transitionRun("task_call", {}, { task, args });
-
-          if (config.runtime?.beforeTaskCall) {
-            const decision = await config.runtime.beforeTaskCall({
-              runId,
-              task,
-              args,
-            });
-            if (!decision.allowed) {
-              return {
-                allowed: false,
-                reason: decision.reason ?? `Task "${task}" requires approval`,
-              };
+        },
+        ...(config.runtime?.governTaskCall || config.runtime?.beforeTaskCall
+          ? {
+              governTaskCall: config.runtime?.governTaskCall
+                ? async (input: {
+                    name: string;
+                    args: unknown;
+                    requestId: string;
+                    order: number;
+                  }) =>
+                    config.runtime!.governTaskCall!({
+                      runId,
+                      task: input.name,
+                      args: input.args,
+                      requestId: input.requestId,
+                      order: input.order,
+                    })
+                : async (input: {
+                    name: string;
+                    args: unknown;
+                  }) => {
+                    const decision = await config.runtime!.beforeTaskCall!({
+                      runId,
+                      task: input.name,
+                      args: input.args,
+                    });
+                    return decision.allowed
+                      ? { action: "allow" as const, source: "runtime_policy" }
+                      : {
+                          action: "require_approval" as const,
+                          reason: decision.reason ?? `Task "${input.name}" requires approval`,
+                          source: "runtime_policy",
+                        };
+                  },
             }
-          }
-
-          return { allowed: true };
+          : {}),
+        onGovernanceDecision: async (input) => {
+          emit({
+            type: "governance_decision",
+            timestamp: Date.now(),
+            data: {
+              runId,
+              kind: input.kind,
+              name: input.name,
+              action: input.decision.action,
+              ...(input.decision.reason ? { reason: input.decision.reason } : {}),
+              ...(input.decision.policyId ? { policyId: input.decision.policyId } : {}),
+              ...(input.decision.risk ? { risk: input.decision.risk } : {}),
+              ...(input.decision.source ? { source: input.decision.source } : {}),
+            },
+          });
+          await transitionRun("governance_decision", {}, {
+            kind: input.kind,
+            name: input.name,
+            action: input.decision.action,
+            ...(input.decision.reason ? { reason: input.decision.reason } : {}),
+            ...(input.decision.policyId ? { policyId: input.decision.policyId } : {}),
+            ...(input.decision.risk ? { risk: input.decision.risk } : {}),
+            ...(input.decision.source ? { source: input.decision.source } : {}),
+          });
+        },
+        onToolProgress: async (tool, args, update) => {
+          emit({
+            type: "tool_progress",
+            timestamp: Date.now(),
+            data: {
+              runId,
+              tool,
+              args,
+              message: update.message,
+              ...(update.detail ? { detail: update.detail } : {}),
+            },
+          });
+          await transitionRun("tool_progress", {}, {
+            tool,
+            args,
+            message: update.message,
+            ...(update.detail ? { detail: update.detail } : {}),
+          });
         },
         afterTaskCall: async (task, args, taskResult) => {
           emit({
@@ -644,6 +813,12 @@ export async function createHarness(config: HarnessConfig): Promise<Harness> {
             args,
             result: summarizeHarnessResult(taskResult),
           });
+          sidecarScheduler.enqueueTaskResult({
+            runId,
+            task,
+            args,
+            result: taskResult,
+          });
         },
         afterToolCall: async (tool, args, toolResult) => {
           emit({
@@ -656,58 +831,12 @@ export async function createHarness(config: HarnessConfig): Promise<Harness> {
             args,
             result: summarizeHarnessResult(toolResult),
           });
-
-          const storedObservation = await contextKernel.recordObservation({
+          sidecarScheduler.enqueueToolResult({
             runId,
             tool,
             args,
             result: toolResult,
           });
-          if (storedObservation) {
-            await persistGlobalMemoryLifecycleEvent(runId, storedObservation);
-          }
-
-          if (verifier) {
-            const action: HarnessAction = {
-              tool,
-              args,
-              timestamp: Date.now(),
-            };
-
-            const verification = await verifier.verify(action, toolResult);
-
-            if (verification.passed) {
-              emit({
-                type: "verify_pass",
-                timestamp: Date.now(),
-                data: {
-                  runId,
-                  tool,
-                  reason: verification.reason,
-                },
-              });
-              await transitionRun("verify_pass", {}, {
-                tool,
-                reason: verification.reason,
-              });
-            } else {
-              emit({
-                type: "verify_fail",
-                timestamp: Date.now(),
-                data: {
-                  runId,
-                  tool,
-                  reason: verification.reason,
-                  retry: verification.retry === true,
-                },
-              });
-              await transitionRun("verify_fail", {}, {
-                tool,
-                reason: verification.reason,
-                retry: verification.retry === true,
-              });
-            }
-          }
         },
       });
 
@@ -761,10 +890,7 @@ export async function createHarness(config: HarnessConfig): Promise<Harness> {
             pendingApproval: result.pendingApproval ?? null,
           },
         });
-        await persistGlobalCapturedContext(
-          runId,
-          await contextKernel.captureRunState(runId),
-        );
+        await sidecarScheduler.captureRunBoundary(runId, "approval_required");
       } else if (result.status === "paused") {
         await transitionRun(
           "run_paused",
@@ -781,10 +907,7 @@ export async function createHarness(config: HarnessConfig): Promise<Harness> {
           timestamp: Date.now(),
           data: { runId, iterations: result.iterations },
         });
-        await persistGlobalCapturedContext(
-          runId,
-          await contextKernel.captureRunState(runId),
-        );
+        await sidecarScheduler.captureRunBoundary(runId, "paused");
       } else if (result.status === "canceled") {
         await transitionRun(
           "run_canceled",
@@ -803,10 +926,7 @@ export async function createHarness(config: HarnessConfig): Promise<Harness> {
           timestamp: Date.now(),
           data: { runId, iterations: result.iterations },
         });
-        await persistGlobalCapturedContext(
-          runId,
-          await contextKernel.captureRunState(runId),
-        );
+        await sidecarScheduler.captureRunBoundary(runId, "canceled");
       } else if (result.status === "max_iterations") {
         await transitionRun(
           "run_max_iterations",
@@ -832,10 +952,7 @@ export async function createHarness(config: HarnessConfig): Promise<Harness> {
             iterations: result.iterations,
           },
         });
-        await persistGlobalCapturedContext(
-          runId,
-          await contextKernel.captureRunState(runId),
-        );
+        await sidecarScheduler.captureRunBoundary(runId, "max_iterations");
       } else {
         await transitionRun(
           "run_completed",
@@ -861,10 +978,7 @@ export async function createHarness(config: HarnessConfig): Promise<Harness> {
             iterations: result.iterations,
           },
         });
-        await persistGlobalCapturedContext(
-          runId,
-          await contextKernel.captureRunState(runId),
-        );
+        await sidecarScheduler.captureRunBoundary(runId, "completed");
       }
 
       emit({
@@ -957,10 +1071,7 @@ export async function createHarness(config: HarnessConfig): Promise<Harness> {
           timestamp: Date.now(),
           data: { runId, error: err.message },
         });
-        await persistGlobalCapturedContext(
-          runId,
-          await contextKernel.captureRunState(runId),
-        );
+        await sidecarScheduler.captureRunBoundary(runId, "canceled");
 
         resumableConfigs.delete(runId);
         requestedControls.delete(runId);
@@ -999,18 +1110,17 @@ export async function createHarness(config: HarnessConfig): Promise<Harness> {
           error: err.message,
         },
       });
-      await persistGlobalCapturedContext(
-        runId,
-        await contextKernel.captureRunState(runId),
-      );
+      await sidecarScheduler.captureRunBoundary(runId, "failed");
 
       resumableConfigs.delete(runId);
       requestedControls.delete(runId);
       throw err;
     } finally {
-      await taskRuntime.destroy().catch(() => {
-        // Best-effort cleanup for in-flight tasks.
-      });
+      if (ownsTaskRuntime) {
+        await taskRuntime.destroy().catch(() => {
+          // Best-effort cleanup for in-flight tasks.
+        });
+      }
       activeSandboxContexts.delete(runId);
       if (!retainSandbox) {
         suspendedSandboxContexts.delete(runId);
@@ -1048,6 +1158,7 @@ export async function createHarness(config: HarnessConfig): Promise<Harness> {
     },
     ...(startOptions?.trigger ? { trigger: startOptions.trigger } : {}),
     ...(startOptions?.metadata ? { metadata: startOptions.metadata } : {}),
+    ...(startOptions?.graphScopes?.length ? { graphScopes: startOptions.graphScopes } : {}),
     lastEventSequence: 0,
   });
 
@@ -1076,6 +1187,17 @@ export async function createHarness(config: HarnessConfig): Promise<Harness> {
       await runtimeStore.persistRun(
         buildInitialRunRecord(runId, runConfig, startOptions),
       );
+      await publishMailboxMessage(runId, {
+        kind: "trigger",
+        trigger: {
+          type: startOptions?.trigger?.type ?? "manual",
+          source: startOptions?.trigger?.source ?? "harness",
+          metadata: {
+            ...(startOptions?.trigger?.metadata ?? {}),
+            ...(startOptions?.metadata ?? {}),
+          },
+        },
+      });
       return {
         runId,
         result: trackExecution(
@@ -1650,6 +1772,146 @@ export async function createHarness(config: HarnessConfig): Promise<Harness> {
       return runtimeStore.getTasks(runId);
     },
 
+    async getGraphNode(nodeId: string, access) {
+      const node = await runtimeStore.getGraphNode(nodeId);
+      if (!node) {
+        return undefined;
+      }
+      const run = node.runId ? await runtimeStore.getRun(node.runId) : undefined;
+      await assertHarnessAuthorized(
+        authorize,
+        buildAuthorizationRequest({
+          action: "graph:read",
+          ...(node.runId ? { runId: node.runId } : {}),
+          ...(run ? { run } : {}),
+          ...(access ? { access } : {}),
+          detail: {
+            nodeId: node.id,
+            kind: node.kind,
+          },
+        }),
+      );
+      return node;
+    },
+
+    async listGraphNodes(query, access) {
+      await assertHarnessAuthorized(
+        authorize,
+        buildAuthorizationRequest({
+          action: "graph:list",
+          ...(query?.runId ? { runId: query.runId } : {}),
+          ...(access ? { access } : {}),
+          ...(query
+            ? {
+                detail: {
+                  ...(query.kinds ? { kinds: query.kinds } : {}),
+                  ...(query.scopes ? { scopes: query.scopes } : {}),
+                },
+              }
+            : {}),
+        }),
+      );
+      const nodes = await runtimeStore.listGraphNodes(query);
+      return filterHarnessAuthorizedItems(nodes, authorize, access, async (node) => {
+        const run = node.runId ? await runtimeStore.getRun(node.runId) : undefined;
+        return buildAuthorizationRequest({
+          action: "graph:read",
+          ...(node.runId ? { runId: node.runId } : {}),
+          ...(run ? { run } : {}),
+          detail: {
+            nodeId: node.id,
+            kind: node.kind,
+          },
+        });
+      });
+    },
+
+    async listGraphEdges(query, access) {
+      await assertHarnessAuthorized(
+        authorize,
+        buildAuthorizationRequest({
+          action: "graph:list",
+          ...(query?.runId ? { runId: query.runId } : {}),
+          ...(access ? { access } : {}),
+        }),
+      );
+      const edges = await runtimeStore.listGraphEdges(query);
+      return filterHarnessAuthorizedItems(edges, authorize, access, async (edge) => {
+        const run = edge.runId ? await runtimeStore.getRun(edge.runId) : undefined;
+        return buildAuthorizationRequest({
+          action: "graph:read",
+          ...(edge.runId ? { runId: edge.runId } : {}),
+          ...(run ? { run } : {}),
+          detail: {
+            edgeId: edge.id,
+            kind: edge.kind,
+          },
+        });
+      });
+    },
+
+    async getRunTimeline(runId: string, access) {
+      const run = await runtimeStore.getRun(runId);
+      await assertHarnessAuthorized(
+        authorize,
+        buildAuthorizationRequest({
+          action: "graph:read",
+          runId,
+          ...(run ? { run } : {}),
+          ...(access ? { access } : {}),
+          detail: {
+            projection: "run_timeline",
+          },
+        }),
+      );
+      return projectRunTimeline(runtimeStore, runId);
+    },
+
+    async getTaskBoard(query, access) {
+      await assertHarnessAuthorized(
+        authorize,
+        buildAuthorizationRequest({
+          action: "graph:list",
+          ...(query?.runId ? { runId: query.runId } : {}),
+          ...(access ? { access } : {}),
+          detail: {
+            projection: "task_board",
+          },
+        }),
+      );
+      return projectTaskBoard(runtimeStore, query);
+    },
+
+    async getApprovalInbox(query, access) {
+      await assertHarnessAuthorized(
+        authorize,
+        buildAuthorizationRequest({
+          action: "graph:list",
+          ...(query?.runId ? { runId: query.runId } : {}),
+          ...(access ? { access } : {}),
+          detail: {
+            projection: "approval_inbox",
+          },
+        }),
+      );
+      return projectApprovalInbox(runtimeStore, query);
+    },
+
+    async getArtifactFeed(query, access) {
+      await assertHarnessAuthorized(
+        authorize,
+        buildAuthorizationRequest({
+          action: "graph:list",
+          ...(query?.runId ? { runId: query.runId } : {}),
+          ...(access ? { access } : {}),
+          detail: {
+            projection: "artifact_feed",
+          },
+        }),
+      );
+      return projectArtifactFeed(runtimeStore, query);
+    },
+
     async replayRun(runId: string, access) {
       const run = await runtimeStore.requireRun(runId);
       await assertHarnessAuthorized(
@@ -1693,4 +1955,15 @@ export async function createHarness(config: HarnessConfig): Promise<Harness> {
       );
     },
   };
+}
+
+function hasWrappedTaskRuntime(
+  value: AgentTaskRuntime | { runtime: AgentTaskRuntime; destroyOnExit?: boolean },
+): value is { runtime: AgentTaskRuntime; destroyOnExit?: boolean } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "runtime" in value &&
+    value.runtime != null
+  );
 }

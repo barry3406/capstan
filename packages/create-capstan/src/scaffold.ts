@@ -18,10 +18,21 @@ import {
   wranglerConfig,
   agentsMd,
   mainCss,
+  agentContracts,
+  agentReadme,
+  agentCapabilitiesIndex,
+  agentWorkflowsIndex,
+  agentPoliciesIndex,
+  agentMemoryIndex,
+  agentViewsIndex,
+  agentAppIndex,
+  agentRuntime,
+  agentContractApi,
   ticketModel,
   ticketsIndexApi,
   ticketByIdApi,
 } from "./templates.js";
+import type { Template } from "./options.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -67,7 +78,7 @@ async function writeFiles(
 
 export async function scaffoldProject(config: {
   projectName: string;
-  template: "blank" | "tickets";
+  template: Template;
   outputDir: string;
   deployTarget?: "docker" | "vercel-node" | "vercel-edge" | "cloudflare" | "fly";
 }): Promise<void> {
@@ -94,6 +105,21 @@ export async function scaffoldProject(config: {
       { path: "app/models/ticket.model.ts", content: ticketModel() },
       { path: "app/routes/tickets/index.api.ts", content: ticketsIndexApi() },
       { path: "app/routes/tickets/[id].api.ts", content: ticketByIdApi() },
+    );
+  }
+
+  if (template === "agent") {
+    files.push(
+      { path: "app/agent/contracts.ts", content: agentContracts() },
+      { path: "app/agent/README.md", content: agentReadme(projectName, title) },
+      { path: "app/agent/capabilities/index.ts", content: agentCapabilitiesIndex() },
+      { path: "app/agent/workflows/index.ts", content: agentWorkflowsIndex() },
+      { path: "app/agent/policies/index.ts", content: agentPoliciesIndex() },
+      { path: "app/agent/memory/index.ts", content: agentMemoryIndex() },
+      { path: "app/agent/views/index.ts", content: agentViewsIndex() },
+      { path: "app/agent/runtime.ts", content: agentRuntime() },
+      { path: "app/agent/index.ts", content: agentAppIndex(projectName, title) },
+      { path: "app/routes/api/agent/app.api.ts", content: agentContractApi() },
     );
   }
 

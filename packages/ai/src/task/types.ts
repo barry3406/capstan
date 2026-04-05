@@ -2,6 +2,7 @@ import type {
   AgentTask,
   AgentTaskKind,
   AgentLoopTaskRequest,
+  AgentTaskWorker,
 } from "../types.js";
 
 export type AgentTaskStatus =
@@ -58,6 +59,11 @@ export interface AgentTaskBatchInput {
   tasks: AgentTask[];
   hooks?: AgentTaskSubmitHooks;
   callStack?: ReadonlySet<string> | undefined;
+}
+
+export interface DurableAgentTaskRuntimeOptions {
+  rootDir: string;
+  worker?: AgentTaskWorker;
 }
 
 export interface AgentTaskRuntime {

@@ -389,4 +389,28 @@ describe("FileHarnessRuntimeStore context persistence", () => {
 
     expect(recalled.map((entry) => entry.id)).toContain(record.id);
   });
+
+  it("stores and recalls project-scoped memories even when scope ids are very long", async () => {
+    const rootDir = await createTempDir();
+    const store = new FileHarnessRuntimeStore(rootDir);
+    await store.initialize();
+
+    const longScopeId = `/very/${"nested/".repeat(40)}capstan/project/root`;
+    const record = await store.rememberMemory({
+      scope: { type: "project", id: longScopeId },
+      kind: "fact",
+      content: "long scoped memory survives path encoding",
+    });
+
+    const recalled = await store.recallMemory({
+      query: "survives path encoding",
+      scopes: [{ type: "project", id: longScopeId }],
+      limit: 5,
+      minScore: 0,
+    });
+
+    expect(recalled).toHaveLength(1);
+    expect(recalled[0]?.id).toBe(record.id);
+    expect(recalled[0]?.scope).toEqual({ type: "project", id: longScopeId });
+  });
 });

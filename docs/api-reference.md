@@ -1103,12 +1103,6 @@ function createAI(config: AIConfig): AIContext
 
 interface AIConfig {
   llm: LLMProvider;
-  memory?: {
-    backend?: MemoryBackend;
-    embedding?: { embed(texts: string[]): Promise<number[][]>; dimensions: number };
-    autoExtract?: boolean;
-  };
-  defaultScope?: MemoryScope;
 }
 
 interface AIContext {
@@ -1116,13 +1110,6 @@ interface AIContext {
   generate(prompt: string, opts?: GenerateOptions): Promise<string>;
   thinkStream(prompt: string, opts?: Omit<ThinkOptions, "schema">): AsyncIterable<string>;
   generateStream(prompt: string, opts?: GenerateOptions): AsyncIterable<string>;
-  remember(content: string, opts?: RememberOptions): Promise<string>;
-  recall(query: string, opts?: RecallOptions): Promise<MemoryEntry[]>;
-  memory: {
-    about(type: string, id: string): MemoryAccessor;
-    forget(entryId: string): Promise<boolean>;
-    assembleContext(opts: AssembleContextOptions): Promise<string>;
-  };
   agent: {
     run(config: AgentRunConfig): Promise<AgentRunResult>;
   };
@@ -1169,9 +1156,34 @@ import {
 
 ---
 
+### Capstan AI Layers
+
+`@zauso-ai/capstan-ai` is split into two explicit layers:
+
+- **Runtime Layer** — durable execution and supervision primitives such as harness runs, turn orchestration, task fabric, sidecars, mailbox/event flow, checkpoints, graph projections, and sandboxes
+- **Framework Layer** — the contracts application developers define on top of that runtime: capability, workflow, policy, memory space, and operator view
+
+Those framework contracts map to current APIs as follows:
+
+| Contract | Current primitives |
+| --- | --- |
+| **Capability** | `defineAPI()` metadata such as `capability`, `resource`, and protocol projection |
+| **Workflow** | `runAgentLoop()`, task definitions, harness runs, and trigger adapters such as `createAgentCron()` |
+| **Policy** | `defineAgentPolicy()`, `beforeToolCall`, `beforeTaskCall`, `governToolCall`, `governTaskCall`, `onGovernanceDecision` |
+| **Memory space** | harness context scopes, summaries, promoted memories, artifacts, and graph-aware retrieval |
+| **Operator view** | control-plane queries, graph read models, approval inbox, task board, artifact feed, and run timeline |
+
+The recommended agent-first path is: define capabilities first, then workflows, then policies, then memory spaces, then operator views, and run the whole system through the harness runtime.
+
+For the recommended project structure and first-edit order, see [Agent Framework Guide](./agent-framework.md).
+
+`summarizeAgentApp()` produces a stable read model from a validated `defineAgentApp()` contract. Use it for onboarding routes, docs surfaces, and operator-facing summaries without rebuilding your own projection helper.
+
+---
+
 ### createHarness(config)
 
-Durable harness runtime for long-running agents. Adds browser/filesystem sandboxes, verification hooks, persisted runs/events/artifacts/checkpoints, and runtime lifecycle control on top of `runAgentLoop()`.
+Durable harness runtime for long-running agents. This is the center of the Runtime Layer. It adds browser/filesystem sandboxes, verification hooks, persisted runs/events/artifacts/checkpoints, sidecars, graph projections, and runtime lifecycle control on top of `runAgentLoop()`.
 
 ```typescript
 function createHarness(config: HarnessConfig): Promise<Harness>
@@ -1237,11 +1249,22 @@ interface Harness {
   pauseRun(runId: string): Promise<HarnessRunRecord>;
   cancelRun(runId: string): Promise<HarnessRunRecord>;
   resumeRun(runId: string, options?: HarnessResumeOptions): Promise<HarnessRunResult>;
+  getApproval(approvalId: string): Promise<HarnessApprovalRecord | undefined>;
+  listApprovals(runId?: string): Promise<HarnessApprovalRecord[]>;
+  approveRun(runId: string, options?: HarnessApprovalResolutionOptions): Promise<HarnessApprovalRecord>;
+  denyRun(runId: string, options?: HarnessApprovalResolutionOptions): Promise<HarnessApprovalRecord>;
   getRun(runId: string): Promise<HarnessRunRecord | undefined>;
   listRuns(): Promise<HarnessRunRecord[]>;
   getEvents(runId?: string): Promise<HarnessRunEventRecord[]>;
   getTasks(runId: string): Promise<HarnessTaskRecord[]>;
   getArtifacts(runId: string): Promise<HarnessArtifactRecord[]>;
+  getGraphNode(nodeId: string): Promise<HarnessGraphNodeRecord | undefined>;
+  listGraphNodes(query?: HarnessGraphNodeQuery): Promise<HarnessGraphNodeRecord[]>;
+  listGraphEdges(query?: HarnessGraphEdgeQuery): Promise<HarnessGraphEdgeRecord[]>;
+  getRunTimeline(runId: string): Promise<HarnessRunTimelineItem[]>;
+  getTaskBoard(query?: HarnessGraphNodeQuery): Promise<HarnessTaskBoardEntry[]>;
+  getApprovalInbox(query?: HarnessGraphNodeQuery): Promise<HarnessApprovalInboxEntry[]>;
+  getArtifactFeed(query?: HarnessGraphNodeQuery): Promise<HarnessArtifactFeedItem[]>;
   getCheckpoint(runId: string): Promise<AgentLoopCheckpoint | undefined>;
   getSessionMemory(runId: string): Promise<HarnessSessionMemoryRecord | undefined>;
   getLatestSummary(runId: string): Promise<HarnessSummaryRecord | undefined>;
@@ -1289,11 +1312,13 @@ await harness.destroy();
 - `runs/` — current run records
 - `events/` + `events.ndjson` — per-run and global lifecycle event logs
 - `tasks/` — per-run task execution records used by the task fabric and control plane
+- `approvals/` — persisted approval records and their resolution history
 - `artifacts/` — screenshots and other persisted tool outputs
 - `checkpoints/` — resumable loop checkpoints
 - `session-memory/` — structured run-scoped working memory
 - `summaries/` — compacted summaries for pause/resume and long histories
 - `memory/` — long-term runtime memory entries used during context assembly
+- `graph/` — graph-scoped read model for runs, turns, tasks, approvals, artifacts, and promoted memory
 
 Use `openHarnessRuntime(rootDir?)` when you need an independent control plane that can inspect paused/completed runs without a live harness instance.
 
@@ -1313,7 +1338,15 @@ const runtime = await openHarnessRuntime({
 
 Control-plane and live harness methods now accept an optional access context as their final argument, so server routes, supervision surfaces, and CLI wrappers can pass the caller identity through to the authorizer without binding `@zauso-ai/capstan-ai` to a specific auth implementation.
 
-Task-aware runs emit `task_call` and `task_result` lifecycle events and accumulate persisted `HarnessTaskRecord` entries. This makes shell-like background work inspectable without scraping transcript text.
+Task-aware runs emit `task_call` and `task_result` lifecycle events and accumulate persisted `HarnessTaskRecord` entries. This makes shell-like background work inspectable without scraping transcript text and gives workflows a durable runtime contract instead of an ad hoc background promise model.
+
+Harness runs also have a formal sidecar phase. Tool/task results can queue post-turn sidecars, and run/checkpoint boundaries can trigger dedicated sidecars for context capture. These sidecars emit `sidecar_started`, `sidecar_completed`, and `sidecar_failed` events and cover observation promotion, verifier outcomes, checkpoint context persistence, and terminal summary/session-memory capture without mutating the main turn state machine inline.
+
+Harness runs also expose a run-scoped mailbox/event fabric. Triggers, operator context messages, task notifications, system events, tool progress, and cooperative control signals all use the same mailbox contract, which lets the turn engine consume out-of-band state changes without scraping transcript text.
+
+Tool and task execution also pass through explicit governance hooks. Use `governToolCall`, `governTaskCall`, and `onGovernanceDecision` when you need allow/deny/approval policy decisions, and `onToolProgress` when concurrency-safe streaming tools emit progress before their final result.
+
+Graph-aware harness runtimes also project persisted state into graph queries and feeds. Use `listGraphNodes()`, `listGraphEdges()`, `getRunTimeline()`, `getTaskBoard()`, `getApprovalInbox()`, and `getArtifactFeed()` when you need stable, supervision-friendly operator views instead of transcript scraping.
 
 The CLI harness commands also support local grant simulation with `--grants '<json>'` and optional `--subject '<json>'`, which is useful for testing scoped `run:*`, `artifact:read`, `checkpoint:read`, `context:read`, and `approval:approve` behavior against persisted runs.
 
@@ -1336,8 +1369,6 @@ interface ThinkOptions<T = unknown> {
   temperature?: number;
   maxTokens?: number;
   systemPrompt?: string;
-  memory?: boolean;
-  about?: [string, string];
 }
 ```
 
@@ -1361,8 +1392,6 @@ interface GenerateOptions {
   temperature?: number;
   maxTokens?: number;
   systemPrompt?: string;
-  memory?: boolean;
-  about?: [string, string];
 }
 ```
 
@@ -1398,81 +1427,36 @@ function generateStream(
 
 ---
 
-### MemoryAccessor
+### Durable Context And Memory
 
-The developer-facing memory interface, returned by `createMemoryAccessor()` or `ai.memory.about()`.
-
-```typescript
-interface MemoryAccessor {
-  remember(content: string, opts?: RememberOptions): Promise<string>;
-  recall(query: string, opts?: RecallOptions): Promise<MemoryEntry[]>;
-  forget(entryId: string): Promise<boolean>;
-  about(type: string, id: string): MemoryAccessor;
-  assembleContext(opts: AssembleContextOptions): Promise<string>;
-}
-
-interface RememberOptions {
-  scope?: MemoryScope;
-  type?: "fact" | "event" | "preference" | "instruction";
-  importance?: "low" | "medium" | "high" | "critical";
-  metadata?: Record<string, unknown>;
-}
-
-interface RecallOptions {
-  scope?: MemoryScope;
-  limit?: number;         // Max results (default: 10)
-  minScore?: number;      // Minimum relevance score
-  types?: string[];       // Filter by memory type
-}
-
-interface MemoryScope {
-  type: string;
-  id: string;
-}
-
-interface MemoryEntry {
-  id: string;
-  content: string;
-  scope: MemoryScope;
-  createdAt: string;
-  updatedAt: string;
-  metadata?: Record<string, unknown>;
-  embedding?: number[];
-  importance?: "low" | "medium" | "high" | "critical";
-  type?: "fact" | "event" | "preference" | "instruction";
-  accessCount: number;
-  lastAccessedAt: string;
-}
-
-interface AssembleContextOptions {
-  query: string;
-  maxTokens?: number;     // Default: 4000
-  scopes?: MemoryScope[];
-}
-```
-
-`remember()` stores a memory, automatically deduplicating (>0.92 cosine similarity merges with existing) and embedding for vector search. Returns the memory ID.
-
-`recall()` retrieves relevant memories using hybrid search: vector similarity (0.7 weight) + keyword matching (0.3 weight) + recency decay (30-day half-life).
-
-`about()` returns a new `MemoryAccessor` scoped to a specific entity. All subsequent operations are isolated to that scope.
-
-`assembleContext()` builds an LLM-ready context string from stored memories, sorted by importance and packed within a token budget.
-
-**Usage:**
+The legacy standalone memory API has been removed. Durable memory, summaries, promoted observations, and graph-aware retrieval now live in the harness runtime:
 
 ```typescript
-const customerMemory = ai.memory.about("customer", "cust_123");
-await customerMemory.remember("Prefers email communication", { type: "preference" });
-const relevant = await customerMemory.recall("communication preferences");
-await ai.memory.forget(relevant[0].id);
+const harness = await createHarness({
+  llm,
+  context: {
+    enabled: true,
+    defaultScopes: [{ type: "customer", id: "cust_123" }],
+  },
+});
+
+const run = await harness.run({
+  goal: "Draft a customer update",
+  about: ["customer", "cust_123"],
+});
+
+const context = await harness.assembleContext(run.runId, {
+  query: "customer communication preferences",
+});
 ```
+
+In framework terms, harness scopes are the current **memory space** contract. They define where context belongs and how it is recalled later.
 
 ---
 
 ### runAgentLoop(llm, config, tools, opts?)
 
-Self-orchestrating agent loop. The LLM reasons about a goal, selects and executes tools, feeds results back, and repeats until done or the iteration limit is reached.
+Self-orchestrating agent loop. This is the core turn engine inside the Runtime Layer. The LLM reasons about a goal, selects and executes tools or tasks, feeds results back, and repeats until done or the iteration limit is reached.
 
 ```typescript
 function runAgentLoop(
@@ -1498,7 +1482,6 @@ interface AgentRunConfig {
   goal: string;
   about?: [string, string];
   maxIterations?: number;  // Default: 10
-  memory?: boolean;
   tools?: AgentTool[];
   systemPrompt?: string;
   excludeRoutes?: string[];
@@ -1515,6 +1498,8 @@ interface AgentRunResult {
 
 The loop uses JSON-based tool calling: the LLM responds with `{"tool": "name", "arguments": {...}}` to invoke a tool, or plain text to finish. The `beforeToolCall` hook enables policy enforcement -- returning `{ allowed: false }` stops the loop with `"approval_required"` status. Tools in the `callStack` set are excluded to prevent recursion.
 
+Use `runAgentLoop()` when you need the host-driven execution engine directly. Use `createHarness()` when you need the full runtime substrate around that engine.
+
 **Usage via `ai.agent.run()`:**
 
 ```typescript
@@ -1524,40 +1509,6 @@ const result = await ai.agent.run({
   tools: [searchTickets, getCustomerHistory],
 });
 // result.status, result.result, result.iterations, result.toolCalls
-```
-
----
-
-### BuiltinMemoryBackend
-
-Default in-memory backend with optional vector search support. Suitable for development and testing. No external dependencies.
-
-```typescript
-class BuiltinMemoryBackend implements MemoryBackend {
-  constructor(opts?: { embedding?: MemoryEmbedder });
-}
-
-interface MemoryEmbedder {
-  embed(texts: string[]): Promise<number[][]>;
-  dimensions: number;
-}
-```
-
-Features: keyword-only fallback when no embedder is provided, hybrid search (vector + keyword + recency decay) when embedder is present, auto-dedup at >0.92 cosine similarity.
-
----
-
-### MemoryBackend (Interface)
-
-Pluggable backend interface for memory storage. Implement for custom backends (Mem0, Hindsight, Redis, etc.).
-
-```typescript
-interface MemoryBackend {
-  store(entry: Omit<MemoryEntry, "id" | "accessCount" | "lastAccessedAt" | "createdAt" | "updatedAt">): Promise<string>;
-  query(scope: MemoryScope, text: string, k: number): Promise<MemoryEntry[]>;
-  remove(id: string): Promise<boolean>;
-  clear(scope: MemoryScope): Promise<void>;
-}
 ```
 
 ---
@@ -1629,7 +1580,6 @@ interface AgentCronConfig {
   run?: {
     about?: [string, string];
     maxIterations?: number;
-    memory?: boolean;
     systemPrompt?: string;
     excludeRoutes?: string[];
   };
@@ -1672,6 +1622,8 @@ runner.add(createAgentCron({
 
 runner.start();
 ```
+
+This is the trigger-side expression of a **workflow** contract: scheduling belongs at the trigger layer, while execution and supervision stay inside the harness runtime.
 
 ---
 
@@ -4138,6 +4090,7 @@ npx create-capstan-app@beta
 npx create-capstan-app@beta my-app
 
 # Fully non-interactive
+npx create-capstan-app@beta my-agent --template agent
 npx create-capstan-app@beta my-app --template blank
 npx create-capstan-app@beta my-app --template tickets
 
@@ -4149,6 +4102,7 @@ npx create-capstan-app@beta --help
 
 | Template  | Includes                                                                            |
 | --------- | ----------------------------------------------------------------------------------- |
+| `agent`   | Contract-first agent workspace: capabilities, workflows, policies, memory spaces, operator views, runtime adapter, and contract graph API |
 | `blank`   | Health check API, home page, root layout, requireAuth policy, AGENTS.md             |
 | `tickets` | Everything in blank + Ticket model, CRUD routes, auth config, database config        |
 
@@ -4159,7 +4113,7 @@ Programmatic API for the scaffolder.
 ```typescript
 function scaffoldProject(config: {
   projectName: string;
-  template: "blank" | "tickets";
+  template: "agent" | "blank" | "tickets";
   outputDir: string;
 }): Promise<void>
 ```
@@ -4173,8 +4127,8 @@ type DeployTarget = "none" | "docker" | "vercel-node" | "vercel-edge" | "cloudfl
 ```
 
 ```bash
-npx create-capstan-app my-app --template blank --deploy docker
-npx create-capstan-app my-app --template tickets --deploy vercel-node
+npx create-capstan-app@beta my-app --template blank --deploy docker
+npx create-capstan-app@beta my-app --template tickets --deploy vercel-node
 ```
 
 ---

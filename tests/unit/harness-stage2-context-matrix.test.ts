@@ -242,8 +242,9 @@ describe("Stage 2 context matrix", () => {
     expect(context.blocks.map((block) => block.title)).toEqual([
       "Session Memory",
       "Run Summary",
-      "Relevant Memory",
       "Artifacts",
+      "Relevant Memory",
+      "Graph State",
     ]);
     expect(context.sessionMemory?.headline).toBe("session memory headline");
     expect(context.summary?.kind).toBe("session_compact");

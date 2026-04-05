@@ -15,7 +15,14 @@ import {
   resolveRunApproval,
 } from "./approvals.js";
 import { assertHarnessAuthorized, filterHarnessAuthorizedItems } from "./authz.js";
+import { FileHarnessRunMailbox } from "./mailbox.js";
 import { FileHarnessRuntimeStore } from "./store.js";
+import {
+  projectApprovalInbox,
+  projectArtifactFeed,
+  projectRunTimeline,
+  projectTaskBoard,
+} from "../graph/projectors.js";
 
 function resolveOpenHarnessRuntimeOptions(
   rootDirOrOptions?: string | HarnessControlPlaneOptions,
@@ -59,6 +66,7 @@ export async function openHarnessRuntime(
   const runCache = new Map<string, Promise<HarnessRunRecord | undefined>>();
   const store = new FileHarnessRuntimeStore(runtimeOptions.rootDir);
   await store.initialize();
+  const mailbox = new FileHarnessRunMailbox(store.paths);
   const contextKernel = new HarnessContextKernel(store);
   await contextKernel.initialize();
 
@@ -99,7 +107,16 @@ export async function openHarnessRuntime(
   return {
     async pauseRun(runId, access) {
       await requireAuthorizedRun(runId, "run:pause", access);
-      return store.requestPause(runId);
+      const record = await store.requestPause(runId);
+      await mailbox.publish({
+        id: `control_pause_${Date.now()}`,
+        runId,
+        createdAt: new Date().toISOString(),
+        kind: "control_signal",
+        action: "pause",
+        reason: "Pause requested via control plane",
+      }).catch(() => undefined);
+      return record;
     },
 
     async cancelRun(runId, access) {
@@ -112,7 +129,16 @@ export async function openHarnessRuntime(
           });
         }
       }
-      return store.requestCancel(runId);
+      const record = await store.requestCancel(runId);
+      await mailbox.publish({
+        id: `control_cancel_${Date.now()}`,
+        runId,
+        createdAt: new Date().toISOString(),
+        kind: "control_signal",
+        action: "cancel",
+        reason: "Cancel requested via control plane",
+      }).catch(() => undefined);
+      return record;
     },
 
     async getApproval(approvalId, access) {
@@ -206,6 +232,14 @@ export async function openHarnessRuntime(
       );
       const resolved = await resolveRunApproval(store, run, "denied", options);
       await store.requestCancel(runId);
+      await mailbox.publish({
+        id: `control_cancel_${Date.now()}`,
+        runId,
+        createdAt: new Date().toISOString(),
+        kind: "control_signal",
+        action: "cancel",
+        reason: "Cancel requested via approval denial",
+      }).catch(() => undefined);
       return resolved.approval;
     },
 
@@ -431,6 +465,146 @@ export async function openHarnessRuntime(
         }),
       );
       return store.getTasks(runId);
+    },
+
+    async getGraphNode(nodeId, access) {
+      const node = await store.getGraphNode(nodeId);
+      if (!node) {
+        return undefined;
+      }
+      const run = node.runId ? await getCachedRun(node.runId) : undefined;
+      await assertHarnessAuthorized(
+        authorize,
+        buildAuthorizationRequest({
+          action: "graph:read",
+          ...(node.runId ? { runId: node.runId } : {}),
+          ...(run ? { run } : {}),
+          ...(access ? { access } : {}),
+          detail: {
+            nodeId: node.id,
+            kind: node.kind,
+          },
+        }),
+      );
+      return node;
+    },
+
+    async listGraphNodes(query, access) {
+      await assertHarnessAuthorized(
+        authorize,
+        buildAuthorizationRequest({
+          action: "graph:list",
+          ...(query?.runId ? { runId: query.runId } : {}),
+          ...(access ? { access } : {}),
+          ...(query
+            ? {
+                detail: {
+                  ...(query.kinds ? { kinds: query.kinds } : {}),
+                  ...(query.scopes ? { scopes: query.scopes } : {}),
+                },
+              }
+            : {}),
+        }),
+      );
+      const nodes = await store.listGraphNodes(query);
+      return filterHarnessAuthorizedItems(nodes, authorize, access, async (node) => {
+        const run = node.runId ? await getCachedRun(node.runId) : undefined;
+        return buildAuthorizationRequest({
+          action: "graph:read",
+          ...(node.runId ? { runId: node.runId } : {}),
+          ...(run ? { run } : {}),
+          detail: {
+            nodeId: node.id,
+            kind: node.kind,
+          },
+        });
+      });
+    },
+
+    async listGraphEdges(query, access) {
+      await assertHarnessAuthorized(
+        authorize,
+        buildAuthorizationRequest({
+          action: "graph:list",
+          ...(query?.runId ? { runId: query.runId } : {}),
+          ...(access ? { access } : {}),
+        }),
+      );
+      const edges = await store.listGraphEdges(query);
+      return filterHarnessAuthorizedItems(edges, authorize, access, async (edge) => {
+        const run = edge.runId ? await getCachedRun(edge.runId) : undefined;
+        return buildAuthorizationRequest({
+          action: "graph:read",
+          ...(edge.runId ? { runId: edge.runId } : {}),
+          ...(run ? { run } : {}),
+          detail: {
+            edgeId: edge.id,
+            kind: edge.kind,
+          },
+        });
+      });
+    },
+
+    async getRunTimeline(runId, access) {
+      const run = await getCachedRun(runId);
+      await assertHarnessAuthorized(
+        authorize,
+        buildAuthorizationRequest({
+          action: "graph:read",
+          runId,
+          ...(run ? { run } : {}),
+          ...(access ? { access } : {}),
+          detail: {
+            projection: "run_timeline",
+          },
+        }),
+      );
+      return projectRunTimeline(store, runId);
+    },
+
+    async getTaskBoard(query, access) {
+      await assertHarnessAuthorized(
+        authorize,
+        buildAuthorizationRequest({
+          action: "graph:list",
+          ...(query?.runId ? { runId: query.runId } : {}),
+          ...(access ? { access } : {}),
+          detail: {
+            projection: "task_board",
+          },
+        }),
+      );
+      return projectTaskBoard(store, query);
+    },
+
+    async getApprovalInbox(query, access) {
+      await assertHarnessAuthorized(
+        authorize,
+        buildAuthorizationRequest({
+          action: "graph:list",
+          ...(query?.runId ? { runId: query.runId } : {}),
+          ...(access ? { access } : {}),
+          detail: {
+            projection: "approval_inbox",
+          },
+        }),
+      );
+      return projectApprovalInbox(store, query);
+    },
+
+    async getArtifactFeed(query, access) {
+      await assertHarnessAuthorized(
+        authorize,
+        buildAuthorizationRequest({
+          action: "graph:list",
+          ...(query?.runId ? { runId: query.runId } : {}),
+          ...(access ? { access } : {}),
+          detail: {
+            projection: "artifact_feed",
+          },
+        }),
+      );
+      return projectArtifactFeed(store, query);
     },
 
     async replayRun(runId, access) {

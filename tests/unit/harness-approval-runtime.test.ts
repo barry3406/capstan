@@ -49,7 +49,11 @@ function approvalLifecycle(events: Array<{ type: string }>): string[] {
       (type) =>
         type !== "memory_stored" &&
         type !== "summary_created" &&
-        type !== "context_compacted",
+        type !== "context_compacted" &&
+        type !== "governance_decision" &&
+        type !== "sidecar_started" &&
+        type !== "sidecar_completed" &&
+        type !== "sidecar_failed",
     );
 }
 

@@ -87,59 +87,63 @@ describe("createHarness context kernel integration", () => {
       verify: { enabled: false },
     });
 
-    const result = await harness.run({
-      goal: "process a lot of output",
-      tools: [
-        {
-          name: "large",
-          description: "returns a large payload",
-          async execute(args) {
-            return {
-              label: args.label,
-              body: String(args.label).repeat(800),
-            };
+    try {
+      const result = await harness.run({
+        goal: "process a lot of output",
+        tools: [
+          {
+            name: "large",
+            description: "returns a large payload",
+            async execute(args) {
+              return {
+                label: args.label,
+                body: String(args.label).repeat(800),
+              };
+            },
           },
-        },
-      ],
-    });
+        ],
+      });
 
-    expect(result.runtimeStatus).toBe("completed");
+      expect(result.runtimeStatus).toBe("completed");
 
-    const sessionMemory = await harness.getSessionMemory(result.runId);
-    expect(sessionMemory).toBeDefined();
-    expect(sessionMemory?.recentSteps).toHaveLength(2);
+      const sessionMemory = await harness.getSessionMemory(result.runId);
+      expect(sessionMemory).toBeDefined();
+      expect(sessionMemory?.recentSteps).toHaveLength(2);
 
-    const summary = await harness.getLatestSummary(result.runId);
-    expect(summary).toBeDefined();
-    expect(summary?.status).toBe("completed");
-    expect(summary?.kind).toBe("run_compact");
+      const summary = await harness.getLatestSummary(result.runId);
+      expect(summary).toBeDefined();
+      expect(summary?.status).toBe("completed");
+      expect(summary?.kind).toBe("run_compact");
 
-    const memories = await harness.recallMemory({
-      query: "large output process",
-      scopes: [{ type: "run", id: result.runId }],
-      limit: 10,
-      minScore: 0,
-    });
-    expect(memoryKinds(memories)).toContain("observation");
-    expect(memoryKinds(memories)).toContain("summary");
+      const memories = await harness.recallMemory({
+        query: "large output process",
+        scopes: [{ type: "run", id: result.runId }],
+        limit: 10,
+        minScore: 0,
+      });
+      expect(memoryKinds(memories)).toContain("observation");
+      expect(memoryKinds(memories)).toContain("summary");
 
-    const context = await harness.assembleContext(result.runId, {
-      query: "large output process",
-      maxTokens: 2_000,
-    });
-    expect(context.blocks.map((block) => block.kind)).toContain("session_memory");
-    expect(context.summary?.status).toBe("completed");
-    expect(context.memories.length).toBeGreaterThan(0);
+      const context = await harness.assembleContext(result.runId, {
+        query: "large output process",
+        maxTokens: 2_000,
+      });
+      expect(context.blocks.map((block) => block.kind)).toContain("session_memory");
+      expect(context.summary?.status).toBe("completed");
+      expect(context.memories.length).toBeGreaterThan(0);
 
-    const events = await harness.getEvents(result.runId);
-    expect(events.map((event) => event.type)).toContain("context_compacted");
-    expect(events.map((event) => event.type)).toContain("summary_created");
-    expect(events.map((event) => event.type)).toContain("memory_stored");
+      const events = await harness.getEvents(result.runId);
+      expect(events.map((event) => event.type)).toContain("context_compacted");
+      expect(events.map((event) => event.type)).toContain("summary_created");
+      expect(events.map((event) => event.type)).toContain("memory_stored");
 
-    const controlPlane = await openHarnessRuntime(rootDir);
-    expect((await controlPlane.getSessionMemory(result.runId))?.runId).toBe(result.runId);
-    expect((await controlPlane.getLatestSummary(result.runId))?.status).toBe("completed");
-    expect((await controlPlane.assembleContext(result.runId)).blocks.length).toBeGreaterThan(0);
+      const controlPlane = await openHarnessRuntime(rootDir);
+      expect((await controlPlane.getSessionMemory(result.runId))?.runId).toBe(result.runId);
+      expect((await controlPlane.getLatestSummary(result.runId))?.status).toBe("completed");
+      expect((await controlPlane.assembleContext(result.runId)).blocks.length).toBeGreaterThan(0);
+    } finally {
+      await harness.destroy();
+    }
   });
 
   it("captures approval-blocked state in session memory and refreshes summaries after resume", async () => {
@@ -163,38 +167,8 @@ describe("createHarness context kernel integration", () => {
       verify: { enabled: false },
     });
 
-    const blocked = await harness.run({
-      goal: "delete one record",
-      tools: [
-        {
-          name: "delete",
-          description: "deletes a record",
-          async execute() {
-            return { deleted: true };
-          },
-        },
-      ],
-    });
-
-    expect(blocked.runtimeStatus).toBe("approval_required");
-
-    const blockedSession = await harness.getSessionMemory(blocked.runId);
-    expect(blockedSession?.pendingApproval).toEqual({
-      tool: "delete",
-      reason: "delete requires human approval",
-    });
-
-    const blockedContext = await harness.assembleContext(blocked.runId, {
-      query: "pending approval",
-      maxTokens: 1_500,
-    });
-    expect(blockedContext.sessionMemory?.openQuestions).toContain(
-      "Should delete be approved?",
-    );
-
-    const resumed = await harness.resumeRun(blocked.runId, {
-      approvePendingTool: true,
-      runConfig: {
+    try {
+      const blocked = await harness.run({
         goal: "delete one record",
         tools: [
           {
@@ -205,13 +179,47 @@ describe("createHarness context kernel integration", () => {
             },
           },
         ],
-      },
-    });
+      });
 
-    expect(resumed.runtimeStatus).toBe("completed");
-    const summary = await harness.getLatestSummary(blocked.runId);
-    expect(summary?.status).toBe("completed");
-    expect(summary?.kind).toBe("run_compact");
+      expect(blocked.runtimeStatus).toBe("approval_required");
+
+      const blockedSession = await harness.getSessionMemory(blocked.runId);
+      expect(blockedSession?.pendingApproval).toEqual({
+        tool: "delete",
+        reason: "delete requires human approval",
+      });
+
+      const blockedContext = await harness.assembleContext(blocked.runId, {
+        query: "pending approval",
+        maxTokens: 1_500,
+      });
+      expect(blockedContext.sessionMemory?.openQuestions).toContain(
+        "Should delete be approved?",
+      );
+
+      const resumed = await harness.resumeRun(blocked.runId, {
+        approvePendingTool: true,
+        runConfig: {
+          goal: "delete one record",
+          tools: [
+            {
+              name: "delete",
+              description: "deletes a record",
+              async execute() {
+                return { deleted: true };
+              },
+            },
+          ],
+        },
+      });
+
+      expect(resumed.runtimeStatus).toBe("completed");
+      const summary = await harness.getLatestSummary(blocked.runId);
+      expect(summary?.status).toBe("completed");
+      expect(summary?.kind).toBe("run_compact");
+    } finally {
+      await harness.destroy();
+    }
   });
 
   it("persists paused state context and refreshes it after resume", async () => {
@@ -243,24 +251,8 @@ describe("createHarness context kernel integration", () => {
       verify: { enabled: false },
     });
 
-    const paused = await harness.run({
-      goal: "pause midway",
-      tools: [
-        {
-          name: "step",
-          description: "records a step",
-          async execute(args) {
-            return { value: args.value };
-          },
-        },
-      ],
-    });
-
-    expect(paused.runtimeStatus).toBe("paused");
-    expect((await harness.getLatestSummary(paused.runId))?.status).toBe("paused");
-
-    const resumed = await harness.resumeRun(paused.runId, {
-      runConfig: {
+    try {
+      const paused = await harness.run({
         goal: "pause midway",
         tools: [
           {
@@ -271,12 +263,32 @@ describe("createHarness context kernel integration", () => {
             },
           },
         ],
-      },
-    });
+      });
 
-    expect(resumed.runtimeStatus).toBe("completed");
-    expect((await harness.getLatestSummary(paused.runId))?.status).toBe("completed");
-    expect((await harness.getSessionMemory(paused.runId))?.status).toBe("completed");
+      expect(paused.runtimeStatus).toBe("paused");
+      expect((await harness.getLatestSummary(paused.runId))?.status).toBe("paused");
+
+      const resumed = await harness.resumeRun(paused.runId, {
+        runConfig: {
+          goal: "pause midway",
+          tools: [
+            {
+              name: "step",
+              description: "records a step",
+              async execute(args) {
+                return { value: args.value };
+              },
+            },
+          ],
+        },
+      });
+
+      expect(resumed.runtimeStatus).toBe("completed");
+      expect((await harness.getLatestSummary(paused.runId))?.status).toBe("completed");
+      expect((await harness.getSessionMemory(paused.runId))?.status).toBe("completed");
+    } finally {
+      await harness.destroy();
+    }
   });
 
   it("captures failed runs into context state and exposes them through the control plane", async () => {
@@ -294,37 +306,41 @@ describe("createHarness context kernel integration", () => {
       verify: { enabled: false },
     });
 
-    await expect(
-      harness.run({
-        goal: "trigger a failure",
-        tools: [
-          {
-            name: "step",
-            description: "records a step",
-            async execute(args) {
-              return { value: args.value };
+    try {
+      await expect(
+        harness.run({
+          goal: "trigger a failure",
+          tools: [
+            {
+              name: "step",
+              description: "records a step",
+              async execute(args) {
+                return { value: args.value };
+              },
             },
-          },
-        ],
-      }),
-    ).rejects.toThrow("model crashed");
+          ],
+        }),
+      ).rejects.toThrow("model crashed");
 
-    const failedRun = await waitFor(async () => {
-      const runs = await harness.listRuns();
-      return runs.find((entry) => entry.goal === "trigger a failure");
-    });
-    expect(failedRun.status).toBe("failed");
+      const failedRun = await waitFor(async () => {
+        const runs = await harness.listRuns();
+        return runs.find((entry) => entry.goal === "trigger a failure");
+      });
+      expect(failedRun.status).toBe("failed");
 
-    const summary = await harness.getLatestSummary(failedRun.id);
-    expect(summary?.status).toBe("failed");
+      const summary = await harness.getLatestSummary(failedRun.id);
+      expect(summary?.status).toBe("failed");
 
-    const controlPlane = await openHarnessRuntime(rootDir);
-    const assembled = await controlPlane.assembleContext(failedRun.id, {
-      query: "failure context",
-      maxTokens: 1_500,
-    });
-    expect(assembled.summary?.status).toBe("failed");
-    expect(assembled.blocks.map((block) => block.kind)).toContain("summary");
+      const controlPlane = await openHarnessRuntime(rootDir);
+      const assembled = await controlPlane.assembleContext(failedRun.id, {
+        query: "failure context",
+        maxTokens: 1_500,
+      });
+      expect(assembled.summary?.status).toBe("failed");
+      expect(assembled.blocks.map((block) => block.kind)).toContain("summary");
+    } finally {
+      await harness.destroy();
+    }
   });
 
   it("treats disabled context as a no-op and emits no stage-two lifecycle events", async () => {
@@ -338,22 +354,26 @@ describe("createHarness context kernel integration", () => {
       verify: { enabled: false },
     });
 
-    const result = await harness.run({ goal: "no context please" });
-    expect(result.runtimeStatus).toBe("completed");
-    expect(await harness.getSessionMemory(result.runId)).toBeUndefined();
-    expect(await harness.getLatestSummary(result.runId)).toBeUndefined();
-    expect(
-      await harness.recallMemory({
-        query: "anything",
-        scopes: [{ type: "run", id: result.runId }],
-        limit: 10,
-        minScore: 0,
-      }),
-    ).toEqual([]);
+    try {
+      const result = await harness.run({ goal: "no context please" });
+      expect(result.runtimeStatus).toBe("completed");
+      expect(await harness.getSessionMemory(result.runId)).toBeUndefined();
+      expect(await harness.getLatestSummary(result.runId)).toBeUndefined();
+      expect(
+        await harness.recallMemory({
+          query: "anything",
+          scopes: [{ type: "run", id: result.runId }],
+          limit: 10,
+          minScore: 0,
+        }),
+      ).toEqual([]);
 
-    const events = await harness.getEvents(result.runId);
-    expect(events.map((event) => event.type)).not.toContain("summary_created");
-    expect(events.map((event) => event.type)).not.toContain("memory_stored");
-    expect(events.map((event) => event.type)).not.toContain("context_compacted");
+      const events = await harness.getEvents(result.runId);
+      expect(events.map((event) => event.type)).not.toContain("summary_created");
+      expect(events.map((event) => event.type)).not.toContain("memory_stored");
+      expect(events.map((event) => event.type)).not.toContain("context_compacted");
+    } finally {
+      await harness.destroy();
+    }
   });
 });

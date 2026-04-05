@@ -11,6 +11,7 @@ import type {
   HarnessContextAssembleOptions,
   HarnessContextBlock,
   HarnessContextPackage,
+  HarnessGraphNodeRecord,
   HarnessMemoryInput,
   HarnessMemoryMatch,
   HarnessMemoryQuery,
@@ -28,6 +29,13 @@ import {
   getCheckpointToolCalls,
 } from "../runtime/checkpoint.js";
 import { summarizeHarnessResult } from "../runtime/utils.js";
+import {
+  createRuntimeProjectGraphScope,
+  createRuntimeProjectMemoryScope,
+} from "../graph/utils.js";
+import { buildGraphContextBlocks } from "../graph/context.js";
+import { collectGraphContextNodes } from "../graph/retrieval.js";
+import { uniqueGraphScopes } from "../graph/scopes.js";
 
 type NormalizedContextConfig = {
   enabled: boolean;
@@ -35,6 +43,7 @@ type NormalizedContextConfig = {
   reserveOutputTokens: number;
   maxMemories: number;
   maxArtifacts: number;
+  maxGraphNodes: number;
   maxRecentMessages: number;
   maxRecentToolResults: number;
   microcompactToolResultChars: number;
@@ -252,12 +261,20 @@ export class HarnessContextKernel {
 
   async recordObservation(input: {
     runId: string;
-    tool: string;
+    tool?: string;
+    task?: string;
+    kind?: "tool" | "task";
     args: unknown;
     result: unknown;
   }): Promise<HarnessMemoryRecord | undefined> {
     if (!this.config.enabled || !this.config.autoPromoteObservations) {
       return undefined;
+    }
+
+    const kind = input.kind ?? (input.task ? "task" : "tool");
+    const name = input.tool ?? input.task;
+    if (!name) {
+      throw new Error("Harness observation requires a tool or task name");
     }
 
     return this.rememberMemory({
@@ -266,11 +283,11 @@ export class HarnessContextKernel {
       kind: "observation",
       importance: hasToolError(input.result) ? "high" : "medium",
       metadata: {
-        tool: input.tool,
+        [kind]: name,
         ...(hasToolError(input.result) ? { error: true } : {}),
       },
       content:
-        `Tool ${input.tool} called with ${JSON.stringify(sanitizeUnknown(input.args))} ` +
+        `${kind === "task" ? "Task" : "Tool"} ${name} called with ${JSON.stringify(sanitizeUnknown(input.args))} ` +
         `returned ${JSON.stringify(sanitizeUnknown(summarizeHarnessResult(input.result)))}`,
     });
   }
@@ -336,10 +353,20 @@ export class HarnessContextKernel {
     const summary = await this.getLatestSummary(runId);
 
     const query = options?.query ?? sessionMemory?.headline ?? run.goal;
+    const runtimeProjectMemoryScope = createRuntimeProjectMemoryScope(this.runtimeStore.paths.rootDir);
+    const runtimeProjectGraphScope = createRuntimeProjectGraphScope(this.runtimeStore.paths.rootDir);
     const scopes = uniqueScopes([
       { type: "project", id: this.runtimeStore.paths.rootDir },
+      runtimeProjectMemoryScope,
       { type: "run", id: runId },
       ...(options?.scopes ?? this.config.defaultScopes),
+    ]);
+    const graphScopes = uniqueGraphScopes([
+      { kind: "project", projectId: this.runtimeStore.paths.rootDir },
+      runtimeProjectGraphScope,
+      { kind: "run", runId },
+      ...(run.graphScopes ?? []),
+      ...(options?.graphScopes ?? []),
     ]);
     const memories = await this.runtimeStore.recallMemory({
       query,
@@ -351,10 +378,18 @@ export class HarnessContextKernel {
       artifacts,
       options?.maxArtifacts ?? this.config.maxArtifacts,
     );
+    const graphNodes = await collectGraphContextNodes(this.runtimeStore, {
+      runId,
+      text: query,
+      scopes: graphScopes,
+      limit: options?.maxGraphNodes ?? this.config.maxGraphNodes,
+      ...(options?.graphKinds ? { kinds: options.graphKinds } : {}),
+    });
 
     const candidateBlocks = buildContextBlocks({
       memories,
       artifactRefs,
+      graphNodes,
       ...(sessionMemory ? { sessionMemory } : {}),
       ...(summary ? { summary } : {}),
     });
@@ -390,6 +425,7 @@ export class HarnessContextKernel {
       transcriptTail,
       artifactRefs,
       memories,
+      graphNodes,
       ...(sessionMemory ? { sessionMemory } : {}),
       ...(summary ? { summary } : {}),
       omitted,
@@ -459,6 +495,7 @@ function normalizeContextConfig(
     reserveOutputTokens: config?.reserveOutputTokens ?? 2_000,
     maxMemories: config?.maxMemories ?? 6,
     maxArtifacts: config?.maxArtifacts ?? 4,
+    maxGraphNodes: config?.maxGraphNodes ?? 6,
     maxRecentMessages: config?.maxRecentMessages ?? 8,
     maxRecentToolResults: config?.maxRecentToolResults ?? 3,
     microcompactToolResultChars: config?.microcompactToolResultChars ?? 700,
@@ -1138,6 +1175,7 @@ function buildContextBlocks(input: {
   sessionMemory?: HarnessSessionMemoryRecord;
   summary?: HarnessSummaryRecord;
   memories: HarnessMemoryMatch[];
+  graphNodes: HarnessGraphNodeRecord[];
   artifactRefs: HarnessContextArtifactRef[];
 }): HarnessContextBlock[] {
   const blocks: HarnessContextBlock[] = [];
@@ -1162,18 +1200,6 @@ function buildContextBlocks(input: {
     });
   }
 
-  if (input.memories.length > 0) {
-    const memoryContent = input.memories
-      .map((memory) => `- [${memory.scope.type}:${memory.scope.id}] ${memory.content}`)
-      .join("\n");
-    blocks.push({
-      kind: "memory",
-      title: "Relevant Memory",
-      content: memoryContent,
-      tokens: estimateTokens(memoryContent),
-    });
-  }
-
   if (input.artifactRefs.length > 0) {
     const artifactContent = input.artifactRefs
       .map((artifact) => {
@@ -1190,14 +1216,34 @@ function buildContextBlocks(input: {
     });
   }
 
+  if (input.memories.length > 0) {
+    const memoryContent = input.memories
+      .map((memory) => `- [${memory.scope.type}:${memory.scope.id}] ${memory.content}`)
+      .join("\n");
+    blocks.push({
+      kind: "memory",
+      title: "Relevant Memory",
+      content: memoryContent,
+      tokens: estimateTokens(memoryContent),
+    });
+  }
+
+  if (input.graphNodes.length > 0) {
+    blocks.push(...buildGraphContextBlocks(input.graphNodes));
+  }
+
   return blocks;
 }
 
 function reservePrimaryContextTokens(blocks: HarnessContextBlock[]): number {
-  const primary = blocks.find(
-    (block) => block.kind === "session_memory" || block.kind === "summary",
-  );
-  return primary?.tokens ?? 0;
+  return blocks
+    .filter(
+      (block) =>
+        block.kind === "session_memory" ||
+        block.kind === "summary" ||
+        block.kind === "artifact",
+    )
+    .reduce((total, block) => total + block.tokens, 0);
 }
 
 function packContextBlocks(
@@ -1215,8 +1261,11 @@ function packContextBlocks(
   for (const block of blocks) {
     const remainingBudget = Math.max(0, budget - usedTokens);
     const nextBlock =
-      block.kind === "session_memory" &&
-      included.length === 0 &&
+      ((
+        block.kind === "session_memory" &&
+        included.length === 0
+      ) ||
+        block.kind === "artifact") &&
       block.tokens > remainingBudget &&
       remainingBudget > 0
         ? {

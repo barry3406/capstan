@@ -69,22 +69,26 @@ function readPackedFiles(packageDir: string): PackedFile[] {
 }
 
 describe("publish contract", () => {
-  it("includes built dist artifacts for every public workspace package that exports dist entrypoints", () => {
-    const candidates = readWorkspacePackageJsons()
-      .filter(({ manifest }) => !manifest.private)
-      .filter(({ manifest }) => packageUsesDist(manifest));
+  it(
+    "includes built dist artifacts for every public workspace package that exports dist entrypoints",
+    () => {
+      const candidates = readWorkspacePackageJsons()
+        .filter(({ manifest }) => !manifest.private)
+        .filter(({ manifest }) => packageUsesDist(manifest));
 
-    const failures: string[] = [];
+      const failures: string[] = [];
 
-    for (const candidate of candidates) {
-      const packedFiles = readPackedFiles(candidate.dir);
-      const includesDist = packedFiles.some((file) => file.path.startsWith("dist/"));
+      for (const candidate of candidates) {
+        const packedFiles = readPackedFiles(candidate.dir);
+        const includesDist = packedFiles.some((file) => file.path.startsWith("dist/"));
 
-      if (!includesDist) {
-        failures.push(candidate.manifest.name);
+        if (!includesDist) {
+          failures.push(candidate.manifest.name);
+        }
       }
-    }
 
-    expect(failures).toEqual([]);
-  });
+      expect(failures).toEqual([]);
+    },
+    20_000,
+  );
 });

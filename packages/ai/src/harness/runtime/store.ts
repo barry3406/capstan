@@ -1,9 +1,10 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   mkdir,
   readFile,
   readdir,
   rename,
+  stat,
   unlink,
   writeFile,
 } from "node:fs/promises";
@@ -14,6 +15,10 @@ import type {
   HarnessArtifactInput,
   HarnessArtifactRecord,
   HarnessContextArtifactRef,
+  HarnessGraphEdgeQuery,
+  HarnessGraphEdgeRecord,
+  HarnessGraphNodeQuery,
+  HarnessGraphNodeRecord,
   HarnessMemoryInput,
   HarnessMemoryMatch,
   HarnessMemoryQuery,
@@ -39,6 +44,20 @@ import {
 } from "./context-records.js";
 import { assertValidApprovalRecord } from "./approval-records.js";
 import { assertValidTaskRecord } from "./task-records.js";
+import {
+  buildArtifactGraphNode,
+  buildApprovalGraphNode,
+  buildMemoryGraphNode,
+  buildRunApprovalEdge,
+  buildRunArtifactEdge,
+  buildRunGraphNode,
+  buildRunMemoryEdge,
+  buildRunTaskEdge,
+  buildRunTurnEdge,
+  buildTaskGraphNode,
+  buildTurnGraphNode,
+  FileHarnessGraphStore,
+} from "../graph/index.js";
 
 const HARNESS_ROOT = ".capstan/harness";
 
@@ -58,6 +77,7 @@ interface FileHarnessRuntimeStoreIO {
   readFile: StoreReadFile;
   readdir(path: string): Promise<string[]>;
   rename(oldPath: string, newPath: string): Promise<void>;
+  stat(path: string): Promise<{ isDirectory(): boolean }>;
   unlink(path: string): Promise<void>;
   writeFile: StoreWriteFile;
 }
@@ -71,6 +91,7 @@ const defaultStoreIO: FileHarnessRuntimeStoreIO = {
   },
   readdir,
   rename,
+  stat,
   unlink,
   async writeFile(path, data, options) {
     await writeFile(path, data as string | Uint8Array, options as any);
@@ -83,6 +104,7 @@ export function buildHarnessRuntimePaths(rootDir: string): HarnessRuntimePaths {
     rootDir: runtimeRoot,
     runsDir: resolve(runtimeRoot, "runs"),
     eventsDir: resolve(runtimeRoot, "events"),
+    mailboxDir: resolve(runtimeRoot, "mailbox"),
     globalEventsPath: resolve(runtimeRoot, "events.ndjson"),
     artifactsDir: resolve(runtimeRoot, "artifacts"),
     tasksDir: resolve(runtimeRoot, "tasks"),
@@ -91,6 +113,9 @@ export function buildHarnessRuntimePaths(rootDir: string): HarnessRuntimePaths {
     summariesDir: resolve(runtimeRoot, "summaries"),
     sessionMemoryDir: resolve(runtimeRoot, "session-memory"),
     memoryDir: resolve(runtimeRoot, "memory"),
+    graphDir: resolve(runtimeRoot, "graph"),
+    graphNodesDir: resolve(runtimeRoot, "graph/nodes"),
+    graphEdgesDir: resolve(runtimeRoot, "graph/edges"),
     sandboxesDir: resolve(runtimeRoot, "sandboxes"),
   };
 }
@@ -98,15 +123,18 @@ export function buildHarnessRuntimePaths(rootDir: string): HarnessRuntimePaths {
 export class FileHarnessRuntimeStore implements HarnessRuntimeStore {
   readonly paths: HarnessRuntimePaths;
   private readonly io: FileHarnessRuntimeStoreIO;
+  private readonly graphStore: FileHarnessGraphStore;
 
   constructor(rootDir: string, io: FileHarnessRuntimeStoreIO = defaultStoreIO) {
     this.paths = buildHarnessRuntimePaths(rootDir);
     this.io = io;
+    this.graphStore = new FileHarnessGraphStore(rootDir, io);
   }
 
   async initialize(): Promise<void> {
     await this.io.mkdir(this.paths.runsDir, { recursive: true });
     await this.io.mkdir(this.paths.eventsDir, { recursive: true });
+    await this.io.mkdir(this.paths.mailboxDir, { recursive: true });
     await this.io.mkdir(this.paths.artifactsDir, { recursive: true });
     await this.io.mkdir(this.paths.tasksDir, { recursive: true });
     await this.io.mkdir(this.paths.approvalsDir, { recursive: true });
@@ -114,6 +142,7 @@ export class FileHarnessRuntimeStore implements HarnessRuntimeStore {
     await this.io.mkdir(this.paths.summariesDir, { recursive: true });
     await this.io.mkdir(this.paths.sessionMemoryDir, { recursive: true });
     await this.io.mkdir(this.paths.memoryDir, { recursive: true });
+    await this.graphStore.initialize();
     await this.io.mkdir(this.paths.sandboxesDir, { recursive: true });
     await this.io.mkdir(dirname(this.paths.globalEventsPath), { recursive: true });
   }
@@ -125,6 +154,7 @@ export class FileHarnessRuntimeStore implements HarnessRuntimeStore {
       toPersistableValue(run),
       this.io,
     );
+    await this.syncRunGraph(run);
   }
 
   async getRun(runId: string): Promise<HarnessRunRecord | undefined> {
@@ -210,6 +240,11 @@ export class FileHarnessRuntimeStore implements HarnessRuntimeStore {
       flag: "a",
     });
 
+    const run = await this.getRun(runId);
+    if (run) {
+      await this.syncArtifactGraph(run, artifact);
+    }
+
     return artifact;
   }
 
@@ -227,6 +262,10 @@ export class FileHarnessRuntimeStore implements HarnessRuntimeStore {
     const safeRunId = normalizeRunId(task.runId);
     assertValidTaskRecord(safeRunId, task);
     await writeJsonAtomic(taskRecordPath(this.paths.tasksDir, safeRunId, task.id), task, this.io);
+    const run = await this.getRun(task.runId);
+    if (run) {
+      await this.syncTaskGraph(run, task);
+    }
   }
 
   async patchTask(
@@ -251,6 +290,10 @@ export class FileHarnessRuntimeStore implements HarnessRuntimeStore {
     };
     assertValidTaskRecord(safeRunId, next);
     await writeJsonAtomic(taskRecordPath(this.paths.tasksDir, safeRunId, safeTaskId), next, this.io);
+    const run = await this.getRun(runId);
+    if (run) {
+      await this.syncTaskGraph(run, next);
+    }
     return next;
   }
 
@@ -297,6 +340,10 @@ export class FileHarnessRuntimeStore implements HarnessRuntimeStore {
       toPersistableValue(nextRecord),
       this.io,
     );
+    const run = await this.getRun(nextRecord.runId);
+    if (run) {
+      await this.syncApprovalGraph(run, nextRecord);
+    }
   }
 
   async getApproval(approvalId: string): Promise<HarnessApprovalRecord | undefined> {
@@ -357,6 +404,10 @@ export class FileHarnessRuntimeStore implements HarnessRuntimeStore {
       toPersistableValue(next),
       this.io,
     );
+    const run = await this.getRun(next.runId);
+    if (run) {
+      await this.syncApprovalGraph(run, next);
+    }
     return next;
   }
 
@@ -376,6 +427,10 @@ export class FileHarnessRuntimeStore implements HarnessRuntimeStore {
       record,
       this.io,
     );
+    const run = await this.getRun(runId);
+    if (run) {
+      await this.syncTurnGraph(run, record);
+    }
     return record;
   }
 
@@ -400,6 +455,10 @@ export class FileHarnessRuntimeStore implements HarnessRuntimeStore {
       toPersistableValue(record),
       this.io,
     );
+    const run = await this.getRun(record.runId);
+    if (run) {
+      await this.syncSessionMemoryGraph(run, record);
+    }
   }
 
   async getSessionMemory(runId: string): Promise<HarnessSessionMemoryRecord | undefined> {
@@ -422,6 +481,10 @@ export class FileHarnessRuntimeStore implements HarnessRuntimeStore {
       toPersistableValue(record),
       this.io,
     );
+    const run = await this.getRun(record.runId);
+    if (run) {
+      await this.syncSummaryGraph(run, record);
+    }
   }
 
   async getLatestSummary(runId: string): Promise<HarnessSummaryRecord | undefined> {
@@ -472,6 +535,12 @@ export class FileHarnessRuntimeStore implements HarnessRuntimeStore {
       type: input.scope.type.trim(),
       id: input.scope.id.trim(),
     };
+    const normalizedMetadata = input.metadata
+      ? (toPersistableValue(input.metadata) as Record<string, unknown>)
+      : undefined;
+    const normalizedGraphScopes = input.graphScopes?.length
+      ? (toPersistableValue(input.graphScopes) as HarnessMemoryRecord["graphScopes"])
+      : undefined;
     const existing = (await this.readAllMemoryRecords([normalizedScope])).find((record) =>
       record.scope.type === normalizedScope.type &&
       record.scope.id === normalizedScope.id &&
@@ -495,11 +564,8 @@ export class FileHarnessRuntimeStore implements HarnessRuntimeStore {
           ...(input.runId ? { runId: input.runId } : {}),
           ...(input.sourceSummaryId ? { sourceSummaryId: input.sourceSummaryId } : {}),
           ...(input.importance ? { importance: input.importance } : {}),
-          ...(input.metadata
-            ? {
-                metadata: toPersistableValue(input.metadata) as Record<string, unknown>,
-              }
-            : {}),
+          ...(normalizedGraphScopes ? { graphScopes: normalizedGraphScopes } : {}),
+          ...(normalizedMetadata ? { metadata: normalizedMetadata } : {}),
         }
       : {
           id: `mem_${randomUUID()}`,
@@ -513,14 +579,13 @@ export class FileHarnessRuntimeStore implements HarnessRuntimeStore {
           ...(input.runId ? { runId: input.runId } : {}),
           ...(input.sourceSummaryId ? { sourceSummaryId: input.sourceSummaryId } : {}),
           ...(input.importance ? { importance: input.importance } : {}),
-          ...(input.metadata
-            ? {
-                metadata: toPersistableValue(input.metadata) as Record<string, unknown>,
-              }
-            : {}),
+          ...(normalizedGraphScopes ? { graphScopes: normalizedGraphScopes } : {}),
+          ...(normalizedMetadata ? { metadata: normalizedMetadata } : {}),
         };
 
     await writeJsonAtomic(memoryRecordPath(this.paths.memoryDir, record), record, this.io);
+    const run = record.runId ? await this.getRun(record.runId) : undefined;
+    await this.syncMemoryGraph(run, record);
     return record;
   }
 
@@ -746,6 +811,104 @@ export class FileHarnessRuntimeStore implements HarnessRuntimeStore {
     return run;
   }
 
+  async upsertGraphNode(node: HarnessGraphNodeRecord): Promise<void> {
+    await this.graphStore.upsertNode(node);
+  }
+
+  async getGraphNode(nodeId: string): Promise<HarnessGraphNodeRecord | undefined> {
+    return this.graphStore.getNode(nodeId);
+  }
+
+  async listGraphNodes(query?: HarnessGraphNodeQuery): Promise<HarnessGraphNodeRecord[]> {
+    return this.graphStore.listNodes({
+      ...(query?.scopes?.length ? { scopes: query.scopes } : {}),
+      ...(query?.kinds?.length ? { kinds: query.kinds } : {}),
+      ...(query?.ids?.length ? { ids: query.ids } : {}),
+      ...(query?.runId ? { runId: query.runId } : {}),
+    });
+  }
+
+  async upsertGraphEdge(edge: HarnessGraphEdgeRecord): Promise<void> {
+    await this.graphStore.upsertEdge(edge);
+  }
+
+  async listGraphEdges(query?: HarnessGraphEdgeQuery): Promise<HarnessGraphEdgeRecord[]> {
+    return this.graphStore.listEdges({
+      ...(query?.scopes?.length ? { scopes: query.scopes } : {}),
+      ...(query?.kinds?.length ? { kinds: query.kinds } : {}),
+      ...(query?.ids?.length ? { ids: query.ids } : {}),
+      ...(query?.fromIds?.length ? { fromIds: query.fromIds } : {}),
+      ...(query?.toIds?.length ? { toIds: query.toIds } : {}),
+      ...(query?.runId ? { runId: query.runId } : {}),
+    });
+  }
+
+  private async syncRunGraph(run: HarnessRunRecord): Promise<void> {
+    await this.graphStore.upsertNode(buildRunGraphNode(this.paths, run));
+  }
+
+  private async syncTurnGraph(
+    run: HarnessRunRecord,
+    record: HarnessRunCheckpointRecord,
+  ): Promise<void> {
+    const turnNode = buildTurnGraphNode(this.paths, run, record.checkpoint, record.updatedAt);
+    await this.graphStore.upsertNode(turnNode);
+    await this.graphStore.upsertEdge(buildRunTurnEdge(run, turnNode.id, record.updatedAt));
+  }
+
+  private async syncTaskGraph(
+    run: HarnessRunRecord,
+    task: HarnessTaskRecord,
+  ): Promise<void> {
+    await this.graphStore.upsertNode(buildTaskGraphNode(this.paths, task));
+    await this.graphStore.upsertEdge(buildRunTaskEdge(run, task));
+  }
+
+  private async syncArtifactGraph(
+    run: HarnessRunRecord,
+    artifact: HarnessArtifactRecord,
+  ): Promise<void> {
+    await this.graphStore.upsertNode(buildArtifactGraphNode(this.paths, artifact));
+    await this.graphStore.upsertEdge(buildRunArtifactEdge(run, artifact));
+  }
+
+  private async syncApprovalGraph(
+    run: HarnessRunRecord,
+    approval: HarnessApprovalRecord,
+  ): Promise<void> {
+    await this.graphStore.upsertNode(buildApprovalGraphNode(this.paths, approval));
+    await this.graphStore.upsertEdge(buildRunApprovalEdge(run, approval));
+  }
+
+  private async syncSessionMemoryGraph(
+    run: HarnessRunRecord,
+    record: HarnessSessionMemoryRecord,
+  ): Promise<void> {
+    const node = buildMemoryGraphNode(this.paths, run, record, "session_memory");
+    await this.graphStore.upsertNode(node);
+    await this.graphStore.upsertEdge(buildRunMemoryEdge(run, node.id, record.updatedAt, "session_memory"));
+  }
+
+  private async syncSummaryGraph(
+    run: HarnessRunRecord,
+    record: HarnessSummaryRecord,
+  ): Promise<void> {
+    const node = buildMemoryGraphNode(this.paths, run, record, "summary");
+    await this.graphStore.upsertNode(node);
+    await this.graphStore.upsertEdge(buildRunMemoryEdge(run, node.id, record.updatedAt, "summary"));
+  }
+
+  private async syncMemoryGraph(
+    run: HarnessRunRecord | undefined,
+    record: HarnessMemoryRecord,
+  ): Promise<void> {
+    const node = buildMemoryGraphNode(this.paths, run, record, "memory");
+    await this.graphStore.upsertNode(node);
+    if (run) {
+      await this.graphStore.upsertEdge(buildRunMemoryEdge(run, node.id, record.updatedAt, "memory"));
+    }
+  }
+
   private async readAllMemoryRecords(scopes?: MemoryScope[]): Promise<HarnessMemoryRecord[]> {
     await this.initialize();
 
@@ -779,8 +942,9 @@ export class FileHarnessRuntimeStore implements HarnessRuntimeStore {
         return scopeRecords
           .filter((record): record is HarnessMemoryRecord => Boolean(record))
           .map((record) => {
-            assertValidMemoryRecord(record, `Harness memory record ${record.id}`);
-            return record;
+            const normalized = normalizeStoredMemoryRecord(record);
+            assertValidMemoryRecord(normalized, `Harness memory record ${normalized.id}`);
+            return normalized;
           });
       }),
     );
@@ -798,6 +962,33 @@ export class FileHarnessRuntimeStore implements HarnessRuntimeStore {
     await writeJsonAtomic(memoryRecordPath(this.paths.memoryDir, touched), touched, this.io);
     return touched;
   }
+}
+
+function normalizeStoredMemoryRecord(
+  record: HarnessMemoryRecord,
+): HarnessMemoryRecord {
+  const metadataGraphScopes =
+    Array.isArray(record.metadata?.graphScopes)
+      ? (toPersistableValue(record.metadata.graphScopes) as HarnessMemoryRecord["graphScopes"])
+      : undefined;
+  const graphScopes = record.graphScopes?.length
+    ? record.graphScopes
+    : metadataGraphScopes;
+  if (!graphScopes?.length) {
+    return record;
+  }
+
+  const metadata = record.metadata
+    ? Object.fromEntries(
+        Object.entries(record.metadata).filter(([key]) => key !== "graphScopes"),
+      )
+    : undefined;
+  return {
+    ...record,
+    graphScopes,
+    ...(metadata && Object.keys(metadata).length > 0 ? { metadata } : {}),
+    ...(metadata && Object.keys(metadata).length === 0 ? { metadata: undefined } : {}),
+  };
 }
 
 async function readJsonFile<T>(
@@ -847,9 +1038,19 @@ function approvalRecordPath(baseDir: string, approvalId: string): string {
 }
 
 function encodeMemoryScope(scope: MemoryScope): string {
-  const namespace = scope.type.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-");
-  const id = scope.id.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-");
+  const namespace = encodeMemoryScopeSegment(scope.type.trim().toLowerCase());
+  const id = encodeMemoryScopeSegment(scope.id.trim().toLowerCase());
   return `${namespace}__${id}`;
+}
+
+function encodeMemoryScopeSegment(value: string): string {
+  const normalized = value.replace(/[^a-z0-9._-]+/g, "-").replace(/-+/g, "-").replace(/^-+|-+$/g, "") || "unknown";
+  if (normalized.length <= 96) {
+    return normalized;
+  }
+  const digest = createHash("sha1").update(normalized).digest("hex").slice(0, 16);
+  const prefix = normalized.slice(0, 78).replace(/-+$/g, "");
+  return `${prefix || "scope"}--${digest}`;
 }
 
 function normalizeMemoryContent(content: string): string {

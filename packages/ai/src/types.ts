@@ -1,6 +1,3 @@
-// Embedding adapter (for memory vector search)
-export interface MemoryEmbedder { embed(texts: string[]): Promise<number[][]>; dimensions: number; }
-
 // LLM types (moved from agent/llm.ts concept, but independent)
 export interface LLMMessage { role: "system" | "user" | "assistant"; content: string; }
 export interface LLMResponse { content: string; model: string; usage?: { promptTokens: number; completionTokens: number; totalTokens: number } | undefined; finishReason?: string | undefined; }
@@ -9,21 +6,136 @@ export interface LLMOptions { model?: string; temperature?: number; maxTokens?: 
 export interface LLMProvider { name: string; chat(messages: LLMMessage[], options?: LLMOptions): Promise<LLMResponse>; stream?(messages: LLMMessage[], options?: LLMOptions): AsyncIterable<LLMStreamChunk>; }
 
 // Think/Generate options
-export interface ThinkOptions<T = unknown> { schema?: { parse: (data: unknown) => T }; model?: string; temperature?: number; maxTokens?: number; systemPrompt?: string; memory?: boolean; about?: [string, string]; }
-export interface GenerateOptions { model?: string; temperature?: number; maxTokens?: number; systemPrompt?: string; memory?: boolean; about?: [string, string]; }
+export interface ThinkOptions<T = unknown> { schema?: { parse: (data: unknown) => T }; model?: string; temperature?: number; maxTokens?: number; systemPrompt?: string; }
+export interface GenerateOptions { model?: string; temperature?: number; maxTokens?: number; systemPrompt?: string; }
 
-// Memory types
-export interface MemoryEntry { id: string; content: string; scope: MemoryScope; createdAt: string; updatedAt: string; metadata?: Record<string, unknown> | undefined; embedding?: number[] | undefined; importance?: "low" | "medium" | "high" | "critical" | undefined; type?: "fact" | "event" | "preference" | "instruction" | undefined; accessCount: number; lastAccessedAt: string; }
+// Shared scope type used by the harness context kernel.
 export interface MemoryScope { type: string; id: string; }
-export interface RecallOptions { scope?: MemoryScope; limit?: number; minScore?: number; types?: string[]; }
-export interface RememberOptions { scope?: MemoryScope; type?: "fact" | "event" | "preference" | "instruction"; importance?: "low" | "medium" | "high" | "critical"; metadata?: Record<string, unknown>; }
-export interface AssembleContextOptions { query: string; maxTokens?: number; scopes?: MemoryScope[]; }
 
-// Memory backend interface
-export interface MemoryBackend { store(entry: Omit<MemoryEntry, "id" | "accessCount" | "lastAccessedAt" | "createdAt" | "updatedAt">): Promise<string>; query(scope: MemoryScope, text: string, k: number): Promise<MemoryEntry[]>; remove(id: string): Promise<boolean>; clear(scope: MemoryScope): Promise<void>; }
+export interface AgentToolExecutionContext {
+  signal: AbortSignal;
+  runId?: string | undefined;
+  requestId: string;
+  order: number;
+}
 
-// Memory accessor (what developers use)
-export interface MemoryAccessor { remember(content: string, opts?: RememberOptions): Promise<string>; recall(query: string, opts?: RecallOptions): Promise<MemoryEntry[]>; forget(entryId: string): Promise<boolean>; about(type: string, id: string): MemoryAccessor; assembleContext(opts: AssembleContextOptions): Promise<string>; }
+export interface AgentToolProgressUpdate {
+  type: "progress";
+  message: string;
+  detail?: Record<string, unknown> | undefined;
+}
+
+export interface AgentToolResultUpdate {
+  type: "result";
+  result: unknown;
+}
+
+export type AgentToolExecutionUpdate =
+  | AgentToolProgressUpdate
+  | AgentToolResultUpdate;
+
+export type AgentLoopGovernanceAction =
+  | "allow"
+  | "require_approval"
+  | "deny";
+
+export interface AgentLoopGovernanceDecision {
+  action: AgentLoopGovernanceAction;
+  reason?: string;
+  policyId?: string;
+  risk?: "low" | "medium" | "high" | "critical";
+  source?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface AgentLoopGovernanceContext {
+  runId?: string | undefined;
+  requestId: string;
+  order: number;
+  kind: "tool" | "task";
+  name: string;
+  args: unknown;
+  assistantMessage?: string | undefined;
+}
+
+export type AgentLoopMailboxMessage =
+  | {
+      id: string;
+      runId: string;
+      createdAt: string;
+      kind: "task_notification";
+      notification: {
+        runId: string;
+        taskId: string;
+        requestId: string;
+        name: string;
+        kind: AgentTaskKind;
+        order: number;
+        status: "running" | "completed" | "failed" | "canceled";
+        args: Record<string, unknown>;
+        result?: unknown | undefined;
+        error?: string | undefined;
+        hardFailure: boolean;
+      };
+    }
+  | {
+      id: string;
+      runId: string;
+      createdAt: string;
+      kind: "control_signal";
+      action: "pause" | "cancel";
+      requestedAt?: string | undefined;
+      reason?: string | undefined;
+    }
+  | {
+      id: string;
+      runId: string;
+      createdAt: string;
+      kind: "context_message";
+      message: LLMMessage;
+      source?: string | undefined;
+    }
+  | {
+      id: string;
+      runId: string;
+      createdAt: string;
+      kind: "trigger";
+      trigger: {
+        type: string;
+        source: string;
+        metadata?: Record<string, unknown> | undefined;
+      };
+    }
+  | {
+      id: string;
+      runId: string;
+      createdAt: string;
+      kind: "tool_progress";
+      tool: string;
+      requestId: string;
+      order: number;
+      message: string;
+      detail?: Record<string, unknown> | undefined;
+    }
+  | {
+      id: string;
+      runId: string;
+      createdAt: string;
+      kind: "system";
+      event: string;
+      detail?: Record<string, unknown> | undefined;
+    };
+
+export interface AgentLoopMailbox {
+  publish(message: AgentLoopMailboxMessage): Promise<void>;
+  next(
+    runId: string,
+    options?: {
+      timeoutMs?: number;
+    },
+  ): Promise<AgentLoopMailboxMessage | undefined>;
+  list(runId: string): Promise<AgentLoopMailboxMessage[]>;
+}
 
 // Agent loop types
 export interface AgentTool {
@@ -32,7 +144,14 @@ export interface AgentTool {
   parameters?: Record<string, unknown>;
   isConcurrencySafe?: boolean | undefined;
   failureMode?: "soft" | "hard" | undefined;
-  execute(args: Record<string, unknown>): Promise<unknown>;
+  execute(
+    args: Record<string, unknown>,
+    context?: AgentToolExecutionContext,
+  ): Promise<unknown>;
+  executeStreaming?(
+    args: Record<string, unknown>,
+    context: AgentToolExecutionContext,
+  ): AsyncIterable<AgentToolExecutionUpdate>;
 }
 export type AgentTaskKind =
   | "shell"
@@ -59,6 +178,19 @@ export interface AgentTask {
     args: Record<string, unknown>,
     context: AgentTaskExecutionContext,
   ): Promise<unknown>;
+}
+export interface AgentTaskWorkerHandle {
+  result: Promise<unknown>;
+  abort?(reason?: string): Promise<void> | void;
+}
+export interface AgentTaskWorker {
+  readonly mode: "in_process" | "external";
+  start(
+    task: AgentTask,
+    args: Record<string, unknown>,
+    context: AgentTaskExecutionContext,
+  ): AgentTaskWorkerHandle | Promise<AgentTaskWorkerHandle>;
+  destroy?(): Promise<void> | void;
 }
 export interface AgentToolCallRecord {
   tool: string;
@@ -172,12 +304,30 @@ export interface AgentLoopCheckpoint {
   lastAssistantResponse?: string | undefined;
   orchestration?: AgentLoopOrchestrationState | undefined;
 }
-export interface AgentLoopControlDecision { action: "continue" | "pause" | "cancel"; reason?: string; }
+export interface AgentLoopSidecarRequest {
+  runId?: string | undefined;
+  checkpoint: AgentLoopCheckpoint;
+  stage: AgentLoopCheckpointStage;
+  phaseBeforeSidecars: AgentLoopPhase;
+  transitionReason: AgentLoopTransitionReason;
+}
+export interface AgentLoopSidecarResult {
+  checkpoint?: AgentLoopCheckpoint | undefined;
+}
+export interface AgentLoopControlDecision {
+  action: "continue" | "pause" | "cancel";
+  reason?: string;
+  requestedAt?: string;
+}
 export interface AgentLoopBeforeToolResult { allowed: boolean; reason?: string; }
 export interface AgentLoopControlAdapter {
   check(): Promise<"continue" | "pause" | "cancel">;
 }
 export interface AgentLoopOptions {
+  onToolCall?: (
+    tool: string,
+    args: unknown,
+  ) => Promise<void>;
   beforeToolCall?: (
     tool: string,
     args: unknown,
@@ -186,6 +336,15 @@ export interface AgentLoopOptions {
     tool: string,
     args: unknown,
     result: unknown,
+  ) => Promise<void>;
+  onToolProgress?: (
+    tool: string,
+    args: unknown,
+    update: AgentToolProgressUpdate,
+  ) => Promise<void>;
+  onTaskCall?: (
+    task: string,
+    args: unknown,
   ) => Promise<void>;
   beforeTaskCall?: (
     task: string,
@@ -196,6 +355,20 @@ export interface AgentLoopOptions {
     args: unknown,
     result: unknown,
   ) => Promise<void>;
+  governToolCall?: (
+    input: AgentLoopGovernanceContext & { kind: "tool" },
+  ) => Promise<AgentLoopGovernanceDecision>;
+  governTaskCall?: (
+    input: AgentLoopGovernanceContext & { kind: "task" },
+  ) => Promise<AgentLoopGovernanceDecision>;
+  onGovernanceDecision?: (
+    input: AgentLoopGovernanceContext & { decision: AgentLoopGovernanceDecision },
+  ) => Promise<void>;
+  mailbox?: AgentLoopMailbox;
+  onMailboxMessage?: (message: AgentLoopMailboxMessage) => Promise<void>;
+  isMailboxControlSignalCurrent?: (
+    message: Extract<AgentLoopMailboxMessage, { kind: "control_signal" }>,
+  ) => Promise<boolean>;
   onTaskSubmitted?: (task: {
     id: string;
     runId: string;
@@ -226,6 +399,10 @@ export interface AgentLoopOptions {
   }) => Promise<void>;
   callStack?: Set<string>;
   onMemoryEvent?: (content: string) => Promise<void>;
+  hasPendingSidecars?: () => boolean;
+  runSidecars?: (
+    input: AgentLoopSidecarRequest,
+  ) => Promise<AgentLoopSidecarResult | void>;
   checkpoint?: AgentLoopCheckpoint;
   resumePendingTool?: boolean;
   onCheckpoint?: (
@@ -253,7 +430,6 @@ export interface AgentRunConfig {
   goal: string;
   about?: [string, string];
   maxIterations?: number;
-  memory?: boolean;
   tools?: AgentTool[];
   tasks?: AgentTask[];
   systemPrompt?: string;
@@ -277,7 +453,7 @@ export interface AgentRunResult {
 }
 
 // AI context (standalone, no Capstan dependency)
-export interface AIContext { think<T = string>(prompt: string, opts?: ThinkOptions<T>): Promise<T>; generate(prompt: string, opts?: GenerateOptions): Promise<string>; thinkStream(prompt: string, opts?: Omit<ThinkOptions, "schema">): AsyncIterable<string>; generateStream(prompt: string, opts?: GenerateOptions): AsyncIterable<string>; remember(content: string, opts?: RememberOptions): Promise<string>; recall(query: string, opts?: RecallOptions): Promise<MemoryEntry[]>; memory: { about(type: string, id: string): MemoryAccessor; forget(entryId: string): Promise<boolean>; assembleContext(opts: AssembleContextOptions): Promise<string>; }; agent: { run(config: AgentRunConfig): Promise<AgentRunResult>; }; }
+export interface AIContext { think<T = string>(prompt: string, opts?: ThinkOptions<T>): Promise<T>; generate(prompt: string, opts?: GenerateOptions): Promise<string>; thinkStream(prompt: string, opts?: Omit<ThinkOptions, "schema">): AsyncIterable<string>; generateStream(prompt: string, opts?: GenerateOptions): AsyncIterable<string>; agent: { run(config: AgentRunConfig): Promise<AgentRunResult>; }; }
 
 // Config for creating an AI context
-export interface AIConfig { llm: LLMProvider; memory?: { backend?: MemoryBackend; embedding?: { embed(texts: string[]): Promise<number[][]>; dimensions: number; }; autoExtract?: boolean; }; defaultScope?: MemoryScope; }
+export interface AIConfig { llm: LLMProvider; }

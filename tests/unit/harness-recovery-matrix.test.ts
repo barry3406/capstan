@@ -52,7 +52,11 @@ function lifecycleEventTypes(events: Array<{ type: string }>): string[] {
       (type) =>
         type !== "memory_stored" &&
         type !== "summary_created" &&
-        type !== "context_compacted",
+        type !== "context_compacted" &&
+        type !== "governance_decision" &&
+        type !== "sidecar_started" &&
+        type !== "sidecar_completed" &&
+        type !== "sidecar_failed",
     );
 }
 
@@ -144,18 +148,14 @@ describe("createHarness recovery matrix", () => {
 
     expect(canceled.runtimeStatus).toBe("canceled");
     const events = await harness.getEvents(canceled.runId);
-    expect(events.map((event) => event.type)).toEqual([
+    expect(lifecycleEventTypes(events)).toEqual([
       "run_started",
       "tool_call",
       "tool_result",
-      "memory_stored",
       "tool_call",
       "cancel_requested",
       "tool_result",
-      "memory_stored",
       "run_canceled",
-      "summary_created",
-      "memory_stored",
     ]);
   });
 
@@ -199,19 +199,15 @@ describe("createHarness recovery matrix", () => {
 
     expect(canceled.runtimeStatus).toBe("canceled");
     const events = await harness.getEvents(canceled.runId);
-    expect(events.map((event) => event.type)).toEqual([
+    expect(lifecycleEventTypes(events)).toEqual([
       "run_started",
       "tool_call",
       "tool_result",
-      "memory_stored",
       "tool_call",
       "pause_requested",
       "cancel_requested",
       "tool_result",
-      "memory_stored",
       "run_canceled",
-      "summary_created",
-      "memory_stored",
     ]);
   });
 
@@ -252,16 +248,12 @@ describe("createHarness recovery matrix", () => {
     );
 
     const events = await harness.getEvents(blocked.runId);
-    expect(events.map((event) => event.type)).toEqual([
+    expect(lifecycleEventTypes(events)).toEqual([
       "run_started",
       "tool_call",
       "approval_required",
-      "summary_created",
-      "memory_stored",
       "approval_canceled",
       "run_canceled",
-      "summary_created",
-      "memory_stored",
     ]);
   });
 
@@ -514,18 +506,14 @@ describe("createHarness recovery matrix", () => {
     expect(writes).toEqual([]);
 
     const events = await harness.getEvents(blocked.runId);
-    expect(events.map((event) => event.type)).toEqual([
+    expect(lifecycleEventTypes(events)).toEqual([
       "run_started",
       "tool_call",
       "approval_required",
-      "summary_created",
-      "memory_stored",
       "approval_approved",
       "run_resumed",
       "cancel_requested",
       "run_canceled",
-      "summary_created",
-      "memory_stored",
     ]);
   });
 });

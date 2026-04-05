@@ -63,7 +63,8 @@ export async function runPrompts(): Promise<{
 }> {
   p.note(
     [
-      "Capstan scaffolds a real app shell, a health route, deployment scripts, and an AGENTS.md guide for coding agents.",
+      "Capstan scaffolds a real app shell, an agent-first contract layer, deployment scripts, and an AGENTS.md guide for coding agents.",
+      "The recommended path for new agentic apps is the `agent` template.",
       "Pick a template, choose whether you want deploy files now, and you can start shipping immediately.",
     ].join("\n"),
     "What you'll get",

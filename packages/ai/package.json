@@ -13,7 +13,7 @@
   "files": [
     "dist"
   ],
-  "description": "AI agent toolkit — think, generate, memory, agent loop. Works standalone or with Capstan.",
+  "description": "AI agent toolkit — think, generate, agent loop, harness runtime, and task fabric. Works standalone or with Capstan.",
   "license": "MIT",
   "author": "barry3406",
   "publishConfig": { "access": "public" }

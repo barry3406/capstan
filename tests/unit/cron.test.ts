@@ -254,24 +254,39 @@ describe("capstan-cron", () => {
   it("createAgentCron runs a harness-backed agent loop and forwards the result", async () => {
     let capturedResult: unknown;
 
-    const llm = {
-      name: "mock",
-      async chat() {
+    const harness = {
+      async startRun(config: Record<string, unknown>, options?: Record<string, unknown>) {
+        expect(config).toMatchObject({
+          goal: "Summarize the latest status",
+          maxIterations: 20,
+        });
+        expect(options).toMatchObject({
+          trigger: {
+            type: "cron",
+            source: "agent-job",
+            schedule: {
+              name: "agent-job",
+              pattern: "0 */2 * * *",
+            },
+          },
+        });
         return {
-          content: "done",
-          model: "mock-1",
+          runId: "harness-run-cron",
+          result: Promise.resolve({
+            status: "completed",
+            result: "done",
+            iterations: 1,
+          }),
         };
       },
+      async destroy() {},
     };
 
     const job = createAgentCron({
       cron: "0 */2 * * *",
       name: "agent-job",
       goal: () => "Summarize the latest status",
-      llm,
-      harnessConfig: {
-        verify: { enabled: false },
-      },
+      runtime: { harness },
       onResult: (result) => {
         capturedResult = result;
       },

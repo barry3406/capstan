@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
 import { createHarness, openHarnessRuntime } from "@zauso-ai/capstan-ai";
 import type {
+  AgentTaskWorker,
+  AgentTaskRuntime,
   LLMMessage,
   LLMOptions,
   LLMProvider,
@@ -309,5 +311,367 @@ describe("createHarness task fabric persistence", () => {
         status: "canceled",
       }),
     ]);
+  });
+
+  it("uses the durable task runtime by default and persists task-runtime mailbox state under the harness root", async () => {
+    const rootDir = await createTempDir();
+    const harness = await createHarness({
+      llm: mockLLM([
+        JSON.stringify({ tool: "deploy", arguments: { version: "v5" } }),
+        "done",
+      ]),
+      runtime: { rootDir },
+      verify: { enabled: false },
+    });
+
+    const result = await harness.run({
+      goal: "persist task runtime state",
+      tasks: [
+        {
+          name: "deploy",
+          description: "deploys a release",
+          kind: "workflow",
+          async execute(args) {
+            return { deployed: args.version };
+          },
+        },
+      ],
+    });
+
+    expect(result.runtimeStatus).toBe("completed");
+    const taskRuntimeRunDir = resolve(
+      rootDir,
+      ".capstan",
+      "harness",
+      "task-runtime",
+      result.runId,
+    );
+    const mailboxState = await Bun.file(resolve(taskRuntimeRunDir, "mailbox-state.json")).json();
+    expect(mailboxState).toMatchObject({
+      nextWriteSequence: 2,
+      nextReadSequence: 1,
+    });
+    expect((await readdir(resolve(taskRuntimeRunDir, "records"))).length).toBeGreaterThan(0);
+    expect((await readdir(resolve(taskRuntimeRunDir, "notifications"))).length).toBeGreaterThan(0);
+  });
+
+  it("routes harness task execution through a configured external worker", async () => {
+    const rootDir = await createTempDir();
+    const starts: string[] = [];
+    const worker: AgentTaskWorker = {
+      mode: "external",
+      async start(task, args) {
+        starts.push(`${task.name}:${String(args.version)}`);
+        return {
+          result: Promise.resolve({ deployed: args.version, worker: "external" }),
+        };
+      },
+    };
+    const harness = await createHarness({
+      llm: mockLLM([
+        JSON.stringify({ tool: "deploy", arguments: { version: "v6" } }),
+        "worker complete",
+      ]),
+      runtime: {
+        rootDir,
+        tasks: { worker },
+      },
+      verify: { enabled: false },
+    });
+
+    const result = await harness.run({
+      goal: "run through external worker",
+      tasks: [
+        {
+          name: "deploy",
+          description: "deploys a release",
+          kind: "remote",
+          async execute() {
+            throw new Error("task execute should be routed through the worker adapter");
+          },
+        },
+      ],
+    });
+
+    expect(starts).toEqual(["deploy:v6"]);
+    expect(result.taskCalls).toEqual([
+      expect.objectContaining({
+        task: "deploy",
+        result: { deployed: "v6", worker: "external" },
+      }),
+    ]);
+  });
+
+  it("prefers a configured task runtime factory over the built-in durable runtime without destroying shared runtimes by default", async () => {
+    const rootDir = await createTempDir();
+    const factoryCalls: Array<{ runId: string; runtimeRootDir: string }> = [];
+    const submittedRunIds: string[] = [];
+    const destroyedRunIds: string[] = [];
+    const notifications = new Map<string, Array<{
+      runId: string;
+      taskId: string;
+      requestId: string;
+      name: string;
+      kind: "workflow";
+      order: number;
+      status: "completed";
+      args: Record<string, unknown>;
+      result: { deployed: string; runtime: string };
+      hardFailure: boolean;
+    }>>();
+
+    const harness = await createHarness({
+      llm: mockLLM([
+        JSON.stringify({ tool: "deploy", arguments: { version: "v7" } }),
+        "factory complete",
+      ]),
+      runtime: {
+        rootDir,
+        tasks: {
+          runtimeFactory({ runId, runtimeRootDir }) {
+            factoryCalls.push({ runId, runtimeRootDir });
+            const runtime: AgentTaskRuntime = {
+              async submitBatch(input) {
+                submittedRunIds.push(input.runId);
+                notifications.set(input.runId, [
+                  {
+                    runId: input.runId,
+                    taskId: `task-${input.requests[0]!.id}`,
+                    requestId: input.requests[0]!.id,
+                    name: input.requests[0]!.name,
+                    kind: "workflow",
+                    order: input.requests[0]!.order,
+                    status: "completed",
+                    args: input.requests[0]!.args,
+                    result: { deployed: String(input.requests[0]!.args.version), runtime: "factory" },
+                    hardFailure: false,
+                  },
+                ]);
+                return {
+                  records: [
+                    {
+                      id: `task-${input.requests[0]!.id}`,
+                      runId: input.runId,
+                      requestId: input.requests[0]!.id,
+                      name: input.requests[0]!.name,
+                      kind: "workflow",
+                      order: input.requests[0]!.order,
+                      status: "running",
+                      createdAt: "2026-04-05T00:00:00.000Z",
+                      updatedAt: "2026-04-05T00:00:00.000Z",
+                      args: input.requests[0]!.args,
+                      hardFailure: false,
+                    },
+                  ],
+                };
+              },
+              async nextNotification(runId) {
+                return notifications.get(runId)?.shift();
+              },
+              async cancelTasks() {},
+              async cancelRun() {},
+              getActiveTaskIds() {
+                return [];
+              },
+              async destroy() {
+                destroyedRunIds.push(runId);
+              },
+            };
+            return runtime;
+          },
+        },
+      },
+      verify: { enabled: false },
+    });
+
+    const result = await harness.run({
+      goal: "prefer the injected task runtime",
+      tasks: [
+        {
+          name: "deploy",
+          description: "deploys a release",
+          kind: "workflow",
+          async execute() {
+            throw new Error("factory runtime should intercept task execution");
+          },
+        },
+      ],
+    });
+
+    expect(result.runtimeStatus).toBe("completed");
+    expect(result.taskCalls).toEqual([
+      expect.objectContaining({
+        task: "deploy",
+        result: { deployed: "v7", runtime: "factory" },
+      }),
+    ]);
+    expect(factoryCalls).toEqual([
+      expect.objectContaining({
+        runId: result.runId,
+        runtimeRootDir: rootDir,
+      }),
+    ]);
+    expect(submittedRunIds).toEqual([result.runId]);
+    expect(destroyedRunIds).toEqual([]);
+  });
+
+  it("can opt into destroying an injected per-run task runtime on completion", async () => {
+    const rootDir = await createTempDir();
+    const destroyedRunIds: string[] = [];
+
+    const harness = await createHarness({
+      llm: mockLLM([
+        JSON.stringify({ tool: "deploy", arguments: { version: "v7" } }),
+        "factory complete",
+      ]),
+      runtime: {
+        rootDir,
+        tasks: {
+          runtimeFactory({ runId }) {
+            return {
+              runtime: {
+                async submitBatch(input) {
+                  await input.hooks?.onSubmitted?.({
+                    id: `task-${input.requests[0]!.id}`,
+                    runId: input.runId,
+                    requestId: input.requests[0]!.id,
+                    name: input.requests[0]!.name,
+                    kind: "workflow",
+                    order: input.requests[0]!.order,
+                    status: "running",
+                    createdAt: "2026-04-05T00:00:00.000Z",
+                    updatedAt: "2026-04-05T00:00:00.000Z",
+                    args: input.requests[0]!.args,
+                    hardFailure: false,
+                  });
+                  await input.hooks?.onSettled?.(
+                    {
+                      id: `task-${input.requests[0]!.id}`,
+                      runId: input.runId,
+                      requestId: input.requests[0]!.id,
+                      name: input.requests[0]!.name,
+                      kind: "workflow",
+                      order: input.requests[0]!.order,
+                      status: "completed",
+                      createdAt: "2026-04-05T00:00:00.000Z",
+                      updatedAt: "2026-04-05T00:00:00.000Z",
+                      args: input.requests[0]!.args,
+                      result: { deployed: String(input.requests[0]!.args.version) },
+                      hardFailure: false,
+                    },
+                    {
+                      runId: input.runId,
+                      taskId: `task-${input.requests[0]!.id}`,
+                      requestId: input.requests[0]!.id,
+                      name: input.requests[0]!.name,
+                      kind: "workflow",
+                      order: input.requests[0]!.order,
+                      status: "completed",
+                      args: input.requests[0]!.args,
+                      result: { deployed: String(input.requests[0]!.args.version) },
+                      hardFailure: false,
+                    },
+                  );
+                  return {
+                    records: [
+                      {
+                        id: `task-${input.requests[0]!.id}`,
+                        runId: input.runId,
+                        requestId: input.requests[0]!.id,
+                        name: input.requests[0]!.name,
+                        kind: "workflow",
+                        order: input.requests[0]!.order,
+                        status: "running",
+                        createdAt: "2026-04-05T00:00:00.000Z",
+                        updatedAt: "2026-04-05T00:00:00.000Z",
+                        args: input.requests[0]!.args,
+                        hardFailure: false,
+                      },
+                    ],
+                  };
+                },
+                async nextNotification() {
+                  return undefined;
+                },
+                async cancelTasks() {},
+                async cancelRun() {},
+                getActiveTaskIds() {
+                  return [];
+                },
+                async destroy() {
+                  destroyedRunIds.push(runId);
+                },
+              },
+              destroyOnExit: true,
+            };
+          },
+        },
+      },
+      verify: { enabled: false },
+    });
+
+    const result = await harness.run({
+      goal: "destroy injected runtime",
+      tasks: [
+        {
+          name: "deploy",
+          description: "deploys a release",
+          kind: "workflow",
+          async execute() {
+            return { ok: true };
+          },
+        },
+      ],
+    });
+
+    expect(result.runtimeStatus).toBe("completed");
+    expect(destroyedRunIds).toEqual([result.runId]);
+  });
+
+  it("destroys the configured external worker after the run settles so worker-owned resources do not leak", async () => {
+    const rootDir = await createTempDir();
+    let destroyCalls = 0;
+    const worker: AgentTaskWorker = {
+      mode: "external",
+      async start(task, args) {
+        return {
+          result: Promise.resolve({
+            deployed: args.version,
+            worker: task.name,
+          }),
+        };
+      },
+      destroy() {
+        destroyCalls += 1;
+      },
+    };
+    const harness = await createHarness({
+      llm: mockLLM([
+        JSON.stringify({ tool: "deploy", arguments: { version: "v8" } }),
+        "destroyed cleanly",
+      ]),
+      runtime: {
+        rootDir,
+        tasks: { worker },
+      },
+      verify: { enabled: false },
+    });
+
+    const result = await harness.run({
+      goal: "ensure the worker lifecycle is closed",
+      tasks: [
+        {
+          name: "deploy",
+          description: "deploys externally",
+          kind: "remote",
+          async execute() {
+            throw new Error("external worker should own execution");
+          },
+        },
+      ],
+    });
+
+    expect(result.runtimeStatus).toBe("completed");
+    expect(destroyCalls).toBe(1);
   });
 });

@@ -75,7 +75,10 @@ function lifecycleEventTypes(events: Array<{ type: string }>): string[] {
       (type) =>
         type !== "memory_stored" &&
         type !== "summary_created" &&
-        type !== "context_compacted",
+        type !== "context_compacted" &&
+        type !== "sidecar_started" &&
+        type !== "sidecar_completed" &&
+        type !== "sidecar_failed",
     );
 }
 
@@ -262,6 +265,7 @@ describe("createHarness runtime substrate", () => {
     expect(lifecycleEventTypes(events)).toEqual([
       "run_started",
       "tool_call",
+      "governance_decision",
       "tool_result",
       "run_completed",
     ]);
@@ -362,6 +366,7 @@ describe("createHarness runtime substrate", () => {
     expect(lifecycleEventTypes(events)).toEqual([
       "run_started",
       "tool_call",
+      "governance_decision",
       "approval_required",
     ]);
   });
@@ -401,6 +406,7 @@ describe("createHarness runtime substrate", () => {
     expect(lifecycleEventTypes(events)).toEqual([
       "run_started",
       "tool_call",
+      "governance_decision",
       "artifact_created",
       "tool_result",
       "run_completed",
@@ -663,9 +669,11 @@ describe("createHarness runtime substrate", () => {
     expect(lifecycleEventTypes(events)).toEqual([
       "run_started",
       "tool_call",
+      "governance_decision",
       "tool_result",
       "tool_call",
       "pause_requested",
+      "governance_decision",
       "tool_result",
       "run_paused",
       "run_resumed",
@@ -860,6 +868,7 @@ describe("createHarness runtime substrate", () => {
     expect(lifecycleEventTypes(await harness.getEvents(blocked.runId))).toEqual([
       "run_started",
       "tool_call",
+      "governance_decision",
       "approval_required",
       "approval_canceled",
       "run_canceled",
@@ -924,9 +933,11 @@ describe("createHarness runtime substrate", () => {
     expect(lifecycleEventTypes(events)).toEqual([
       "run_started",
       "tool_call",
+      "governance_decision",
       "tool_result",
       "tool_call",
       "cancel_requested",
+      "governance_decision",
       "tool_result",
       "run_canceled",
     ]);

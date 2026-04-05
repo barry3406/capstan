@@ -1,5 +1,10 @@
 export const templateOptions = [
   {
+    value: "agent",
+    label: "Agent-first workspace",
+    hint: "Capabilities, workflows, policies, memory spaces, and operator views from day one.",
+  },
+  {
     value: "blank",
     label: "Blank launchpad",
     hint: "One page, one API route, one clean place to start.",

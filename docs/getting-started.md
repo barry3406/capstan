@@ -22,14 +22,26 @@ npx capstan dev
 
 Capstan is currently published on npm's `beta` tag, so use `create-capstan-app@beta` when bootstrapping a fresh project from npm.
 
-The `create-capstan-app` scaffolder supports two templates:
+The `create-capstan-app` scaffolder supports three templates:
 
 | Template  | Description                                                                 |
 | --------- | --------------------------------------------------------------------------- |
+| `agent`   | Agent-first workspace with capabilities, workflows, policies, memory spaces, and operator views |
 | `blank`   | Minimal project with a health check API and home page                       |
 | `tickets` | Full-featured example with a Ticket model, CRUD API routes, and auth policy |
 
 You can also run the scaffolder interactively (no arguments) and it will prompt for a project name and template.
+
+Agent-first bootstrap example:
+
+```bash
+npx create-capstan-app@beta my-agent --template agent
+cd my-agent
+npm install
+npx capstan dev
+```
+
+If you choose the `agent` template, read the [Agent Framework Guide](./agent-framework.md) next. It explains the recommended contract order and the intended runtime-vs-framework split.
 
 ## Project Structure
 
@@ -38,6 +50,13 @@ After scaffolding, your project looks like this:
 ```
 my-app/
   app/
+    agent/                 # Agent contracts (agent template)
+      capabilities/
+      workflows/
+      policies/
+      memory/
+      views/
+      runtime.ts
     routes/
       _layout.tsx          # Root layout (wraps all pages)
       index.page.tsx       # Home page
@@ -55,6 +74,16 @@ my-app/
   AGENTS.md                # AI coding agent guide
   .gitignore
 ```
+
+The `agent` template adds a contract-first agent graph on top of the normal Capstan app layout:
+
+- `app/agent/capabilities/` defines what the agent can do
+- `app/agent/workflows/` defines long-running task flows
+- `app/agent/policies/` defines governance and approval rules
+- `app/agent/memory/` defines memory spaces and retention
+- `app/agent/views/` defines operator-facing projections
+- `app/agent/README.md` explains the contract graph and recommended edit order
+- `app/routes/api/agent/app.api.ts` exposes the agent contract graph
 
 ### File Naming Conventions
 

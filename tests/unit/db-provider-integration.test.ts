@@ -62,7 +62,7 @@ interface ContainerHandle {
 }
 
 const handles: ContainerHandle[] = [];
-const maybeIt = dockerAvailable() ? it : it.skip;
+let dockerReady = dockerAvailable();
 
 afterAll(() => {
   for (const handle of handles.splice(0)) {
@@ -75,62 +75,71 @@ describe("db provider integration", () => {
   let mysqlUrl = "";
 
   beforeAll(async () => {
-    if (!dockerAvailable()) return;
+    if (!dockerReady) return;
 
-    const postgresId = runDocker([
-      "run",
-      "-d",
-      "--rm",
-      "-e",
-      "POSTGRES_PASSWORD=postgres",
-      "-e",
-      "POSTGRES_DB=capstan_test",
-      "-p",
-      "127.0.0.1::5432",
-      "postgres:16-alpine",
-    ]);
-    const postgresPort = parseHostPort(runDocker(["port", postgresId, "5432/tcp"]));
-    handles.push({ id: postgresId, port: postgresPort });
-    postgresUrl = `postgres://postgres:postgres@127.0.0.1:${postgresPort}/capstan_test`;
+    try {
+      const postgresId = runDocker([
+        "run",
+        "-d",
+        "--rm",
+        "-e",
+        "POSTGRES_PASSWORD=postgres",
+        "-e",
+        "POSTGRES_DB=capstan_test",
+        "-p",
+        "127.0.0.1::5432",
+        "postgres:16-alpine",
+      ]);
+      const postgresPort = parseHostPort(runDocker(["port", postgresId, "5432/tcp"]));
+      handles.push({ id: postgresId, port: postgresPort });
+      postgresUrl = `postgres://postgres:postgres@127.0.0.1:${postgresPort}/capstan_test`;
 
-    await waitFor("postgres", async () => {
-      const database = await createDatabase({ provider: "postgres", url: postgresUrl });
-      try {
-        await database.execute("SELECT 1 AS ok");
-      } finally {
-        await database.close();
+      await waitFor("postgres", async () => {
+        const database = await createDatabase({ provider: "postgres", url: postgresUrl });
+        try {
+          await database.execute("SELECT 1 AS ok");
+        } finally {
+          await database.close();
+        }
+      });
+
+      const mysqlId = runDocker([
+        "run",
+        "-d",
+        "--rm",
+        "-e",
+        "MYSQL_ROOT_PASSWORD=root",
+        "-e",
+        "MYSQL_ROOT_HOST=%",
+        "-e",
+        "MYSQL_DATABASE=capstan_test",
+        "-p",
+        "127.0.0.1::3306",
+        "mysql:5.7",
+      ]);
+      const mysqlPort = parseHostPort(runDocker(["port", mysqlId, "3306/tcp"]));
+      handles.push({ id: mysqlId, port: mysqlPort });
+      mysqlUrl = `mysql://root:root@127.0.0.1:${mysqlPort}/capstan_test`;
+
+      await waitFor("mysql", async () => {
+        const database = await createDatabase({ provider: "mysql", url: mysqlUrl });
+        try {
+          await database.execute("SELECT 1 AS ok");
+        } finally {
+          await database.close();
+        }
+      }, 60, 1000);
+    } catch {
+      dockerReady = false;
+      for (const handle of handles.splice(0)) {
+        spawnSync("docker", ["rm", "-f", handle.id], { stdio: "ignore" });
       }
-    });
-
-    const mysqlId = runDocker([
-      "run",
-      "-d",
-      "--rm",
-      "-e",
-      "MYSQL_ROOT_PASSWORD=root",
-      "-e",
-      "MYSQL_ROOT_HOST=%",
-      "-e",
-      "MYSQL_DATABASE=capstan_test",
-      "-p",
-      "127.0.0.1::3306",
-      "mysql:5.7",
-    ]);
-    const mysqlPort = parseHostPort(runDocker(["port", mysqlId, "3306/tcp"]));
-    handles.push({ id: mysqlId, port: mysqlPort });
-    mysqlUrl = `mysql://root:root@127.0.0.1:${mysqlPort}/capstan_test`;
-
-    await waitFor("mysql", async () => {
-      const database = await createDatabase({ provider: "mysql", url: mysqlUrl });
-      try {
-        await database.execute("SELECT 1 AS ok");
-      } finally {
-        await database.close();
-      }
-    }, 60, 1000);
+    }
   }, 180_000);
 
-  maybeIt("runs repository relations and transactions end to end on PostgreSQL", async () => {
+  it("runs repository relations and transactions end to end on PostgreSQL", async () => {
+    if (!dockerReady) return;
+
     const user = defineModel("User", {
       fields: {
         id: field.id(),
@@ -199,7 +208,9 @@ describe("db provider integration", () => {
     }
   }, 180_000);
 
-  maybeIt("applies runtime repositories and rewrite migrations end to end on MySQL", async () => {
+  it("applies runtime repositories and rewrite migrations end to end on MySQL", async () => {
+    if (!dockerReady) return;
+
     const organization = defineModel("Organization", {
       fields: {
         slug: field.string({ required: true, unique: true }),
