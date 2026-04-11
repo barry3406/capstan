@@ -85,6 +85,7 @@ process.exit(0);
       ],
       {
         CAPSTAN_BUN_ARGS_LOG: logFile,
+        CAPSTAN_COVERAGE: "",
         PATH: `${binDir}${process.platform === "win32" ? ";" : ":"}${process.env.PATH ?? ""}`,
       },
     );
