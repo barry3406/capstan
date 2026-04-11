@@ -2,60 +2,50 @@
 
 Capstan exists to make software agent-operable by default.
 
-In the Capstan model, an application is not primarily a collection of routes,
-pages, or RPC handlers. It is a structured system of resources, capabilities,
-tasks, policies, artifacts, and views that can be operated by both humans and
-AI agents.
+In the Capstan model, an application is not primarily a collection of pages,
+routes, or RPC handlers. It is a structured system of resources, capabilities,
+tasks, policies, artifacts, and views that can be discovered, executed,
+verified, recovered, and supervised by both humans and AI agents.
 
 ## Why This Matters
 
-Modern software frameworks were designed for human developers and browser
-clients. Leading coding agents can already write code, run tools, inspect
-errors, and operate development environments, but most applications are still
-opaque and high-entropy from the agent's perspective.
+Modern frameworks optimize for human developers and browser clients. Coding
+agents can already write code, inspect logs, run tools, and operate runtime
+environments, but most applications remain high-entropy from their
+perspective.
 
-Capstan aims to change that by making the application itself legible,
-executable, verifiable, and deployable for agents.
+Capstan aims to lower that entropy by making the application itself
+machine-readable and operationally explicit.
 
 ## Product Thesis
 
 Capstan should make the following loop natural:
 
-1. A human describes an intent
-2. A coding agent instantiates or changes an application
-3. The harness runs verification and produces structured feedback
-4. The agent repairs and converges
-5. The system is released with a machine-readable deployment contract
-6. Other agents consume the resulting capabilities through AI-first surfaces and
-   recoverable workflow recipes plus workflow supervision, discovery, inbox,
-   queue, and queue-lane contracts, while human operators supervise the same
-   durable work from shared attention lanes, a top-level inbox, and reusable
-   task/resource/route attention presets in the generated human surface, with
-   route drill-down preserving inherited task/resource breadcrumb context into
-   local queue lanes, letting operators reopen parent supervision presets, and
-   pinning the same trail into a reusable supervision workspace with saved
-   history that can be resumed, cleared, and restored after reload, plus named
-   workspace slots for a few durable supervision lanes that task/resource/route
-   presets can auto-fill without overwriting manual overrides, with live slot
-   summaries, new-since-open deltas, and highest-priority queue shortcuts for
-   long-lived supervision
+1. A human expresses intent
+2. A coding agent reads the application contract and makes a change
+3. The harness executes work and keeps long-running runs recoverable
+4. Feedback verifies the result and explains failures in structured form
+5. Release turns the result into deployable software with explicit contracts
+6. Humans and other agents operate the same system through shared surfaces
 
 ## North Star
 
-Given a short product brief, an agent should be able to use Capstan to produce
-an application that:
+Given a change request, a workflow description, or a short product brief, an
+agent should be able to use Capstan to produce or evolve an application that:
 
-- is coherent and maintainable
-- exposes low-entropy capability surfaces for other agents
-- is verifiable without manual guesswork
-- is deployable through structured release workflows
-- remains understandable to humans
-- ships with an agent-readable operating guide and starter prompt by default
+- is legible as resources, capabilities, tasks, policies, artifacts, and views
+- exposes low-entropy machine surfaces for other agents
+- can be supervised by humans without rebuilding context by hand
+- can explain failures in structured terms and suggest repair paths
+- can recover long-running work without ad hoc debugging
+- can be promoted through a machine-readable release workflow
 
 ## Core Principles
 
-- Harness-first, not page-first
-- Capability-first, not route-first
+- Contract-first, not route-first
+- Capability-first, not CRUD-first
+- Shared surfaces, not duplicated human-versus-agent stacks
+- Recovery-first, not best-effort runtime behavior
 - Verification-first, not demo-first
 - Structured release, not ad hoc deployment
 - Human supervision, not human micromanagement
@@ -64,10 +54,12 @@ an application that:
 
 Capstan is not:
 
+- a generic CRUD generator
 - just a code generator
 - just an AI SDK wrapper
 - just a workflow engine
-- just a web framework
+- just a web framework with agent integrations bolted on later
 
-Capstan should instead become the application substrate that coordinates these
-concerns into one coherent system.
+Capstan should instead become the application substrate that coordinates
+contract, execution, supervision, verification, and release into one coherent
+system.

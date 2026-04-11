@@ -1,0 +1,25 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "jsx": "react-jsx",
+    "paths": {
+      "@zauso-ai/capstan-agent": ["packages/agent/src/index.ts"],
+      "@zauso-ai/capstan-ai": ["packages/ai/src/index.ts"],
+      "@zauso-ai/capstan-ai/kernel": ["packages/ai/src/harness/kernel/index.ts"],
+      "@zauso-ai/capstan-ai/kernel/*": ["packages/ai/src/harness/kernel/*/index.ts"],
+      "@zauso-ai/capstan-auth": ["packages/auth/src/index.ts"],
+      "@zauso-ai/capstan-cli": ["packages/cli/src/index.ts"],
+      "@zauso-ai/capstan-core": ["packages/core/src/index.ts"],
+      "@zauso-ai/capstan-cron": ["packages/cron/src/index.ts"],
+      "@zauso-ai/capstan-db": ["packages/db/src/index.ts"],
+      "@zauso-ai/capstan-dev": ["packages/dev/src/index.ts"],
+      "@zauso-ai/capstan-dev/runtime": ["packages/dev/src/runtime.ts"],
+      "@zauso-ai/capstan-ops": ["packages/ops/src/index.ts"],
+      "@zauso-ai/capstan-react": ["packages/react/src/index.ts"],
+      "@zauso-ai/capstan-react/client": ["packages/react/src/client/index.ts"],
+      "@zauso-ai/capstan-router": ["packages/router/src/index.ts"],
+      "@zauso-ai/capstan-router/runtime": ["packages/router/src/runtime.ts"]
+    }
+  }
+}

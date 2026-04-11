@@ -1,0 +1,508 @@
+import { describe, test, expect, beforeEach } from "bun:test";
+import {
+  cacheSet,
+  cacheGet,
+  cacheInvalidateTag,
+  cacheInvalidatePath,
+  cacheInvalidate,
+  cacheClear,
+  cached,
+  setCacheStore,
+  responseCacheClear,
+  responseCacheSet,
+  responseCacheGet,
+  setResponseCacheStore,
+  MemoryStore,
+} from "@zauso-ai/capstan-core";
+import type { CacheEntry, KeyValueStore } from "@zauso-ai/capstan-core";
+
+// Reset cache state before each test
+beforeEach(async () => {
+  await cacheClear();
+  await responseCacheClear();
+  setCacheStore(new MemoryStore());
+  setResponseCacheStore(new MemoryStore());
+});
+
+// ---------------------------------------------------------------------------
+// cacheSet + cacheGet
+// ---------------------------------------------------------------------------
+
+describe("cacheSet + cacheGet", () => {
+  test("set and get a value", async () => {
+    await cacheSet("key1", { hello: "world" });
+    const result = await cacheGet<{ hello: string }>("key1");
+    expect(result).toBeDefined();
+    expect(result!.data).toEqual({ hello: "world" });
+    expect(result!.stale).toBe(false);
+  });
+
+  test("get returns undefined for missing key", async () => {
+    const result = await cacheGet("nonexistent");
+    expect(result).toBeUndefined();
+  });
+
+  test("TTL: entry expires after ttl seconds", async () => {
+    // Use a very short TTL — we fake expiry by setting ttl in the past
+    // by directly manipulating the store.
+    const store = new MemoryStore<CacheEntry<unknown>>();
+    setCacheStore(store);
+
+    const now = Date.now();
+    const entry: CacheEntry<string> = {
+      data: "expired",
+      createdAt: now - 5000,
+      expiresAt: now - 1000, // already expired
+      tags: [],
+      stale: false,
+    };
+    await store.set("expired-key", entry as CacheEntry<unknown>);
+
+    const result = await cacheGet("expired-key");
+    expect(result).toBeUndefined();
+  });
+
+  test("TTL: entry available before expiry", async () => {
+    await cacheSet("fresh", "data", { ttl: 3600 });
+    const result = await cacheGet<string>("fresh");
+    expect(result).toBeDefined();
+    expect(result!.data).toBe("data");
+    expect(result!.stale).toBe(false);
+  });
+
+  test("no TTL: entry persists indefinitely", async () => {
+    await cacheSet("forever", 42);
+    const result = await cacheGet<number>("forever");
+    expect(result).toBeDefined();
+    expect(result!.data).toBe(42);
+  });
+
+  test("tags stored on entry", async () => {
+    const store = new MemoryStore<CacheEntry<unknown>>();
+    setCacheStore(store);
+
+    await cacheSet("tagged", "value", { tags: ["a", "b"] });
+    const raw = await store.get("tagged");
+    expect(raw).toBeDefined();
+    expect(raw!.tags).toEqual(["a", "b"]);
+  });
+
+  test("tags are normalized and deduplicated before storing", async () => {
+    const store = new MemoryStore<CacheEntry<unknown>>();
+    setCacheStore(store);
+
+    await cacheSet("normalized", "value", { tags: ["  alpha  ", "alpha", "", "beta"] });
+    const raw = await store.get("normalized");
+    expect(raw).toBeDefined();
+    expect(raw!.tags).toEqual(["alpha", "beta"]);
+  });
+
+  test("revalidate: returns stale=true after revalidateAt", async () => {
+    const store = new MemoryStore<CacheEntry<unknown>>();
+    setCacheStore(store);
+
+    const now = Date.now();
+    const entry: CacheEntry<string> = {
+      data: "stale-data",
+      createdAt: now - 5000,
+      tags: [],
+      revalidateAt: now - 1000, // revalidation window passed
+      stale: false,
+    };
+    await store.set("stale-key", entry as CacheEntry<unknown>);
+
+    const result = await cacheGet<string>("stale-key");
+    expect(result).toBeDefined();
+    expect(result!.data).toBe("stale-data");
+    expect(result!.stale).toBe(true);
+  });
+
+  test("revalidate: returns stale=false before revalidateAt", async () => {
+    await cacheSet("not-stale", "fresh", { revalidate: 3600 });
+    const result = await cacheGet<string>("not-stale");
+    expect(result).toBeDefined();
+    expect(result!.stale).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cacheInvalidateTag
+// ---------------------------------------------------------------------------
+
+describe("cacheInvalidateTag", () => {
+  test("invalidates all entries with tag", async () => {
+    await cacheSet("a", 1, { tags: ["group"] });
+    await cacheSet("b", 2, { tags: ["group"] });
+    await cacheSet("c", 3, { tags: ["other"] });
+
+    await cacheInvalidateTag("group");
+
+    expect(await cacheGet("a")).toBeUndefined();
+    expect(await cacheGet("b")).toBeUndefined();
+    expect(await cacheGet("c")).toBeDefined();
+  });
+
+  test("returns count of invalidated entries", async () => {
+    await cacheSet("x", 1, { tags: ["t"] });
+    await cacheSet("y", 2, { tags: ["t"] });
+    const count = await cacheInvalidateTag("t");
+    expect(count).toBe(2);
+  });
+
+  test("unknown tag returns 0", async () => {
+    const count = await cacheInvalidateTag("nonexistent-tag");
+    expect(count).toBe(0);
+  });
+
+  test("trims tag input before invalidating", async () => {
+    await cacheSet("trimmed", "value", { tags: ["topic"] });
+    const count = await cacheInvalidateTag("  topic  ");
+    expect(count).toBe(1);
+    expect(await cacheGet("trimmed")).toBeUndefined();
+  });
+
+  test("multiple tags on one entry: invalidating one removes entry", async () => {
+    await cacheSet("multi", "val", { tags: ["alpha", "beta"] });
+    await cacheInvalidateTag("alpha");
+    expect(await cacheGet("multi")).toBeUndefined();
+  });
+
+  test("does not affect entries without tag", async () => {
+    await cacheSet("no-tag", "safe");
+    await cacheSet("has-tag", "gone", { tags: ["kill"] });
+    await cacheInvalidateTag("kill");
+    expect(await cacheGet("no-tag")).toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cacheInvalidate
+// ---------------------------------------------------------------------------
+
+describe("cacheInvalidate", () => {
+  test("invalidates specific key", async () => {
+    await cacheSet("target", "data");
+    const result = await cacheInvalidate("target");
+    expect(result).toBe(true);
+    expect(await cacheGet("target")).toBeUndefined();
+  });
+
+  test("returns false for missing key", async () => {
+    const result = await cacheInvalidate("ghost");
+    expect(result).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cacheClear
+// ---------------------------------------------------------------------------
+
+describe("cacheClear", () => {
+  test("removes all entries", async () => {
+    await cacheSet("a", 1);
+    await cacheSet("b", 2);
+    await cacheClear();
+    expect(await cacheGet("a")).toBeUndefined();
+    expect(await cacheGet("b")).toBeUndefined();
+  });
+
+  test("tag index also cleared", async () => {
+    await cacheSet("t", "v", { tags: ["tag1"] });
+    await cacheClear();
+    // After clear, invalidating the tag should find nothing
+    const count = await cacheInvalidateTag("tag1");
+    expect(count).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cacheInvalidatePath
+// ---------------------------------------------------------------------------
+
+describe("cacheInvalidatePath", () => {
+  test("invalidates both data and response cache entries for the same path", async () => {
+    await cacheSet("page:/docs", "payload");
+    await responseCacheSet("page:/docs", {
+      html: "<html>docs</html>",
+      headers: {},
+      statusCode: 200,
+      createdAt: Date.now(),
+      revalidateAfter: null,
+      tags: ["docs"],
+    });
+
+    const result = await cacheInvalidatePath("https://example.com/docs?preview=1#top");
+    expect(result).toBe(true);
+    expect(await cacheGet("page:/docs")).toBeUndefined();
+    expect(await responseCacheGet("page:/docs")).toBeUndefined();
+  });
+
+  test("invalidates non-page cache entries that are tagged to the same normalized path", async () => {
+    await cacheSet("fetch:/docs?lang=zh", "payload", {
+      tags: ["path:/docs", "docs"],
+    });
+
+    expect(await cacheInvalidatePath("https://example.com/docs?preview=1#top")).toBe(true);
+    expect(await cacheGet("fetch:/docs?lang=zh")).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cached()
+// ---------------------------------------------------------------------------
+
+describe("cached()", () => {
+  test("cache miss: calls fn and caches result", async () => {
+    let calls = 0;
+    const result = await cached("miss", async () => {
+      calls++;
+      return "computed";
+    });
+    expect(result).toBe("computed");
+    expect(calls).toBe(1);
+
+    // Verify it was cached
+    const entry = await cacheGet<string>("miss");
+    expect(entry).toBeDefined();
+    expect(entry!.data).toBe("computed");
+  });
+
+  test("cache hit: returns cached data without calling fn", async () => {
+    await cacheSet("hit", "existing");
+    let calls = 0;
+    const result = await cached("hit", async () => {
+      calls++;
+      return "should-not-run";
+    });
+    expect(result).toBe("existing");
+    expect(calls).toBe(0);
+  });
+
+  test("stale: returns stale data and triggers background revalidation", async () => {
+    const store = new MemoryStore<CacheEntry<unknown>>();
+    setCacheStore(store);
+
+    const now = Date.now();
+    const entry: CacheEntry<string> = {
+      data: "old",
+      createdAt: now - 5000,
+      tags: [],
+      revalidateAt: now - 1000, // stale
+      stale: false,
+    };
+    await store.set("stale-cached", entry as CacheEntry<unknown>);
+
+    let revalidated = false;
+    const result = await cached<string>("stale-cached", async () => {
+      revalidated = true;
+      return "new";
+    }, { revalidate: 60 });
+
+    // Should return stale data immediately
+    expect(result).toBe("old");
+
+    // Wait for background revalidation
+    await new Promise(r => setTimeout(r, 50));
+    expect(revalidated).toBe(true);
+
+    // Now cache should have fresh data
+    const fresh = await cacheGet<string>("stale-cached");
+    expect(fresh).toBeDefined();
+    expect(fresh!.data).toBe("new");
+  });
+
+  test("fn throws: propagates error on miss", async () => {
+    await expect(
+      cached("error-key", async () => {
+        throw new Error("boom");
+      }),
+    ).rejects.toThrow("boom");
+  });
+
+  test("TTL respected in cached()", async () => {
+    await cached("ttl-test", async () => "value", { ttl: 3600 });
+    const entry = await cacheGet<string>("ttl-test");
+    expect(entry).toBeDefined();
+    expect(entry!.data).toBe("value");
+  });
+
+  test("concurrent cache misses share a single computation", async () => {
+    let calls = 0;
+
+    const [first, second] = await Promise.all([
+      cached("dedupe", async () => {
+        calls++;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        return "value";
+      }),
+      cached("dedupe", async () => {
+        calls++;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        return "value";
+      }),
+    ]);
+
+    expect(first).toBe("value");
+    expect(second).toBe("value");
+    expect(calls).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// setCacheStore
+// ---------------------------------------------------------------------------
+
+describe("setCacheStore", () => {
+  test("custom store receives entries", async () => {
+    const store = new MemoryStore<CacheEntry<unknown>>();
+    setCacheStore(store);
+
+    await cacheSet("custom", "val");
+    const raw = await store.get("custom");
+    expect(raw).toBeDefined();
+    expect(raw!.data).toBe("val");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tag index consistency (verifies cross-tag cleanup on overwrite/invalidate)
+// ---------------------------------------------------------------------------
+
+describe("tag index consistency", () => {
+  test("overwrite with different tags: old tag no longer references key", async () => {
+    await cacheSet("k", "v1", { tags: ["old-tag"] });
+    await cacheSet("k", "v2", { tags: ["new-tag"] });
+
+    // Invalidating the old tag should NOT remove the key
+    await cacheInvalidateTag("old-tag");
+    expect(await cacheGet("k")).toBeDefined();
+
+    // Invalidating the new tag SHOULD remove it
+    await cacheInvalidateTag("new-tag");
+    expect(await cacheGet("k")).toBeUndefined();
+  });
+
+  test("multi-tag entry: invalidating one tag cleans all tag references", async () => {
+    await cacheSet("multi", "val", { tags: ["alpha", "beta"] });
+    await cacheInvalidateTag("alpha");
+
+    // Entry is gone
+    expect(await cacheGet("multi")).toBeUndefined();
+    // "beta" should no longer reference the deleted key
+    expect(await cacheInvalidateTag("beta")).toBe(0);
+  });
+
+  test("cacheInvalidate cleans tag index", async () => {
+    await cacheSet("k", "v", { tags: ["t1", "t2"] });
+    await cacheInvalidate("k");
+
+    // Both tags should be cleaned
+    expect(await cacheInvalidateTag("t1")).toBe(0);
+    expect(await cacheInvalidateTag("t2")).toBe(0);
+  });
+
+  test("setCacheStore resets tag index", async () => {
+    await cacheSet("k", "v", { tags: ["t"] });
+    setCacheStore(new MemoryStore());
+
+    // Tag from previous store should not be reachable
+    expect(await cacheInvalidateTag("t")).toBe(0);
+  });
+
+  test("overwrite with overlapping tags: shared tag still works", async () => {
+    await cacheSet("k", "v1", { tags: ["keep", "old"] });
+    await cacheSet("k", "v2", { tags: ["keep", "new"] });
+
+    // "old" should not reference "k" anymore
+    expect(await cacheInvalidateTag("old")).toBe(0);
+    expect(await cacheGet("k")).toBeDefined();
+
+    // "keep" (shared) should still work
+    await cacheInvalidateTag("keep");
+    expect(await cacheGet("k")).toBeUndefined();
+  });
+
+  test("falls back to store scanning when the in-memory tag index is empty", async () => {
+    const store = new MemoryStore<CacheEntry<unknown>>();
+    await store.set("remote-key", {
+      data: "value",
+      createdAt: Date.now(),
+      tags: ["remote-tag"],
+      stale: false,
+    });
+
+    setCacheStore(store);
+
+    expect(await cacheInvalidateTag("remote-tag")).toBe(1);
+    expect(await cacheGet("remote-key")).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Edge cases
+// ---------------------------------------------------------------------------
+
+describe("edge cases", () => {
+  test("cacheSet with empty tags array", async () => {
+    await cacheSet("empty-tags", "data", { tags: [] });
+    const result = await cacheGet<string>("empty-tags");
+    expect(result).toBeDefined();
+    expect(result!.data).toBe("data");
+  });
+
+  test("cacheGet after hard expiry returns undefined", async () => {
+    const store = new MemoryStore<CacheEntry<unknown>>();
+    setCacheStore(store);
+
+    const now = Date.now();
+    // Entry with both expiresAt in the past — hard expired
+    const entry: CacheEntry<string> = {
+      data: "gone",
+      createdAt: now - 10000,
+      expiresAt: now - 5000,
+      tags: [],
+      stale: false,
+    };
+    await store.set("hard-expired", entry as CacheEntry<unknown>);
+
+    const result = await cacheGet("hard-expired");
+    expect(result).toBeUndefined();
+  });
+
+  test("concurrent cacheSet for same key (last write wins)", async () => {
+    await Promise.all([
+      cacheSet("race", "first"),
+      cacheSet("race", "second"),
+    ]);
+    const result = await cacheGet<string>("race");
+    expect(result).toBeDefined();
+    // With MemoryStore the last .set() call wins
+    expect(["first", "second"]).toContain(result!.data);
+  });
+
+  test("cacheSet overwrites previous entry", async () => {
+    await cacheSet("overwrite", "v1");
+    await cacheSet("overwrite", "v2");
+    const result = await cacheGet<string>("overwrite");
+    expect(result).toBeDefined();
+    expect(result!.data).toBe("v2");
+  });
+
+  test("cacheInvalidate does not affect other keys", async () => {
+    await cacheSet("keep", "safe");
+    await cacheSet("remove", "gone");
+    await cacheInvalidate("remove");
+    expect(await cacheGet("keep")).toBeDefined();
+    expect(await cacheGet("remove")).toBeUndefined();
+  });
+
+  test("cached with tags passes tags to cacheSet", async () => {
+    const store = new MemoryStore<CacheEntry<unknown>>();
+    setCacheStore(store);
+
+    await cached("tagged-cached", async () => "val", { tags: ["mytag"] });
+    const raw = await store.get("tagged-cached");
+    expect(raw).toBeDefined();
+    expect(raw!.tags).toEqual(["mytag"]);
+  });
+});

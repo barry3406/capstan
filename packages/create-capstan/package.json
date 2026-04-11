@@ -1,0 +1,46 @@
+{
+  "name": "create-capstan-app",
+  "version": "0.3.0",
+  "type": "module",
+  "bin": {
+    "create-capstan-app": "./dist/index.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "files": [
+    "dist"
+  ],
+  "description": "Create a new Capstan app — AI Agent Native full-stack framework",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/barry3406/capstan.git",
+    "directory": "packages/create-capstan"
+  },
+  "license": "MIT",
+  "author": "barry3406",
+  "homepage": "https://github.com/barry3406/capstan",
+  "keywords": [
+    "capstan",
+    "ai-agent",
+    "full-stack",
+    "framework",
+    "mcp",
+    "a2a",
+    "typescript"
+  ],
+  "dependencies": {
+    "@clack/prompts": "^1.1.0",
+    "picocolors": "^1.1.1"
+  }
+}

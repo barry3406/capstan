@@ -1,0 +1,11 @@
+{
+  "name": "tickets-app",
+  "version": "0.3.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "capstan dev",
+    "build": "capstan build",
+    "start": "capstan start"
+  }
+}

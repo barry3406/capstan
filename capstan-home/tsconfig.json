@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "jsx": "react-jsx",
+    "strict": true,
+    "outDir": "dist",
+    "rootDir": "."
+  },
+  "include": [
+    "app/**/*.ts",
+    "app/**/*.tsx",
+    "capstan.config.ts"
+  ]
+}

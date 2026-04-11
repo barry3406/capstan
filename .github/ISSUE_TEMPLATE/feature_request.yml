@@ -1,0 +1,27 @@
+name: Feature Request
+description: Suggest a new feature for Capstan
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What feature would you like?
+    validations:
+      required: true
+  - type: textarea
+    id: usecase
+    attributes:
+      label: Use Case
+      description: What problem does this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed Solution
+      description: How should this work?
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered

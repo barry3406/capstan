@@ -1,0 +1,165 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    name: Build
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.x"
+      - run: npm install
+      - name: Build all packages (incremental)
+        run: npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: packages/*/dist/
+
+  meta:
+    needs: build
+    runs-on: ubuntu-latest
+    name: Meta Verification
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.x"
+      - run: npm install
+      - name: Run meta stability checks
+        run: npm run test:meta
+
+  deploy-contract:
+    needs: build
+    runs-on: ubuntu-latest
+    name: Deploy Contract
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.x"
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: packages/
+      - name: Run deployment contract tests
+        run: bun test tests/unit/deploy-manifest.test.ts tests/unit/deploy-integrity.test.ts tests/unit/deploy-targets.test.ts tests/integration/deploy-integrity.test.ts tests/integration/deploy-targets.test.ts tests/integration/prod-page-runtime.test.ts tests/integration/full-pipeline.test.ts
+
+  test-bun:
+    needs: build
+    runs-on: ubuntu-latest
+    name: Test (Bun + Coverage)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.x"
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: packages/
+      - name: Run tests with coverage
+        run: npm run test:coverage
+
+  test-node:
+    needs: build
+    runs-on: ubuntu-latest
+    name: Test (Node.js 22)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.x"
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: packages/
+      - name: Run tests (Node.js)
+        run: npm run test:node
+
+  test-e2e:
+    needs: build
+    runs-on: ubuntu-latest
+    name: Test (Playwright E2E)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.x"
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: packages/
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+      - name: Run browser e2e
+        run: npm run test:e2e -- tests/e2e/browser-flow.e2e.ts
+
+  perf:
+    runs-on: ubuntu-latest
+    name: Performance
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+      - run: npm install
+      - name: Run benchmark budgets
+        run: npm run perf:check -- --output .artifacts/perf-report.json
+      - name: Publish performance summary
+        if: always()
+        run: |
+          if [ -f .artifacts/perf-report.json ]; then
+            node --import tsx ./benchmarks/summary.ts .artifacts/perf-report.json >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo "## Performance"
+              echo
+              echo "Perf report was not generated."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: perf-report
+          path: .artifacts/perf-report.json

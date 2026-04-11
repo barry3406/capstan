@@ -2,11 +2,9 @@
 
 ## Source Of Truth
 
-Capstan's source of truth is the `App Graph`.
+Capstan's current source-of-truth vocabulary is:
 
-The current working model is:
-
-`App Graph = Domain + Resource + Capability + Task + Policy + Artifact + View`
+`Domain + Resource + Capability + Task + Policy + Artifact + View`
 
 Each element has a distinct role:
 
@@ -20,7 +18,7 @@ Each element has a distinct role:
 
 ## Kernel 1: Graph
 
-The graph kernel defines and materializes the application model.
+The graph kernel defines and materializes the shared application contract.
 
 Responsibilities:
 
@@ -28,7 +26,7 @@ Responsibilities:
 - resource and capability registry
 - dependency graph
 - machine-readable project index
-- projection inputs for UI and agent surfaces
+- projection inputs for human and machine surfaces
 
 ## Kernel 2: Harness
 
@@ -45,16 +43,16 @@ Responsibilities:
 
 ## Kernel 3: Surface
 
-The surface kernel exposes the application to operators.
+The surface kernel exposes the application to humans and other agents through
+shared runtime contracts.
 
 Responsibilities:
 
-- AI-first action and task surfaces
-- generated agent-operating contracts in scaffolded apps, including `AGENTS.md` workflow guidance and starter prompts for coding agents
-- recoverable workflow recipes plus workflow control-plane supervision, discovery, inbox presets, grouped queue presets, top-level inbox/queue queries, and task/search/resource-level attention summaries with embedded queue lanes for durable runs
-- human-facing projections, including route-aware attention queue lanes plus top-level, task-scoped, resource-scoped, and route-scoped operator inbox presets backed by the same generated workflow state, preserving inherited task/resource/route handoff breadcrumbs during drill-down, reopening those parent presets directly from route-local supervision, and pinning reusable supervision workspace presets plus saved workspace history and named slots that survive browser reloads in the console, including fixed auto-save slot mappings with sticky manual overrides plus live slot summaries, new-since-open deltas, and highest-priority queue shortcuts
-- protocol adapters such as HTTP, MCP, or A2A
-- search and execution entry points
+- machine-facing execution and discovery surfaces such as HTTP, MCP, A2A, and OpenAPI
+- generated agent-operating contracts in scaffolded apps, including `AGENTS.md` guidance and starter prompts
+- operator-facing projections for inspection, approval, input handoff, retry, and supervision
+- shared attention, queue, and drill-down semantics over durable work
+- search and execution entry points over the same underlying runtime state
 
 ## Kernel 4: Feedback
 
@@ -85,7 +83,7 @@ Responsibilities:
 
 Capstan should make this loop native:
 
-1. Read the graph
+1. Read the contract
 2. Plan a change
 3. Execute through the harness
 4. Verify through feedback
@@ -94,8 +92,8 @@ Capstan should make this loop native:
 
 ## Open Questions
 
-- What is the smallest useful `App Graph` representation?
-- Which parts of the graph are hand-authored versus generated?
+- What is the smallest useful shared contract artifact?
+- Which parts of the contract are hand-authored versus generated?
 - How should capabilities map to tasks and artifacts?
 - What is the default human supervision model?
 - What is the first runtime Capstan should target?

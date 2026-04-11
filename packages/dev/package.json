@@ -1,0 +1,68 @@
+{
+  "name": "@zauso-ai/capstan-dev",
+  "version": "0.3.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./runtime": {
+      "types": "./dist/runtime.d.ts",
+      "import": "./dist/runtime.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@zauso-ai/capstan-agent": "0.3.0",
+    "@zauso-ai/capstan-auth": "0.3.0",
+    "@zauso-ai/capstan-core": "0.3.0",
+    "@zauso-ai/capstan-ops": "0.3.0",
+    "@zauso-ai/capstan-router": "0.3.0",
+    "hono": "^4.0.0",
+    "tsx": "^4.0.0",
+    "zod": "^4.0.0"
+  },
+  "peerDependencies": {
+    "lightningcss": "^1.0.0",
+    "vite": ">=6.0.0"
+  },
+  "peerDependenciesMeta": {
+    "lightningcss": {
+      "optional": true
+    },
+    "vite": {
+      "optional": true
+    }
+  },
+  "description": "Dev server for Capstan — file watching, hot route reload, MCP/A2A endpoints",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/barry3406/capstan.git",
+    "directory": "packages/dev"
+  },
+  "license": "MIT",
+  "author": "barry3406",
+  "homepage": "https://github.com/barry3406/capstan",
+  "keywords": [
+    "capstan",
+    "ai-agent",
+    "full-stack",
+    "framework",
+    "mcp",
+    "a2a",
+    "typescript"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}

@@ -1,0 +1,66 @@
+{
+  "name": "@zauso-ai/capstan-db",
+  "version": "0.3.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "peerDependencies": {
+    "drizzle-orm": ">=0.44.0",
+    "better-sqlite3": ">=9.0.0",
+    "@libsql/client": ">=0.15.0",
+    "pg": "^8.0.0",
+    "mysql2": "^3.0.0"
+  },
+  "peerDependenciesMeta": {
+    "drizzle-orm": {
+      "optional": true
+    },
+    "better-sqlite3": {
+      "optional": true
+    },
+    "@libsql/client": {
+      "optional": true
+    },
+    "pg": {
+      "optional": true
+    },
+    "mysql2": {
+      "optional": true
+    }
+  },
+  "description": "Database layer for Capstan — Drizzle ORM, defineModel, auto CRUD generation",
+  "files": [
+    "dist"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/barry3406/capstan.git",
+    "directory": "packages/db"
+  },
+  "license": "MIT",
+  "author": "barry3406",
+  "homepage": "https://github.com/barry3406/capstan",
+  "keywords": [
+    "capstan",
+    "ai-agent",
+    "full-stack",
+    "framework",
+    "mcp",
+    "a2a",
+    "typescript"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}
