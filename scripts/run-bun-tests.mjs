@@ -39,7 +39,9 @@ if (testFiles.length === 0) {
   process.exit(1);
 }
 
-const coverageFlag = process.env.CAPSTAN_COVERAGE === "1" ? ["--coverage"] : [];
+const coverageFlag = process.env.CAPSTAN_COVERAGE === "1"
+  ? ["--coverage", "--coverage-reporter=lcov"]
+  : [];
 
 const child = spawn("bun", ["test", ...coverageFlag, ...testFiles], {
   cwd: process.cwd(),

@@ -676,13 +676,15 @@ async function runDev(args: string[]): Promise<void> {
     // register("tsx/esm") was deprecated in Node v20.6+.
     const { spawn } = await import("node:child_process");
 
-    // Locate the tsx package entry for --import
+    // Locate the tsx package entry for --import.
+    // Resolve to an absolute file URL so the child process finds tsx even when
+    // cwd differs from the CLI package location (e.g. npm link / file: deps).
     let tsxImportSpecifier: string;
     try {
-      await import("node:module").then(m =>
-        m.createRequire(import.meta.url).resolve("tsx/esm"),
-      );
-      tsxImportSpecifier = "tsx";
+      const { createRequire } = await import("node:module");
+      const require = createRequire(import.meta.url);
+      const resolved = require.resolve("tsx");
+      tsxImportSpecifier = pathToFileURL(resolved).href;
     } catch {
       tsxImportSpecifier = "tsx";
     }
