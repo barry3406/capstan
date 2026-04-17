@@ -70,6 +70,13 @@ export function csrfProtection() {
       return;
     }
 
+    // Service-to-service callbacks that use an explicit shared secret header
+    // are not cookie-authenticated browser requests and do not need CSRF.
+    if (c.req.header("x-worker-token")) {
+      await next();
+      return;
+    }
+
     if (STATE_CHANGING_METHODS.has(method)) {
       // --- Validate CSRF token on state-changing requests ---
       const cookieToken = getCookieValue(

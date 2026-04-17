@@ -55,6 +55,7 @@ export function createHmrRuntime(
   let timer: ReturnType<typeof setTimeout> | null = null;
   let manuallyDisconnected = false;
   let connection: { close: () => void } | null = null;
+  let lifecycleCleanup: (() => void) | null = null;
 
   function emit(update: HmrUpdate): void {
     for (const handler of handlers) {
@@ -73,8 +74,42 @@ export function createHmrRuntime(
     timer = setTimeout(() => connectInternal(url), delay);
   }
 
+  function clearReconnectTimer(): void {
+    if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+    }
+  }
+
+  function closeConnection(): void {
+    if (connection) {
+      connection.close();
+      connection = null;
+    }
+  }
+
+  function bindLifecycle(): void {
+    if (lifecycleCleanup || typeof window === "undefined") return;
+
+    const handlePageExit = () => {
+      manuallyDisconnected = true;
+      clearReconnectTimer();
+      closeConnection();
+    };
+
+    window.addEventListener("pagehide", handlePageExit);
+    window.addEventListener("beforeunload", handlePageExit);
+
+    lifecycleCleanup = () => {
+      window.removeEventListener("pagehide", handlePageExit);
+      window.removeEventListener("beforeunload", handlePageExit);
+      lifecycleCleanup = null;
+    };
+  }
+
   function connectInternal(url: string): void {
     if (manuallyDisconnected) return;
+    closeConnection();
 
     if (protocol === "ws") {
       const ws = new WebSocket(url);
@@ -130,19 +165,16 @@ export function createHmrRuntime(
     connect(url: string): void {
       manuallyDisconnected = false;
       attempts = 0;
+      clearReconnectTimer();
+      bindLifecycle();
       connectInternal(url);
     },
 
     disconnect(): void {
       manuallyDisconnected = true;
-      if (timer !== null) {
-        clearTimeout(timer);
-        timer = null;
-      }
-      if (connection) {
-        connection.close();
-        connection = null;
-      }
+      clearReconnectTimer();
+      closeConnection();
+      if (lifecycleCleanup) lifecycleCleanup();
     },
 
     onUpdate(handler: (update: HmrUpdate) => void): () => void {
@@ -191,7 +223,7 @@ export function buildHmrClientScript(options: {
       "<script>",
       "(function(){",
       `  var url='ws://${hostname}:${port}/__capstan_hmr';`,
-      "  var attempts=0,maxAttempts=10,delay=1000,timer=null,overlay=null;",
+      "  var attempts=0,maxAttempts=10,delay=1000,timer=null,overlay=null,disconnected=false,ws=null;",
       "  function showOverlay(){",
       "    if(overlay)return;",
       "    overlay=document.createElement('div');",
@@ -203,17 +235,25 @@ export function buildHmrClientScript(options: {
       "  function hideOverlay(){",
       "    if(overlay){overlay.remove();overlay=null;}",
       "  }",
+      "  function disconnect(){",
+      "    disconnected=true;",
+      "    if(timer){clearTimeout(timer);timer=null;}",
+      "    if(ws){try{ws.close();}catch(err){} ws=null;}",
+      "    hideOverlay();",
+      "  }",
       "  function connect(){",
-      "    var ws=new WebSocket(url);",
+      "    if(disconnected)return;",
+      "    if(ws){try{ws.close();}catch(err){}}",
+      "    ws=new WebSocket(url);",
       "    ws.onopen=function(){attempts=0;hideOverlay();};",
       "    ws.onmessage=function(e){",
       "      try{var u=JSON.parse(e.data);handleUpdate(u);}catch(err){}",
       "    };",
-      "    ws.onclose=function(){reconnect();};",
-      "    ws.onerror=function(){ws.close();};",
+      "    ws.onclose=function(){ws=null;reconnect();};",
+      "    ws.onerror=function(){if(ws)ws.close();};",
       "  }",
       "  function reconnect(){",
-      "    if(attempts>=maxAttempts)return;",
+      "    if(disconnected||attempts>=maxAttempts)return;",
       "    showOverlay();",
       "    var d=delay*Math.pow(2,attempts);",
       "    attempts++;",
@@ -245,6 +285,8 @@ export function buildHmrClientScript(options: {
       "    }",
       "    return found;",
       "  }",
+      "  window.addEventListener('pagehide',disconnect,{once:true});",
+      "  window.addEventListener('beforeunload',disconnect,{once:true});",
       "  connect();",
       "})();",
       "</script>",
@@ -268,15 +310,23 @@ export function buildHmrClientScript(options: {
     "  function hideOverlay(){",
     "    if(overlay){overlay.remove();overlay=null;}",
     "  }",
+    "  function disconnect(){",
+    "    disconnected=true;",
+    "    if(timer){clearTimeout(timer);timer=null;}",
+    "    if(es){try{es.close();}catch(err){} es=null;}",
+    "    hideOverlay();",
+    "  }",
     "  function connect(){",
     "    if(disconnected)return;",
+    "    if(es){try{es.close();}catch(err){}}",
     "    es=new EventSource(url);",
     "    es.onopen=function(){attempts=0;hideOverlay();};",
     "    es.onmessage=function(e){",
     "      try{var u=JSON.parse(e.data);handleUpdate(u);}catch(err){}",
     "    };",
     "    es.onerror=function(){",
-    "      es.close();",
+    "      if(es)es.close();",
+    "      es=null;",
     "      reconnect();",
     "    };",
     "  }",
@@ -313,6 +363,8 @@ export function buildHmrClientScript(options: {
     "    }",
     "    return found;",
     "  }",
+    "  window.addEventListener('pagehide',disconnect,{once:true});",
+    "  window.addEventListener('beforeunload',disconnect,{once:true});",
     "  connect();",
     "})();",
     "</script>",

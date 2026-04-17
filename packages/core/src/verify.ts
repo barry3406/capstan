@@ -186,6 +186,26 @@ function suggestTypeHint(message: string): string {
   return "Fix the reported TypeScript error and rerun verification.";
 }
 
+function getDefineAPIBlockContent(source: string, method: string): string {
+  const defineAPIBlockPattern = new RegExp(
+    `(?:export\\s+const\\s+${method}|(?:const|let|var)\\s+${method})\\s*=\\s*defineAPI\\s*\\(\\s*\\{([^]*?)\\b(?:async\\s+)?handler\\s*(?::|\\()`,
+    "s",
+  );
+  const blockMatch = defineAPIBlockPattern.exec(source);
+  return blockMatch?.[1] ?? "";
+}
+
+function normalizeContractName(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/\.model$/, "")
+    .replace(/[_\s]+/g, "-");
+}
+
+function pluralizeContractName(name: string): string {
+  return name.endsWith("s") ? name : `${name}s`;
+}
+
 // ---------------------------------------------------------------------------
 // HTTP methods recognized in API route files
 // ---------------------------------------------------------------------------
@@ -402,33 +422,19 @@ async function checkRoutes(appRoot: string): Promise<VerifyDiagnostic[]> {
 
     // Check write capability handlers for policy field
     for (const method of exportedMethods) {
-      // Look for defineAPI blocks that include capability: "write"
-      const writeCapabilityPattern = new RegExp(
-        `(?:export\\s+const\\s+${method}|(?:const|let|var)\\s+${method})\\s*=\\s*defineAPI\\s*\\(\\s*\\{[^}]*capability\\s*:\\s*["']write["']`,
-        "s"
-      );
+      const blockContent = getDefineAPIBlockContent(source, method);
+      const isWriteHandler = /\bcapability\s*:\s*["']write["']/.test(blockContent);
 
-      if (writeCapabilityPattern.test(source)) {
-        // Check if the same block also has a policy field
-        // We grab from the defineAPI call to the closing of its argument
-        const blockPattern = new RegExp(
-          `(?:export\\s+const\\s+${method}|(?:const|let|var)\\s+${method})\\s*=\\s*defineAPI\\s*\\(\\s*\\{([^]*?)handler\\s*:`,
-          "s"
-        );
-        const blockMatch = source.match(blockPattern);
-        const blockContent = blockMatch ? blockMatch[1] ?? "" : "";
-
-        if (!blockContent.includes("policy")) {
-          diagnostics.push({
-            code: "write_missing_policy",
-            severity: "warning",
-            message: `${relPath}: ${method} handler has capability: "write" but no "policy" field`,
-            hint: `Add policy: "requireAuth" to protect write endpoints from unauthorized access.`,
-            file: route.filePath,
-            fixCategory: "policy_violation",
-            autoFixable: true,
-          });
-        }
+      if (isWriteHandler && !/\bpolicy\s*:/.test(blockContent)) {
+        diagnostics.push({
+          code: "write_missing_policy",
+          severity: "warning",
+          message: `${relPath}: ${method} handler has capability: "write" but no "policy" field`,
+          hint: `Add policy: "requireAuth" to protect write endpoints from unauthorized access.`,
+          file: route.filePath,
+          fixCategory: "policy_violation",
+          autoFixable: true,
+        });
       }
     }
   }
@@ -607,6 +613,7 @@ async function checkContracts(appRoot: string): Promise<VerifyDiagnostic[]> {
   const routesDir = join(appRoot, "app", "routes");
   const modelsDir = join(appRoot, "app", "models");
   const policiesDir = join(appRoot, "app", "policies");
+  const referencedResources = new Set<string>();
 
   // Gather route names (directory names under app/routes/)
   const routeNames = new Set<string>();
@@ -615,7 +622,7 @@ async function checkContracts(appRoot: string): Promise<VerifyDiagnostic[]> {
       const entries = await readdir(routesDir, { withFileTypes: true });
       for (const entry of entries) {
         if (entry.isDirectory()) {
-          routeNames.add(entry.name.toLowerCase());
+          routeNames.add(normalizeContractName(entry.name));
         }
       }
     } catch {
@@ -629,9 +636,8 @@ async function checkContracts(appRoot: string): Promise<VerifyDiagnostic[]> {
     const modelFiles = await walkFiles(modelsDir, modelsDir);
     for (const f of modelFiles) {
       if (f.endsWith(".ts") && !f.endsWith(".d.ts")) {
-        // "ticket.ts" -> "ticket"
         const stem = f.replace(/\.ts$/, "").split("/").pop();
-        if (stem) modelNames.add(stem.toLowerCase());
+        if (stem) modelNames.add(normalizeContractName(stem));
       }
     }
   }
@@ -656,25 +662,6 @@ async function checkContracts(appRoot: string): Promise<VerifyDiagnostic[]> {
     }
   }
 
-  // Cross-reference models and routes: if model "ticket" exists and route "tickets" exists,
-  // check they reference each other (informational)
-  for (const model of modelNames) {
-    // Simple pluralization: "ticket" -> "tickets"
-    const plural = model.endsWith("s") ? model : model + "s";
-    if (routeNames.has(plural) || routeNames.has(model)) {
-      // This is expected — no diagnostic needed, they match.
-      continue;
-    }
-    // Model exists without matching route — informational
-    diagnostics.push({
-      code: "model_without_route",
-      severity: "info",
-      message: `Model "${model}" has no matching route directory (expected "${plural}" or "${model}")`,
-      hint: `Consider creating app/routes/${plural}/ with API handlers for this model.`,
-      fixCategory: "contract_drift",
-    });
-  }
-
   // Check API route files for meta.resource references to models
   if (await isDirectory(routesDir)) {
     const { scanRoutes } = await import(ROUTER_PKG) as any;
@@ -693,13 +680,16 @@ async function checkContracts(appRoot: string): Promise<VerifyDiagnostic[]> {
       // Check resource references: resource: "ticket"
       const resourcePattern = /resource\s*:\s*["']([^"']+)["']/g;
       for (const match of source.matchAll(resourcePattern)) {
-        const resource = match[1]?.toLowerCase();
+        const resource = normalizeContractName(match[1] ?? "");
+        if (resource) {
+          referencedResources.add(resource);
+        }
         if (resource && !modelNames.has(resource)) {
           diagnostics.push({
             code: "resource_no_model",
             severity: "warning",
             message: `${relPath}: references resource "${resource}" but no matching model file found`,
-            hint: `Create app/models/${resource}.ts with the schema for this resource.`,
+            hint: `Create app/models/${resource}.model.ts with the schema for this resource.`,
             file: route.filePath,
             fixCategory: "contract_drift",
           });
@@ -722,6 +712,22 @@ async function checkContracts(appRoot: string): Promise<VerifyDiagnostic[]> {
         }
       }
     }
+  }
+
+  // Cross-reference models against either route directories or resource metadata.
+  for (const model of modelNames) {
+    const plural = pluralizeContractName(model);
+    if (routeNames.has(plural) || routeNames.has(model) || referencedResources.has(model)) {
+      continue;
+    }
+
+    diagnostics.push({
+      code: "model_without_route",
+      severity: "info",
+      message: `Model "${model}" has no matching route directory or resource reference (expected "${plural}" or "${model}")`,
+      hint: `Consider creating app/routes/${plural}/ or referencing resource "${model}" from a defineAPI() route.`,
+      fixCategory: "contract_drift",
+    });
   }
 
   return diagnostics;
@@ -899,12 +905,7 @@ async function checkCrossProtocol(appRoot: string): Promise<VerifyDiagnostic[]> 
       const resource = resMatch?.[1];
 
       // Check for input/output schema presence
-      const blockPattern = new RegExp(
-        `(?:export\\s+const\\s+${method}|(?:const|let|var)\\s+${method})\\s*=\\s*defineAPI\\s*\\(\\s*\\{([^]*?)handler\\s*:`,
-        "s",
-      );
-      const blockMatch = source.match(blockPattern);
-      const blockContent = blockMatch?.[1] ?? "";
+      const blockContent = getDefineAPIBlockContent(source, method);
 
       const hasInput = /\binput\s*:/.test(blockContent);
       const hasOutput = /\boutput\s*:/.test(blockContent);

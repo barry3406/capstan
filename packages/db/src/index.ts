@@ -7,11 +7,15 @@ export {
   generateMigration,
   applyMigration,
   ensureTrackingTable,
+  ensureTrackingTableAsync,
   getAppliedMigrations,
+  getAppliedMigrationsAsync,
   getMigrationStatus,
+  getMigrationStatusAsync,
   applyTrackedMigrations,
+  applyTrackedMigrationsAsync,
 } from "./migrate.js";
-export type { MigrationDbClient, MigrationIssue, MigrationIssueCode, MigrationOptions, MigrationPlan, MigrationStatus } from "./migrate.js";
+export type { AsyncMigrationDbClient, MigrationDbClient, MigrationIssue, MigrationIssueCode, MigrationOptions, MigrationPlan, MigrationStatus } from "./migrate.js";
 export { createDatabaseRuntime } from "./runtime.js";
 export type { DatabaseRuntime, FindManyOptions, ModelRepository, QueryOrder, SqlMutationResult, SqlRuntimeAdapter } from "./runtime.js";
 export { createCrudRepository, createCrudRuntime, generateCrudRoutes, pluralize } from "./crud.js";

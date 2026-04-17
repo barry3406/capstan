@@ -30,6 +30,6 @@ export async function withViewTransition(fn: () => void | Promise<void>): Promis
   // type includes properties not yet available in all runtimes).
   const startVT = (document as unknown as Record<string, unknown>)["startViewTransition"] as
     (cb: () => void | Promise<void>) => { finished: Promise<void> };
-  const transition = startVT(fn);
+  const transition = startVT.call(document, fn);
   await transition.finished;
 }

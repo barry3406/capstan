@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { mkdir, stat, writeFile } from "node:fs/promises";
@@ -32,6 +33,13 @@ let cacheGeneration = 0;
 let esbuildBuild: EsbuildBuild | null = null;
 const runtimeGlobals = globalThis as typeof globalThis & { Bun?: unknown };
 let compiledRouteCacheRoot: string | null = null;
+const frameworkRequire = createRequire(import.meta.url);
+const FRAMEWORK_REACT_ENTRY = frameworkRequire.resolve("react");
+const FRAMEWORK_REACT_JSX_RUNTIME_ENTRY = frameworkRequire.resolve("react/jsx-runtime");
+const FRAMEWORK_REACT_JSX_DEV_RUNTIME_ENTRY = frameworkRequire.resolve("react/jsx-dev-runtime");
+const FRAMEWORK_REACT_ENTRY_URL = pathToFileURL(FRAMEWORK_REACT_ENTRY).href;
+const FRAMEWORK_REACT_JSX_RUNTIME_ENTRY_URL = pathToFileURL(FRAMEWORK_REACT_JSX_RUNTIME_ENTRY).href;
+const FRAMEWORK_REACT_JSX_DEV_RUNTIME_ENTRY_URL = pathToFileURL(FRAMEWORK_REACT_JSX_DEV_RUNTIME_ENTRY).href;
 
 function isTypeScriptModule(filePath: string): boolean {
   return /\.(?:cts|mts|ts|tsx)$/.test(filePath);
@@ -64,26 +72,13 @@ async function getCompiledRouteCacheRoot(): Promise<string> {
     return compiledRouteCacheRoot;
   }
 
-  let currentDir = path.dirname(fileURLToPath(import.meta.url));
-  for (;;) {
-    const nodeModulesDir = path.join(currentDir, "node_modules");
-    try {
-      const stats = await stat(nodeModulesDir);
-      if (stats.isDirectory()) {
-        compiledRouteCacheRoot = path.join(currentDir, ".capstan-route-cache");
-        return compiledRouteCacheRoot;
-      }
-    } catch {
-      // Keep walking upward.
-    }
-
-    const parentDir = path.dirname(currentDir);
-    if (parentDir === currentDir) {
-      compiledRouteCacheRoot = path.join(process.cwd(), ".capstan-route-cache");
-      return compiledRouteCacheRoot;
-    }
-    currentDir = parentDir;
-  }
+  // Always use the **project root** (process.cwd()) for the compiled route
+  // cache so that `import()` of compiled .mjs files resolves external packages
+  // from the project's own node_modules — not from the framework's location.
+  // This is critical when the framework is linked via `file:` protocol or
+  // `npm link`, where import.meta.url points to the framework monorepo.
+  compiledRouteCacheRoot = path.join(process.cwd(), ".capstan-route-cache");
+  return compiledRouteCacheRoot;
 }
 
 async function getCompiledRoutePath(filePath: string, cacheKey: string): Promise<string> {
@@ -100,6 +95,26 @@ async function importRouteFile(filePath: string, cacheKey: string): Promise<Reco
       ({ build: esbuildBuild } = await import("esbuild"));
     }
 
+    const reactResolverPlugin: import("esbuild").Plugin = {
+      name: "capstan-dev-framework-react-resolver",
+      setup(build) {
+        build.onResolve({ filter: /^react$/ }, () => ({
+          path: FRAMEWORK_REACT_ENTRY,
+          external: true,
+        }));
+
+        build.onResolve({ filter: /^react\/jsx-runtime$/ }, () => ({
+          path: FRAMEWORK_REACT_JSX_RUNTIME_ENTRY,
+          external: true,
+        }));
+
+        build.onResolve({ filter: /^react\/jsx-dev-runtime$/ }, () => ({
+          path: FRAMEWORK_REACT_JSX_DEV_RUNTIME_ENTRY,
+          external: true,
+        }));
+      },
+    };
+
     const compiledPath = await getCompiledRoutePath(filePath, cacheKey);
     const tsconfig = await findNearestTsconfig(filePath);
     const result = await esbuildBuild({
@@ -113,6 +128,7 @@ async function importRouteFile(filePath: string, cacheKey: string): Promise<Reco
       sourcemap: "inline",
       logLevel: "silent",
       packages: "external",
+      plugins: [reactResolverPlugin],
       ...(tsconfig ? { tsconfig } : {}),
     });
 
@@ -122,7 +138,11 @@ async function importRouteFile(filePath: string, cacheKey: string): Promise<Reco
     }
 
     await mkdir(path.dirname(compiledPath), { recursive: true });
-    await writeFile(compiledPath, output.text, "utf-8");
+    const normalizedOutput = output.text
+      .replaceAll(`from "react";`, `from ${JSON.stringify(FRAMEWORK_REACT_ENTRY_URL)};`)
+      .replaceAll(`from "react/jsx-runtime";`, `from ${JSON.stringify(FRAMEWORK_REACT_JSX_RUNTIME_ENTRY_URL)};`)
+      .replaceAll(`from "react/jsx-dev-runtime";`, `from ${JSON.stringify(FRAMEWORK_REACT_JSX_DEV_RUNTIME_ENTRY_URL)};`);
+    await writeFile(compiledPath, normalizedOutput, "utf-8");
 
     return (await import(pathToFileURL(compiledPath).href)) as Record<string, unknown>;
   }

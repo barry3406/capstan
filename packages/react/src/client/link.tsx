@@ -47,7 +47,7 @@ export function Link({
   function handleClick(e: React.MouseEvent<HTMLAnchorElement>): void {
     // Run user's onClick first
     onClick?.(e);
-    if (e.defaultPrevented) return;
+    if (e.defaultPrevented || e.nativeEvent.defaultPrevented) return;
 
     // Let the browser handle modified clicks (new tab, etc.)
     if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) {
@@ -75,7 +75,14 @@ export function Link({
 
   return createElement(
     "a",
-    { ...rest, href, ref, onClick: handleClick },
+    {
+      ...rest,
+      href,
+      ref,
+      onClick: handleClick,
+      "data-capstan-replace": replace ? "" : undefined,
+      "data-capstan-scroll": scroll === false ? "false" : undefined,
+    },
     children,
   );
 }

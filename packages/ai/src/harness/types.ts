@@ -7,6 +7,7 @@ import type {
   SmartAgentMemoryConfig,
   AgentRunResult,
   MemoryScope,
+  SmartAgentHooks,
 } from "../types.js";
 import type { AgentTaskRecord } from "../task/types.js";
 
@@ -20,6 +21,7 @@ export interface AgentRunConfig {
   tasks?: AgentTask[];
   maxIterations?: number;
   systemPrompt?: string;
+  hooks?: SmartAgentHooks;
 }
 
 // ---------------------------------------------------------------------------
@@ -647,6 +649,7 @@ export interface HarnessSandboxContext {
 export interface HarnessResumeOptions {
   runConfig?: AgentRunConfig;
   approvePendingTool?: boolean;
+  resumeMessage?: string;
   access?: HarnessAccessContext;
 }
 

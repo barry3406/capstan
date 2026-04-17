@@ -257,6 +257,18 @@ export interface CapstanConfig {
       strategy?: "jwt" | "database";
       secret?: string;
       maxAge?: string;
+      cookieName?: string;
+      cookie?: {
+        path?: string;
+        domain?: string;
+        secure?: boolean;
+        httpOnly?: boolean;
+        sameSite?: "Strict" | "Lax" | "None";
+      };
+    };
+    apiKeys?: {
+      prefix?: string;
+      headerName?: string;
     };
   };
   agent?: {

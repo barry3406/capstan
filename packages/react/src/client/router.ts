@@ -159,6 +159,11 @@ export class CapstanRouter {
     if (!target) {
       return;
     }
+    const targetMatch = matchRoute(this.manifest, target.pathname);
+    if (this.currentRoute?.needsHydration || targetMatch?.route.needsHydration) {
+      window.location.href = target.href;
+      return;
+    }
 
     // Same-page navigation -- skip unless the caller explicitly wants to bypass cache.
     if (target.href === this.state.url && !opts.noCache) return;
@@ -364,7 +369,18 @@ export class CapstanRouter {
       : "/";
 
     if (payload.componentType === "server" && payload.html) {
-      // Server component -- morph the DOM outlet
+      // If the target page uses client-side hydration, morphdom will destroy
+      // the React tree.  Fall back to a full page load so the browser can
+      // re-execute the hydration script from scratch.
+      const needsHydration =
+        payload.html.includes("hydrateCapstanPage") ||
+        payload.html.includes("__CAPSTAN_HYDRATE__");
+      if (needsHydration) {
+        window.location.href = target.href;
+        return;
+      }
+
+      // Pure server component -- morph the DOM outlet
       this.morphOutlet(layoutKey, payload.html);
     }
 
@@ -472,9 +488,13 @@ export class CapstanRouter {
       const payload = await this.fetchNavPayload(target, opts, signal);
       if (!this.isActiveNavigation(navigation)) return;
 
-      await withViewTransition(() => {
+      if (mode.scroll === "none") {
         this.applyNavigation(payload, target);
-      });
+      } else {
+        await withViewTransition(() => {
+          this.applyNavigation(payload, target);
+        });
+      }
       if (!this.isActiveNavigation(navigation)) return;
 
       const finalUrl = this.resolveFinalUrl(payload.url, target);
@@ -505,6 +525,33 @@ export class CapstanRouter {
           // Restored from per-route memory
         } else if (!restoreScrollPosition(scrollKey) && !restoreScrollSnapshot(mode.scrollSnapshot ?? null)) {
           scrollToTop();
+        }
+      } else if (mode.scroll === "none") {
+        const snapshot = navigation.previous.scroll;
+        restoreScrollSnapshot(snapshot);
+        if (typeof window !== "undefined" && snapshot) {
+          const reapply = () => {
+            restoreScrollSnapshot(snapshot);
+          };
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+              reapply();
+            });
+          });
+          setTimeout(() => {
+            reapply();
+          }, 32);
+          setTimeout(() => {
+            reapply();
+          }, 96);
+          setTimeout(() => {
+            reapply();
+          }, 180);
+          setTimeout(() => {
+            requestAnimationFrame(() => {
+              reapply();
+            });
+          }, 280);
         }
       } else if (mode.scroll === "top") {
         if (scrollBehavior === "smooth") {

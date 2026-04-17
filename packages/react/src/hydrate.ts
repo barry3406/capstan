@@ -70,9 +70,13 @@ export interface HydrationIslandOptions {
 
 function scheduleHydration(
   mode: HydrationPriority,
-  element: Element,
+  element: Element | Document,
   callback: () => void,
 ): () => void {
+  const targetElement = element instanceof Document
+    ? element.documentElement ?? element.body
+    : element;
+
   if (mode === "full") {
     callback();
     return () => {};
@@ -89,7 +93,7 @@ function scheduleHydration(
       },
       { rootMargin: "200px" },
     );
-    observer.observe(element);
+    observer.observe(targetElement);
     return () => observer.disconnect();
   }
 
@@ -115,12 +119,12 @@ function scheduleHydration(
       callback();
     };
     for (const evt of events) {
-      element.addEventListener(evt, handler, { once: true, passive: true });
+      targetElement.addEventListener(evt, handler, { once: true, passive: true });
     }
     return () => {
       cleaned = true;
       for (const evt of events) {
-        element.removeEventListener(evt, handler);
+        targetElement.removeEventListener(evt, handler);
       }
     };
   }
@@ -162,7 +166,7 @@ function buildHydrationTree(
 // ---------------------------------------------------------------------------
 
 export function hydrateCapstanPage(
-  rootElement: Element,
+  rootElement: Element | Document,
   PageComponent: React.ComponentType,
   layouts: React.ComponentType[],
   data: CapstanPageContext,
@@ -187,7 +191,7 @@ export function hydrateCapstanPage(
 }
 
 function performHydration(
-  rootElement: Element,
+  rootElement: Element | Document,
   PageComponent: React.ComponentType,
   layouts: React.ComponentType[],
   data: CapstanPageContext,
@@ -234,7 +238,9 @@ function performHydration(
     options?.onHydrationError?.(err, { componentStack: "" });
 
     // Clear the root and do a fresh client render
-    rootElement.innerHTML = "";
+    if (rootElement instanceof Element) {
+      rootElement.innerHTML = "";
+    }
     const root: Root = createRoot(rootElement);
     root.render(tree);
   }

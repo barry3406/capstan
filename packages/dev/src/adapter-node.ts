@@ -162,7 +162,7 @@ export function createNodeAdapter(options?: NodeAdapterOptions): ServerAdapter {
 
       const server: Server = createServer(async (req, res) => {
         // Track the underlying socket for graceful shutdown.
-        if (req.socket) {
+        if (req.socket && !activeConnections.has(req.socket)) {
           activeConnections.add(req.socket);
           req.socket.once("close", () => {
             activeConnections.delete(req.socket);

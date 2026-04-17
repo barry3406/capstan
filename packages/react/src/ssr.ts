@@ -327,10 +327,11 @@ function buildStreamOptions(
             bootstrapScriptContent: [
               `window.__CAPSTAN_DATA__ = ${serializedData}`,
               `(function(){`,
+              `var t=document.getElementById('capstan-root')||document.querySelector('[data-capstan-layout],[data-capstan-outlet]')||document.body;`,
               `var o=new IntersectionObserver(function(e){`,
               `if(e[0].isIntersecting){o.disconnect();import('/_capstan/client.js');}`,
               `});`,
-              `o.observe(document.getElementById('capstan-root'));`,
+              `if(t)o.observe(t);`,
               `})();`,
             ].join(""),
           }

@@ -109,6 +109,8 @@ export interface ClientRouteEntry {
   urlPattern: string;
   /** Server or client component. */
   componentType: "server" | "client";
+  /** Whether this route requires browser hydration (client page or client layout). */
+  needsHydration: boolean;
   /** Layout chain (paths relative to routes root). */
   layouts: string[];
 }

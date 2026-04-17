@@ -487,13 +487,7 @@ function loadPortableRouteMiddlewares(
 ): MiddlewareDefinition[] {
   return filePaths.map((filePath) => {
     const mod = getRouteModule(routeModules, filePath);
-    if (!Object.prototype.hasOwnProperty.call(mod, "default")) {
-      throw new Error(
-        `Middleware module ${filePath} must export a default middleware definition.`,
-      );
-    }
-
-    return normalizeMiddlewareExport(mod.default, filePath);
+    return normalizeMiddlewareExport(mod.default ?? mod, filePath);
   });
 }
 

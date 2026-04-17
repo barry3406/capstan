@@ -1,4 +1,4 @@
-import { getManifest } from "./manifest.js";
+import { getManifest, matchRoute } from "./manifest.js";
 import { initRouter, getRouter } from "./router.js";
 import { isClientNavigableHref } from "./href.js";
 
@@ -20,6 +20,11 @@ export function bootstrapClient(): void {
   }
 
   const router = initRouter(manifest);
+  const currentMatch = matchRoute(manifest, window.location.pathname);
+
+  if (currentMatch?.route.needsHydration) {
+    void import(`/_capstan/client/hydrate-current.js?path=${encodeURIComponent(window.location.pathname)}`);
+  }
 
   // Global click delegation — intercept all <a> clicks that target
   // internal routes.  This catches links rendered by morphdom that
@@ -37,7 +42,8 @@ export function bootstrapClient(): void {
 
     const href = anchor.getAttribute("href");
     if (!href) return;
-
+    const targetUrl = new URL(href, window.location.href);
+    const targetMatch = matchRoute(manifest, targetUrl.pathname);
     // Skip external, hash-only, and download links
     if (
       !isClientNavigableHref(href) ||
@@ -49,10 +55,33 @@ export function bootstrapClient(): void {
 
     // Skip links with data-capstan-external attribute (opt-out)
     if (anchor.hasAttribute("data-capstan-external")) return;
+    if (currentMatch?.route.needsHydration || targetMatch?.route.needsHydration) return;
+
+    const scrollStoreKey = anchor.getAttribute("data-capstan-scroll-store");
+    if (scrollStoreKey && typeof window !== "undefined") {
+      try {
+        window.sessionStorage.setItem(
+          scrollStoreKey,
+          JSON.stringify({ x: window.scrollX, y: window.scrollY, href }),
+        );
+      } catch {
+        // Ignore storage errors.
+      }
+    }
 
     e.preventDefault();
-    void router.navigate(href, {
+
+    // Safety timeout — if client navigation doesn't complete within 5s,
+    // fall back to a full browser navigation so the user never gets stuck.
+    const fallbackTimer = setTimeout(() => {
+      window.location.href = href;
+    }, 5000);
+
+    router.navigate(href, {
       replace: anchor.hasAttribute("data-capstan-replace"),
+      scroll: anchor.getAttribute("data-capstan-scroll") !== "false",
+    }).finally(() => {
+      clearTimeout(fallbackTimer);
     });
-  });
+  }, true);
 }

@@ -466,11 +466,33 @@ export function ensureTrackingTable(client: MigrationDbClient, provider: DbProvi
   client.exec(createTrackingTableSQL(provider));
 }
 
+export interface AsyncMigrationDbClient {
+  query: (sql: string, params?: unknown[]) => Promise<Array<Record<string, unknown>>>;
+  execute: (sql: string, params?: unknown[]) => Promise<unknown>;
+  transaction: <T>(fn: (client: AsyncMigrationDbClient) => Promise<T>) => Promise<T>;
+}
+
+function trackingNamePlaceholder(provider: DbProvider): string {
+  return provider === "postgres" ? "$1" : "?";
+}
+
+export async function ensureTrackingTableAsync(
+  client: AsyncMigrationDbClient,
+  provider: DbProvider = "sqlite",
+): Promise<void> {
+  await client.execute(createTrackingTableSQL(provider));
+}
+
 export function getAppliedMigrations(client: MigrationDbClient): string[] {
   const rows = client.prepare(
     "SELECT name FROM _capstan_migrations ORDER BY id ASC",
   ).all() as Array<{ name: string }>;
   return rows.map((row) => row.name);
+}
+
+export async function getAppliedMigrationsAsync(client: AsyncMigrationDbClient): Promise<string[]> {
+  const rows = await client.query("SELECT name FROM _capstan_migrations ORDER BY id ASC");
+  return rows.map((row) => String(row.name));
 }
 
 export interface MigrationStatus {
@@ -488,6 +510,25 @@ export function getMigrationStatus(
   const rows = client.prepare(
     "SELECT name, applied_at FROM _capstan_migrations ORDER BY id ASC",
   ).all() as Array<{ name: string; applied_at: string }>;
+
+  const appliedSet = new Set(rows.map((row) => row.name));
+
+  return {
+    applied: rows.map((row) => ({ name: row.name, appliedAt: row.applied_at })),
+    pending: allMigrationNames.filter((name) => !appliedSet.has(name)),
+  };
+}
+
+export async function getMigrationStatusAsync(
+  client: AsyncMigrationDbClient,
+  allMigrationNames: string[],
+  provider: DbProvider = "sqlite",
+): Promise<MigrationStatus> {
+  await ensureTrackingTableAsync(client, provider);
+
+  const rows = await client.query(
+    "SELECT name, applied_at FROM _capstan_migrations ORDER BY id ASC",
+  ) as Array<{ name: string; applied_at: string }>;
 
   const appliedSet = new Set(rows.map((row) => row.name));
 
@@ -532,6 +573,42 @@ export function applyTrackedMigrations(
       client.exec("ROLLBACK");
       throw err;
     }
+  }
+
+  return executed;
+}
+
+export async function applyTrackedMigrationsAsync(
+  client: AsyncMigrationDbClient,
+  migrations: Array<{ name: string; sql: string }>,
+  provider: DbProvider = "sqlite",
+): Promise<string[]> {
+  await ensureTrackingTableAsync(client, provider);
+
+  const applied = await getAppliedMigrationsAsync(client);
+  const appliedSet = new Set(applied);
+
+  const pending = migrations.filter((migration) => !appliedSet.has(migration.name));
+  if (pending.length === 0) return [];
+
+  const executed: string[] = [];
+
+  for (const migration of pending) {
+    const statements = migration.sql
+      .split(";")
+      .map((statement) => statement.trim())
+      .filter((statement) => statement.length > 0 && !statement.startsWith("--"));
+
+    await client.transaction(async (tx) => {
+      for (const stmt of statements) {
+        await tx.execute(stmt);
+      }
+      await tx.execute(
+        `INSERT INTO _capstan_migrations (name) VALUES (${trackingNamePlaceholder(provider)})`,
+        [migration.name],
+      );
+    });
+    executed.push(migration.name);
   }
 
   return executed;

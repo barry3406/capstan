@@ -263,8 +263,10 @@ export async function createHarness(config: HarnessConfig): Promise<Harness> {
     startOptions?: HarnessRunStartOptions;
     checkpoint?: AgentCheckpoint;
     resumePendingTool?: boolean;
+    resumeMessage?: string;
   }): Promise<HarnessRunResult> => {
-    const { mode, runId, runConfig, startOptions, checkpoint, resumePendingTool } = params;
+    const { mode, runId, runConfig, startOptions, checkpoint, resumePendingTool, resumeMessage } =
+      params;
     const sandboxDir = resolve(runtimeStore.paths.sandboxesDir, runId);
     const artifactDir = resolve(runtimeStore.paths.artifactsDir, runId);
     const startedAt = new Date().toISOString();
@@ -663,6 +665,7 @@ export async function createHarness(config: HarnessConfig): Promise<Harness> {
         }
       }
 
+      const userHooks = runConfig.hooks;
       const result = await runSmartLoop(
         {
           llm: config.llm,
@@ -693,6 +696,15 @@ export async function createHarness(config: HarnessConfig): Promise<Harness> {
                     return {
                       allowed: false,
                       reason: decision.reason ?? `Task "${tool}" requires approval`,
+                    };
+                  }
+                }
+                if (userHooks?.beforeTaskCall) {
+                  const decision = await userHooks.beforeTaskCall(tool, args);
+                  if (!decision.allowed) {
+                    return {
+                      allowed: false,
+                      reason: decision.reason ?? `Task "${tool}" was blocked by a custom hook`,
                     };
                   }
                 }
@@ -758,6 +770,15 @@ export async function createHarness(config: HarnessConfig): Promise<Harness> {
                   };
                 }
               }
+              if (userHooks?.beforeToolCall) {
+                const decision = await userHooks.beforeToolCall(tool, args);
+                if (!decision.allowed) {
+                  return {
+                    allowed: false,
+                    reason: decision.reason ?? `Tool "${tool}" was blocked by a custom hook`,
+                  };
+                }
+              }
 
               return { allowed: true };
             },
@@ -782,6 +803,15 @@ export async function createHarness(config: HarnessConfig): Promise<Harness> {
                   };
                 }
               }
+              if (userHooks?.beforeTaskCall) {
+                const decision = await userHooks.beforeTaskCall(task, args);
+                if (!decision.allowed) {
+                  return {
+                    allowed: false,
+                    reason: decision.reason ?? `Task "${task}" was blocked by a custom hook`,
+                  };
+                }
+              }
 
               return { allowed: true };
             },
@@ -798,6 +828,9 @@ export async function createHarness(config: HarnessConfig): Promise<Harness> {
                 args,
                 result: summarizeHarnessResult(taskResult),
               });
+              if (userHooks?.afterTaskCall) {
+                await userHooks.afterTaskCall(task, args, taskResult);
+              }
             },
             afterToolCall: async (tool, args, toolResult) => {
               // Check if this tool is actually a wrapped task
@@ -853,6 +886,9 @@ export async function createHarness(config: HarnessConfig): Promise<Harness> {
                   args,
                   result: summarizeHarnessResult(toolResult),
                 });
+                if (userHooks?.afterTaskCall) {
+                  await userHooks.afterTaskCall(tool, args, toolResult);
+                }
                 return;
               }
 
@@ -918,6 +954,15 @@ export async function createHarness(config: HarnessConfig): Promise<Harness> {
                   });
                 }
               }
+              if (userHooks?.afterToolCall) {
+                const status =
+                  toolResult != null &&
+                  typeof toolResult === "object" &&
+                  "error" in (toolResult as Record<string, unknown>)
+                    ? "error"
+                    : "success";
+                await userHooks.afterToolCall(tool, args, toolResult, status);
+              }
             },
             onCheckpoint: async (nextCheckpoint) => {
               const contextUpdate = await contextKernel.handleCheckpoint({
@@ -925,27 +970,34 @@ export async function createHarness(config: HarnessConfig): Promise<Harness> {
                 checkpoint: nextCheckpoint,
               });
               await persistCheckpointContext(contextUpdate);
+              let effectiveCheckpoint = contextUpdate.checkpoint;
+              if (userHooks?.onCheckpoint) {
+                const maybeCheckpoint = await userHooks.onCheckpoint(effectiveCheckpoint);
+                if (maybeCheckpoint) {
+                  effectiveCheckpoint = maybeCheckpoint;
+                }
+              }
 
               const checkpointRecord = await runtimeStore.persistCheckpoint(
                 runId,
-                contextUpdate.checkpoint,
+                effectiveCheckpoint,
               );
               // Count tool calls excluding wrapped tasks, and preserve task call count
-              const checkpointToolCount = contextUpdate.checkpoint.toolCalls.filter(
+              const checkpointToolCount = effectiveCheckpoint.toolCalls.filter(
                 (tc) => !taskNameSet.has(tc.tool),
               ).length;
-              const checkpointTaskCount = contextUpdate.checkpoint.toolCalls.filter(
+              const checkpointTaskCount = effectiveCheckpoint.toolCalls.filter(
                 (tc) => taskNameSet.has(tc.tool),
-              ).length + (contextUpdate.checkpoint.taskCalls?.length ?? 0);
+              ).length + (effectiveCheckpoint.taskCalls?.length ?? 0);
               await patchRun({
-                iterations: contextUpdate.checkpoint.iterations,
+                iterations: effectiveCheckpoint.iterations,
                 toolCalls: checkpointToolCount,
                 taskCalls: checkpointTaskCount,
                 checkpointUpdatedAt: checkpointRecord.updatedAt,
               });
-              return contextUpdate.checkpoint;
+              return effectiveCheckpoint;
             },
-            getControlState: async () => {
+            getControlState: async (phase, activeCheckpoint) => {
               const inMemoryRequest = requestedControls.get(runId);
               if (inMemoryRequest === "cancel") {
                 return { action: "cancel" as const };
@@ -961,12 +1013,37 @@ export async function createHarness(config: HarnessConfig): Promise<Harness> {
               if (latestRun.control?.pauseRequestedAt) {
                 return { action: "pause" };
               }
+              if (userHooks?.getControlState) {
+                return userHooks.getControlState(phase, activeCheckpoint);
+              }
               return { action: "continue" };
             },
+            ...(userHooks?.afterIteration
+              ? {
+                  afterIteration: async (snapshot) => {
+                    await userHooks.afterIteration?.(snapshot);
+                  },
+                }
+              : {}),
+            ...(userHooks?.onRunComplete
+              ? {
+                  onRunComplete: async (result) => {
+                    await userHooks.onRunComplete?.(result);
+                  },
+                }
+              : {}),
+            ...(userHooks?.onMemoryEvent
+              ? {
+                  onMemoryEvent: async (content) => {
+                    await userHooks.onMemoryEvent?.(content);
+                  },
+                }
+              : {}),
           },
         },
         runConfig.goal,
         effectiveCheckpoint,
+        resumeMessage,
       );
 
       if (result.status === "approval_required") {
@@ -1724,6 +1801,7 @@ export async function createHarness(config: HarnessConfig): Promise<Harness> {
           checkpoint: checkpointRecord.checkpoint,
           resumePendingTool:
             options?.approvePendingTool === true || approval?.status === "approved",
+          ...(options?.resumeMessage ? { resumeMessage: options.resumeMessage } : {}),
         }),
       );
     },

@@ -54,6 +54,21 @@ function normalizeMiddlewareExport(
   exported: unknown,
   filePath: string,
 ): MiddlewareDefinition {
+  const unwrapped =
+    exported &&
+    typeof exported === "object" &&
+    "default" in (exported as Record<string, unknown>)
+      ? (exported as Record<string, unknown>).default
+      : exported;
+
+  if (typeof unwrapped === "function") {
+    return { handler: unwrapped as MiddlewareDefinition["handler"] };
+  }
+
+  if (isMiddlewareDefinition(unwrapped)) {
+    return unwrapped;
+  }
+
   if (typeof exported === "function") {
     return { handler: exported as MiddlewareDefinition["handler"] };
   }
@@ -84,16 +99,11 @@ export async function loadRouteMiddleware(
     );
   }
 
-  if (!Object.prototype.hasOwnProperty.call(mod, "default")) {
-    throw new RouteMiddlewareExportError(
-      `Middleware module ${filePath} must export a default middleware definition.`,
-      filePath,
-    );
-  }
+  const exported = mod.default ?? mod;
 
   return {
     filePath,
-    definition: normalizeMiddlewareExport(mod.default, filePath),
+    definition: normalizeMiddlewareExport(exported, filePath),
   };
 }
 

@@ -1,4 +1,6 @@
 import { access, readFile } from "node:fs/promises";
+import { existsSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -63,6 +65,14 @@ import type { HmrCoordinator, HmrTransport } from "./hmr.js";
  */
 let _hmrCoordinator: HmrCoordinator | null = null;
 let _hmrTransport: HmrTransport | null = null;
+const DEV_SRC_DIR = path.dirname(fileURLToPath(import.meta.url));
+const REACT_SRC_DIR = path.resolve(DEV_SRC_DIR, "..", "..", "react", "src");
+const REACT_BROWSER_ENTRY = path.join(REACT_SRC_DIR, "browser.ts");
+const REACT_CLIENT_ENTRY = path.join(REACT_SRC_DIR, "client", "index.ts");
+const SHARED_REACT_MODULE = "/_capstan/client/vendor/react.js";
+const SHARED_REACT_DOM_MODULE = "/_capstan/client/vendor/react-dom.js";
+const SHARED_REACT_DOM_CLIENT_MODULE = "/_capstan/client/vendor/react-dom-client.js";
+const SHARED_REACT_JSX_RUNTIME_MODULE = "/_capstan/client/vendor/react-jsx-runtime.js";
 
 function getHmrScript(port: number): string {
   if (_hmrCoordinator) {
@@ -126,11 +136,29 @@ function injectLiveReload(html: string, port: number = 3000): string {
  * which routes exist and their component types.
  */
 function injectManifest(html: string, manifest: RouteManifest): string {
+  const needsHydration = (route: RouteEntry): boolean => {
+    if (route.componentType === "client") return true;
+    return route.layouts.some((layoutPath) => {
+      try {
+        const firstLine = readFileSync(layoutPath, "utf-8").split(/\r?\n/, 1)[0]?.trim() ?? "";
+        return (
+          firstLine === '"use client"' ||
+          firstLine === "'use client'" ||
+          firstLine === '"use client";' ||
+          firstLine === "'use client';"
+        );
+      } catch {
+        return false;
+      }
+    });
+  };
+
   const clientRoutes = manifest.routes
     .filter((r) => r.type === "page")
     .map((r) => ({
       urlPattern: r.urlPattern,
       componentType: r.componentType ?? "server",
+      needsHydration: needsHydration(r),
       layouts: r.layouts,
     }));
 
@@ -140,6 +168,268 @@ function injectManifest(html: string, manifest: RouteManifest): string {
     return html.slice(0, idx) + script + "\n" + html.slice(idx);
   }
   return html + script;
+}
+
+async function buildHydrationModule(
+  route: RouteEntry,
+  appRoot: string,
+): Promise<string> {
+  const esbuild = await import("esbuild");
+  const relativeImport = (filePath: string): string => {
+    const rel = path.relative(appRoot, filePath).replace(/\\/g, "/");
+    return rel.startsWith(".") ? rel : `./${rel}`;
+  };
+  const reactClientEntryImport = relativeImport(path.join(REACT_SRC_DIR, "client", "entry.ts"));
+  const reactHydrateImport = relativeImport(path.join(REACT_SRC_DIR, "hydrate.ts"));
+  const layoutImports = route.layouts.map((layoutPath, index) => ({
+    name: `Layout${index}`,
+    importPath: relativeImport(layoutPath),
+  }));
+  const contents = [
+    `import * as SharedReact from "react";`,
+    `import * as SharedReactDom from "react-dom";`,
+    `import * as SharedReactDomClient from "react-dom/client";`,
+    `import * as SharedJsxRuntime from "react/jsx-runtime";`,
+    `import { bootstrapClient } from ${JSON.stringify(reactClientEntryImport)};`,
+    `import { hydrateCapstanPage } from ${JSON.stringify(reactHydrateImport)};`,
+    `import Page from ${JSON.stringify(relativeImport(route.filePath))};`,
+    ...layoutImports.map(({ name, importPath }) => `import ${name} from ${JSON.stringify(importPath)};`),
+    `bootstrapClient();`,
+    `window.__CAPSTAN_SHARED_REACT__ ??= SharedReact;`,
+    `window.__CAPSTAN_SHARED_REACT_DOM__ ??= SharedReactDom;`,
+    `window.__CAPSTAN_SHARED_REACT_DOM_CLIENT__ ??= SharedReactDomClient;`,
+    `window.__CAPSTAN_SHARED_JSX_RUNTIME__ ??= SharedJsxRuntime;`,
+    `const root = document.getElementById("capstan-root") ?? (document.querySelector("[data-capstan-layout], [data-capstan-outlet]") ? document : null);`,
+    `const data = window.__CAPSTAN_DATA__;`,
+    `if (root && data) hydrateCapstanPage(root, Page, [${layoutImports.map(({ name }) => name).join(", ")}], data);`,
+  ].join("\n");
+
+  const jsExtensionResolver: import("esbuild").Plugin = {
+    name: "capstan-js-extension-resolver",
+    setup(build) {
+      build.onResolve({ filter: /^react$/ }, () => ({
+        path: FRAMEWORK_BROWSER_REACT_ENTRY,
+      }));
+
+      build.onResolve({ filter: /^react-dom$/ }, () => ({
+        path: FRAMEWORK_BROWSER_REACT_DOM_ENTRY,
+      }));
+
+      build.onResolve({ filter: /^react-dom\/client$/ }, () => ({
+        path: FRAMEWORK_BROWSER_REACT_DOM_CLIENT_ENTRY,
+      }));
+
+      build.onResolve({ filter: /^react\/jsx-runtime$/ }, () => ({
+        path: FRAMEWORK_BROWSER_REACT_JSX_RUNTIME_ENTRY,
+      }));
+
+      build.onResolve({ filter: /^react\/jsx-dev-runtime$/ }, () => ({
+        path: FRAMEWORK_BROWSER_REACT_JSX_DEV_RUNTIME_ENTRY,
+      }));
+
+      build.onResolve({ filter: /^@zauso-ai\/capstan-react$/ }, () => ({
+        path: REACT_BROWSER_ENTRY,
+      }));
+
+      build.onResolve({ filter: /^@zauso-ai\/capstan-react\/client$/ }, () => ({
+        path: REACT_CLIENT_ENTRY,
+      }));
+
+      build.onResolve({ filter: /^(\.|\.\.\/|\/).*\.js$/ }, (args) => {
+        const resolved = path.isAbsolute(args.path)
+          ? args.path
+          : path.resolve(args.resolveDir, args.path);
+        if (existsSync(resolved)) return { path: resolved };
+
+        for (const ext of [".ts", ".tsx", ".js", ".jsx", ".mjs"]) {
+          const candidate = resolved.slice(0, -3) + ext;
+          if (existsSync(candidate)) {
+            return { path: candidate };
+          }
+        }
+
+        return null;
+      });
+    },
+  };
+
+  const result = await esbuild.build({
+    stdin: {
+      contents,
+      resolveDir: appRoot,
+      sourcefile: "__capstan_hydrate_entry__.tsx",
+      loader: "tsx",
+    },
+    bundle: true,
+    write: false,
+    format: "esm",
+    platform: "browser",
+    target: "es2022",
+    jsx: "automatic",
+    sourcemap: "inline",
+    plugins: [jsExtensionResolver],
+  });
+
+  return result.outputFiles[0]?.text ?? "";
+}
+
+async function buildRouteModule(
+  route: RouteEntry,
+  appRoot: string,
+): Promise<string> {
+  const esbuild = await import("esbuild");
+  const relativeImport = (filePath: string): string => {
+    const rel = path.relative(appRoot, filePath).replace(/\\/g, "/");
+    return rel.startsWith(".") ? rel : `./${rel}`;
+  };
+
+  const jsExtensionResolver: import("esbuild").Plugin = {
+    name: "capstan-route-module-resolver",
+    setup(build) {
+      build.onResolve({ filter: /^react$/ }, () => ({
+        path: SHARED_REACT_MODULE,
+        external: true,
+      }));
+
+      build.onResolve({ filter: /^react-dom$/ }, () => ({
+        path: SHARED_REACT_DOM_MODULE,
+        external: true,
+      }));
+
+      build.onResolve({ filter: /^react\/jsx-runtime$/ }, () => ({
+        path: SHARED_REACT_JSX_RUNTIME_MODULE,
+        external: true,
+      }));
+
+      build.onResolve({ filter: /^react\/jsx-dev-runtime$/ }, () => ({
+        path: SHARED_REACT_JSX_RUNTIME_MODULE,
+        external: true,
+      }));
+
+      build.onResolve({ filter: /^react-dom\/client$/ }, () => ({
+        path: SHARED_REACT_DOM_CLIENT_MODULE,
+        external: true,
+      }));
+
+      build.onResolve({ filter: /^@zauso-ai\/capstan-react$/ }, () => ({
+        path: REACT_BROWSER_ENTRY,
+      }));
+
+      build.onResolve({ filter: /^@zauso-ai\/capstan-react\/client$/ }, () => ({
+        path: REACT_CLIENT_ENTRY,
+      }));
+
+      build.onResolve({ filter: /^(\.|\.\.\/|\/).*\.js$/ }, (args) => {
+        const resolved = path.isAbsolute(args.path)
+          ? args.path
+          : path.resolve(args.resolveDir, args.path);
+        if (existsSync(resolved)) return { path: resolved };
+
+        for (const ext of [".ts", ".tsx", ".js", ".jsx", ".mjs"]) {
+          const candidate = resolved.slice(0, -3) + ext;
+          if (existsSync(candidate)) {
+            return { path: candidate };
+          }
+        }
+
+        return null;
+      });
+    },
+  };
+
+  const result = await esbuild.build({
+    stdin: {
+      contents: [
+        `import Page from ${JSON.stringify(relativeImport(route.filePath))};`,
+        `export default Page;`,
+      ].join("\n"),
+      resolveDir: appRoot,
+      sourcefile: "__capstan_route_entry__.tsx",
+      loader: "tsx",
+    },
+    bundle: true,
+    write: false,
+    format: "esm",
+    platform: "browser",
+    target: "es2022",
+    jsx: "automatic",
+    sourcemap: "inline",
+    plugins: [jsExtensionResolver],
+  });
+
+  return result.outputFiles[0]?.text ?? "";
+}
+
+async function buildSharedReactModule(): Promise<string> {
+  return [
+    `const React = window.__CAPSTAN_SHARED_REACT__;`,
+    `if (!React) throw new Error("Capstan shared React runtime is unavailable.");`,
+    `export default React;`,
+    `export const {`,
+    `  Activity,`,
+    `  Children,`,
+    `  Component,`,
+    `  Fragment,`,
+    `  Profiler,`,
+    `  PureComponent,`,
+    `  StrictMode,`,
+    `  Suspense,`,
+    `  cloneElement,`,
+    `  createContext,`,
+    `  createElement,`,
+    `  createRef,`,
+    `  forwardRef,`,
+    `  isValidElement,`,
+    `  lazy,`,
+    `  memo,`,
+    `  startTransition,`,
+    `  use,`,
+    `  useActionState,`,
+    `  useCallback,`,
+    `  useContext,`,
+    `  useDebugValue,`,
+    `  useDeferredValue,`,
+    `  useEffect,`,
+    `  useId,`,
+    `  useImperativeHandle,`,
+    `  useInsertionEffect,`,
+    `  useLayoutEffect,`,
+    `  useMemo,`,
+    `  useOptimistic,`,
+    `  useReducer,`,
+    `  useRef,`,
+    `  useState,`,
+    `  useSyncExternalStore,`,
+    `  useTransition,`,
+    `  version,`,
+    `} = React;`,
+  ].join("\n");
+}
+
+async function buildSharedReactDomModule(): Promise<string> {
+  return [
+    `const reactDom = window.__CAPSTAN_SHARED_REACT_DOM__;`,
+    `if (!reactDom) throw new Error("Capstan shared React DOM runtime is unavailable.");`,
+    `export default reactDom;`,
+    `export const { preload, preconnect, prefetchDNS, preinit, preinitModule, version } = reactDom;`,
+  ].join("\n");
+}
+
+async function buildSharedReactDomClientModule(): Promise<string> {
+  return [
+    `const reactDomClient = window.__CAPSTAN_SHARED_REACT_DOM_CLIENT__;`,
+    `if (!reactDomClient) throw new Error("Capstan shared React DOM client runtime is unavailable.");`,
+    `export default reactDomClient;`,
+    `export const { createRoot, hydrateRoot } = reactDomClient;`,
+  ].join("\n");
+}
+
+async function buildSharedReactJsxRuntimeModule(): Promise<string> {
+  return [
+    `const jsxRuntime = window.__CAPSTAN_SHARED_JSX_RUNTIME__;`,
+    `if (!jsxRuntime) throw new Error("Capstan shared JSX runtime is unavailable.");`,
+    `export const { Fragment, jsx, jsxs } = jsxRuntime;`,
+  ].join("\n");
 }
 
 async function collectStreamToString(
@@ -238,6 +528,12 @@ const CAPSTAN_CLIENT_BOOTSTRAP = [
   `import { bootstrapClient } from "/_capstan/client/entry.js";`,
   `bootstrapClient();`,
 ].join("\n");
+const frameworkRequire = createRequire(import.meta.url);
+const FRAMEWORK_BROWSER_REACT_ENTRY = frameworkRequire.resolve("react");
+const FRAMEWORK_BROWSER_REACT_DOM_ENTRY = frameworkRequire.resolve("react-dom");
+const FRAMEWORK_BROWSER_REACT_DOM_CLIENT_ENTRY = frameworkRequire.resolve("react-dom/client");
+const FRAMEWORK_BROWSER_REACT_JSX_RUNTIME_ENTRY = frameworkRequire.resolve("react/jsx-runtime");
+const FRAMEWORK_BROWSER_REACT_JSX_DEV_RUNTIME_ENTRY = frameworkRequire.resolve("react/jsx-dev-runtime");
 
 let _reactClientDir: string | null = null;
 
@@ -1472,6 +1768,178 @@ export async function buildRuntimeApp(
   });
 
   app.get("/_capstan/client/*", async (c) => {
+    if (c.req.path === "/_capstan/client/hydrate-current.js") {
+      const url = new URL(c.req.url);
+      const requestedPath = url.searchParams.get("path") || "/";
+      const matched = matchRoute(manifest, "GET", requestedPath);
+      if (!matched || matched.route.type !== "page") {
+        return new Response("Not Found", { status: 404 });
+      }
+
+      try {
+        const code = await buildHydrationModule(
+          matched.route,
+          config.rootDir ?? process.cwd(),
+        );
+        return new Response(code, {
+          status: 200,
+          headers: {
+            "Content-Type": "application/javascript; charset=utf-8",
+            "Cache-Control": "no-cache",
+          },
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error("[capstan] Failed to build hydration module:", message);
+        return new Response(
+          `throw new Error(${JSON.stringify(`Failed to build hydration module: ${message}`)});`,
+          {
+            status: 500,
+            headers: {
+              "Content-Type": "application/javascript; charset=utf-8",
+              "Cache-Control": "no-cache",
+            },
+          },
+        );
+      }
+    }
+
+    if (c.req.path === SHARED_REACT_MODULE) {
+      try {
+        const code = await buildSharedReactModule();
+        return new Response(code, {
+          status: 200,
+          headers: {
+            "Content-Type": "application/javascript; charset=utf-8",
+            "Cache-Control": "no-cache",
+          },
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return new Response(
+          `throw new Error(${JSON.stringify(`Failed to build shared react module: ${message}`)});`,
+          {
+            status: 500,
+            headers: {
+              "Content-Type": "application/javascript; charset=utf-8",
+              "Cache-Control": "no-cache",
+            },
+          },
+        );
+      }
+    }
+
+    if (c.req.path === SHARED_REACT_DOM_CLIENT_MODULE) {
+      try {
+        const code = await buildSharedReactDomClientModule();
+        return new Response(code, {
+          status: 200,
+          headers: {
+            "Content-Type": "application/javascript; charset=utf-8",
+            "Cache-Control": "no-cache",
+          },
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return new Response(
+          `throw new Error(${JSON.stringify(`Failed to build shared react-dom/client module: ${message}`)});`,
+          {
+            status: 500,
+            headers: {
+              "Content-Type": "application/javascript; charset=utf-8",
+              "Cache-Control": "no-cache",
+            },
+          },
+        );
+      }
+    }
+
+    if (c.req.path === SHARED_REACT_DOM_MODULE) {
+      try {
+        const code = await buildSharedReactDomModule();
+        return new Response(code, {
+          status: 200,
+          headers: {
+            "Content-Type": "application/javascript; charset=utf-8",
+            "Cache-Control": "no-cache",
+          },
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return new Response(
+          `throw new Error(${JSON.stringify(`Failed to build shared react-dom module: ${message}`)});`,
+          {
+            status: 500,
+            headers: {
+              "Content-Type": "application/javascript; charset=utf-8",
+              "Cache-Control": "no-cache",
+            },
+          },
+        );
+      }
+    }
+
+    if (c.req.path === SHARED_REACT_JSX_RUNTIME_MODULE) {
+      try {
+        const code = await buildSharedReactJsxRuntimeModule();
+        return new Response(code, {
+          status: 200,
+          headers: {
+            "Content-Type": "application/javascript; charset=utf-8",
+            "Cache-Control": "no-cache",
+          },
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return new Response(
+          `throw new Error(${JSON.stringify(`Failed to build shared react/jsx-runtime module: ${message}`)});`,
+          {
+            status: 500,
+            headers: {
+              "Content-Type": "application/javascript; charset=utf-8",
+              "Cache-Control": "no-cache",
+            },
+          },
+        );
+      }
+    }
+
+    if (c.req.path === "/_capstan/client/route-module.js") {
+      const url = new URL(c.req.url);
+      const requestedPath = url.searchParams.get("path") || "/";
+      const matched = matchRoute(manifest, "GET", requestedPath);
+      if (!matched || matched.route.type !== "page") {
+        return new Response("Not Found", { status: 404 });
+      }
+
+      try {
+        const code = await buildRouteModule(
+          matched.route,
+          config.rootDir ?? process.cwd(),
+        );
+        return new Response(code, {
+          status: 200,
+          headers: {
+            "Content-Type": "application/javascript; charset=utf-8",
+            "Cache-Control": "no-cache",
+          },
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error("[capstan] Failed to build route module:", message);
+        return new Response(
+          `throw new Error(${JSON.stringify(`Failed to build route module: ${message}`)});`,
+          {
+            status: 500,
+            headers: {
+              "Content-Type": "application/javascript; charset=utf-8",
+              "Cache-Control": "no-cache",
+            },
+          },
+        );
+      }
+    }
+
     const assetPath = c.req.path.slice("/_capstan/client/".length);
     return serveReactClientAssetFromConfig(assetPath, config);
   });
@@ -1822,10 +2290,15 @@ export async function createDevServer(
   let currentApp = app;
 
   // --- HMR coordinator -------------------------------------------------------
+  const hmrHostname =
+    !config.host || config.host === "0.0.0.0" || config.host === "::"
+      ? "localhost"
+      : config.host;
+
   const hmrCoordinator = createHmrCoordinator({
     rootDir: config.rootDir,
     routesDir,
-    hostname: config.host ?? "localhost",
+    hostname: hmrHostname,
   });
   const hmrTransport = createHmrTransport();
 

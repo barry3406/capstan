@@ -29,6 +29,7 @@ interface DeployManifestShape {
   integrity?: {
     algorithm?: unknown;
     artifacts?: Record<string, unknown>;
+    artifactGraph?: unknown;
   };
 }
 
@@ -447,7 +448,11 @@ async function validateIntegrityRecords(
   }
 
   const artifacts = manifest.integrity.artifacts;
-  if (!isRecord(artifacts)) {
+  const artifactGraph = Array.isArray(manifest.integrity.artifactGraph)
+    ? manifest.integrity.artifactGraph
+    : null;
+
+  if (!isRecord(artifacts) && !artifactGraph) {
     diagnostics.push({
       code: "build_integrity_artifacts_missing",
       severity: "warning",
@@ -460,13 +465,56 @@ async function validateIntegrityRecords(
     return;
   }
 
-  for (const [artifactPath, expectedHash] of Object.entries(artifacts)) {
-    if (typeof expectedHash !== "string" || expectedHash.trim() === "") {
+  if (isRecord(artifacts)) {
+    for (const [artifactPath, expectedHash] of Object.entries(artifacts)) {
+      if (typeof expectedHash !== "string" || expectedHash.trim() === "") {
+        diagnostics.push({
+          code: "build_integrity_hash_invalid",
+          severity: "warning",
+          message: `Integrity record for ${artifactPath} is missing a valid hash string.`,
+          hint: "Rebuild the app so the artifact hash table can be regenerated.",
+          file: "dist/deploy-manifest.json",
+          fixCategory: "build_contract",
+          autoFixable: false,
+        });
+        continue;
+      }
+
+      const absolutePath = resolve(appRoot, artifactPath);
+      if (!await pathExists(absolutePath)) {
+        diagnostics.push(buildArtifactDiagnostic(
+          "build_integrity_artifact_missing",
+          `${artifactPath} is listed in the integrity table but does not exist on disk.`,
+          "Rebuild the app so the manifest and artifact graph are regenerated together.",
+          artifactPath,
+        ));
+        continue;
+      }
+
+      const actualHash = await computeSha256(absolutePath);
+      if (actualHash !== expectedHash) {
+        diagnostics.push({
+          code: "build_integrity_hash_mismatch",
+          severity: "error",
+          message: `${artifactPath} does not match the hash recorded in dist/deploy-manifest.json.`,
+          hint: "The build output was likely mutated after generation. Rebuild the app and avoid editing generated artifacts manually.",
+          file: artifactPath,
+          fixCategory: "build_contract",
+          autoFixable: false,
+        });
+      }
+    }
+
+    return;
+  }
+
+  for (const artifact of artifactGraph ?? []) {
+    if (!isRecord(artifact) || typeof artifact.path !== "string" || artifact.path.trim() === "") {
       diagnostics.push({
         code: "build_integrity_hash_invalid",
         severity: "warning",
-        message: `Integrity record for ${artifactPath} is missing a valid hash string.`,
-        hint: "Rebuild the app so the artifact hash table can be regenerated.",
+        message: "Integrity artifactGraph contains an entry without a valid path.",
+        hint: "Rebuild the app so the integrity graph can be regenerated.",
         file: "dist/deploy-manifest.json",
         fixCategory: "build_contract",
         autoFixable: false,
@@ -474,6 +522,7 @@ async function validateIntegrityRecords(
       continue;
     }
 
+    const artifactPath = artifact.path;
     const absolutePath = resolve(appRoot, artifactPath);
     if (!await pathExists(absolutePath)) {
       diagnostics.push(buildArtifactDiagnostic(
@@ -482,6 +531,24 @@ async function validateIntegrityRecords(
         "Rebuild the app so the manifest and artifact graph are regenerated together.",
         artifactPath,
       ));
+      continue;
+    }
+
+    const expectedHash = artifact.hash;
+    if (artifact.kind === "directory") {
+      continue;
+    }
+
+    if (typeof expectedHash !== "string" || expectedHash.trim() === "") {
+      diagnostics.push({
+        code: "build_integrity_hash_invalid",
+        severity: "warning",
+        message: `Integrity record for ${artifactPath} is missing a valid hash string.`,
+        hint: "Rebuild the app so the integrity graph can be regenerated.",
+        file: "dist/deploy-manifest.json",
+        fixCategory: "build_contract",
+        autoFixable: false,
+      });
       continue;
     }
 

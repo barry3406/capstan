@@ -628,7 +628,7 @@ async function runDev(args: string[]): Promise<void> {
 
   // Build an inline script that starts the dev server
   const port = readFlagValue(args, "--port") ?? "3000";
-  const host = readFlagValue(args, "--host") ?? "localhost";
+  const host = readFlagValue(args, "--host") ?? "0.0.0.0";
 
   const devScript = `
     import { createDevServer } from "@zauso-ai/capstan-dev";
@@ -642,19 +642,54 @@ async function runDev(args: string[]): Promise<void> {
 
     let appName = "capstan-app";
     let appDescription;
+    let appConfig = null;
     for (const name of ["capstan.config.ts", "capstan.config.js"]) {
       const p = resolve(cwd, name);
       if (existsSync(p)) {
         try {
           const mod = await import(pathToFileURL(p).href);
-          if (mod.default?.app?.name) appName = mod.default.app.name;
-          if (mod.default?.app?.description) appDescription = mod.default.app.description;
+          appConfig = mod.default ?? mod;
+          if (appConfig?.app?.name) appName = appConfig.app.name;
+          if (appConfig?.app?.description) appDescription = appConfig.app.description;
         } catch {}
         break;
       }
     }
 
-    const server = await createDevServer({ rootDir: cwd, port, host, appName, ...(appDescription ? { appDescription } : {}) });
+    function normalizeAuthConfig(appConfig) {
+      const authConfig = appConfig?.auth ?? null;
+      const sessionConfig = authConfig?.session ?? null;
+
+      if (!sessionConfig?.secret) {
+        return undefined;
+      }
+
+      const normalized = {
+        session: {
+          secret: sessionConfig.secret,
+        },
+      };
+
+      if (sessionConfig.maxAge !== undefined) {
+        normalized.session.maxAge = sessionConfig.maxAge;
+      }
+
+      if (authConfig.apiKeys !== undefined) {
+        normalized.apiKeys = authConfig.apiKeys;
+      }
+
+      return normalized;
+    }
+
+    const authConfig = normalizeAuthConfig(appConfig);
+    const server = await createDevServer({
+      rootDir: cwd,
+      port,
+      host,
+      appName,
+      ...(appDescription ? { appDescription } : {}),
+      ...(authConfig ? { auth: authConfig } : {}),
+    });
     await server.start();
   `;
 
@@ -1604,7 +1639,7 @@ async function loadDbConfig(): Promise<{ provider: "sqlite" | "postgres" | "mysq
 async function runDbPush(): Promise<void> {
   const { readdir, readFile: readMigrationFile, mkdir: mkdirFs } = await import("node:fs/promises");
   const { dirname } = await import("node:path");
-  const { createDatabase, applyTrackedMigrations } = await import("@zauso-ai/capstan-db");
+  const { createDatabase, applyTrackedMigrationsAsync } = await import("@zauso-ai/capstan-db");
 
   const migrationsDir = join(process.cwd(), "app", "migrations");
   let files: string[];
@@ -1628,38 +1663,32 @@ async function runDbPush(): Promise<void> {
   }
 
   const dbInstance = await createDatabase({ provider, url });
-  // Access the underlying driver client from the Drizzle instance
-  const client = (dbInstance.db as { $client: unknown }).$client as {
-    exec: (sql: string) => void;
-    prepare: (sql: string) => {
-      all: (...params: unknown[]) => unknown[];
-      run: (...params: unknown[]) => unknown;
-      get: (...params: unknown[]) => unknown;
-    };
-  };
-
-  // Load all migration file contents
-  const migrations: Array<{ name: string; sql: string }> = [];
-  for (const file of files) {
-    const sql = await readMigrationFile(join(migrationsDir, file), "utf8");
-    migrations.push({ name: file, sql });
-  }
-
-  const executed = applyTrackedMigrations(client, migrations, provider);
-
-  if (executed.length === 0) {
-    console.log(pc.green("No pending migrations. Database is up to date."));
-  } else {
-    for (const name of executed) {
-      console.log(pc.green(`Applied: ${name}`));
+  try {
+    // Load all migration file contents
+    const migrations: Array<{ name: string; sql: string }> = [];
+    for (const file of files) {
+      const sql = await readMigrationFile(join(migrationsDir, file), "utf8");
+      migrations.push({ name: file, sql });
     }
-    console.log(pc.dim(`\n${executed.length} migration(s) applied.`));
+
+    const executed = await applyTrackedMigrationsAsync(dbInstance, migrations, provider);
+
+    if (executed.length === 0) {
+      console.log(pc.green("No pending migrations. Database is up to date."));
+    } else {
+      for (const name of executed) {
+        console.log(pc.green(`Applied: ${name}`));
+      }
+      console.log(pc.dim(`\n${executed.length} migration(s) applied.`));
+    }
+  } finally {
+    await dbInstance.close();
   }
 }
 
 async function runDbStatus(): Promise<void> {
   const { readdir } = await import("node:fs/promises");
-  const { createDatabase, getMigrationStatus } = await import("@zauso-ai/capstan-db");
+  const { createDatabase, getMigrationStatusAsync } = await import("@zauso-ai/capstan-db");
 
   const migrationsDir = join(process.cwd(), "app", "migrations");
   let files: string[];
@@ -1680,16 +1709,11 @@ async function runDbStatus(): Promise<void> {
   let status: { applied: Array<{ name: string; appliedAt: string }>; pending: string[] };
   try {
     const dbInstance = await createDatabase({ provider, url });
-    const client = (dbInstance.db as { $client: unknown }).$client as {
-      exec: (sql: string) => void;
-      prepare: (sql: string) => {
-        all: (...params: unknown[]) => unknown[];
-        run: (...params: unknown[]) => unknown;
-        get: (...params: unknown[]) => unknown;
-      };
-    };
-
-    status = getMigrationStatus(client, files, provider);
+    try {
+      status = await getMigrationStatusAsync(dbInstance, files, provider);
+    } finally {
+      await dbInstance.close();
+    }
   } catch {
     // Database may not exist yet — treat everything as pending
     status = {
