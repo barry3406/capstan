@@ -13,3 +13,4 @@ playwright-report
 .VSCodeCounter
 *.bak
 *.tsbuildinfo
+.npmrc
