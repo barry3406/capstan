@@ -668,6 +668,9 @@ export async function createHarness(config: HarnessConfig): Promise<Harness> {
           llm: config.llm,
           tools: allTools,
           maxIterations: runConfig.maxIterations,
+          ...(runConfig.systemPrompt != null
+            ? { prompt: { base: runConfig.systemPrompt } }
+            : {}),
           hooks: {
             beforeToolCall: async (tool, args) => {
               // Check if this tool is actually a wrapped task
