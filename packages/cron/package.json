@@ -1,22 +1,35 @@
 {
   "name": "@zauso-ai/capstan-cron",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "exports": { ".": { "import": "./dist/index.js", "types": "./dist/index.d.ts" } },
-  "scripts": { "build": "tsc -p tsconfig.json", "typecheck": "tsc -p tsconfig.json --noEmit", "clean": "rm -rf dist" },
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "clean": "rm -rf dist"
+  },
   "files": [
     "dist"
   ],
   "description": "Cron scheduler for Capstan — Bun.cron native with Node.js fallback. Integrates with capstan-ai for 7×24 agent loops.",
   "license": "MIT",
   "author": "barry3406",
-  "publishConfig": { "access": "public" },
+  "publishConfig": {
+    "access": "public"
+  },
   "peerDependencies": {
     "@zauso-ai/capstan-ai": ">=0.3.0"
   },
   "peerDependenciesMeta": {
-    "@zauso-ai/capstan-ai": { "optional": true }
+    "@zauso-ai/capstan-ai": {
+      "optional": true
+    }
   }
 }
