@@ -672,7 +672,7 @@ export async function createHarness(config: HarnessConfig): Promise<Harness> {
           tools: allTools,
           maxIterations: runConfig.maxIterations,
           ...(runConfig.systemPrompt != null
-            ? { prompt: { base: runConfig.systemPrompt } }
+            ? { prompt: { layers: [{ content: runConfig.systemPrompt, position: "prepend", priority: 100 }] } }
             : {}),
           hooks: {
             beforeToolCall: async (tool, args) => {
