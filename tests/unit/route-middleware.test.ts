@@ -106,7 +106,7 @@ describe("loadRouteMiddleware", () => {
         RouteMiddlewareExportError,
       );
       await expect(loadRouteMiddleware(filePath)).rejects.toThrow(
-        "must export a default middleware definition",
+        "Invalid middleware export",
       );
     } finally {
       await rm(root, { recursive: true, force: true });

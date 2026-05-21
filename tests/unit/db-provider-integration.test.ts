@@ -28,6 +28,55 @@ function dockerAvailable(): boolean {
   return result.status === 0 && /^\d+\.\d+/.test(result.stdout.trim());
 }
 
+// node arch -> docker manifest architecture string
+const DOCKER_ARCH: Record<string, string> = {
+  x64: "amd64",
+  arm64: "arm64",
+  arm: "arm",
+  ia32: "386",
+  ppc64: "ppc64le",
+  s390x: "s390x",
+};
+
+const REQUIRED_IMAGES = ["postgres:16-alpine", "mysql:5.7"];
+
+// `dockerAvailable()` only proves the daemon is up — it does not prove the
+// pinned server images can actually run on this host. `mysql:5.7`, for
+// example, ships no linux/arm64 manifest, so on Apple Silicon a `docker run`
+// would throw inside `beforeAll` and fail the suite. Probe each required image
+// for a manifest matching the host architecture and skip gracefully when one
+// is missing (same behaviour as when Docker is absent entirely).
+function imageRunnable(image: string): boolean {
+  const wantArch = DOCKER_ARCH[process.arch];
+  if (!wantArch) return false;
+  const result = spawnSync("docker", ["manifest", "inspect", image], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (result.status !== 0) return false;
+  try {
+    const manifest = JSON.parse(result.stdout) as {
+      manifests?: Array<{ platform?: { architecture?: string; os?: string } }>;
+      architecture?: string;
+    };
+    // Multi-arch manifest list.
+    if (Array.isArray(manifest.manifests)) {
+      return manifest.manifests.some(
+        (entry) =>
+          entry.platform?.os === "linux" && entry.platform?.architecture === wantArch,
+      );
+    }
+    // Single-arch image manifest.
+    return manifest.architecture === wantArch;
+  } catch {
+    return false;
+  }
+}
+
+function integrationSupported(): boolean {
+  return dockerAvailable() && REQUIRED_IMAGES.every(imageRunnable);
+}
+
 function parseHostPort(output: string): number {
   const line = output.trim().split("\n").at(-1) ?? "";
   const match = line.match(/:(\d+)\s*$/);
@@ -62,7 +111,8 @@ interface ContainerHandle {
 }
 
 const handles: ContainerHandle[] = [];
-const maybeIt = dockerAvailable() ? it : it.skip;
+const supported = integrationSupported();
+const maybeIt = supported ? it : it.skip;
 
 afterAll(() => {
   for (const handle of handles.splice(0)) {
@@ -75,7 +125,7 @@ describe("db provider integration", () => {
   let mysqlUrl = "";
 
   beforeAll(async () => {
-    if (!dockerAvailable()) return;
+    if (!supported) return;
 
     const postgresId = runDocker([
       "run",
