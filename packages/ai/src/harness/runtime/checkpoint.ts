@@ -74,8 +74,10 @@ export function assertValidAgentCheckpoint(
     if (typeof message.role !== "string" || !message.role.trim()) {
       throw new Error(`${context} is invalid: messages[${index}].role must be a non-empty string`);
     }
-    if (typeof message.content !== "string") {
-      throw new Error(`${context} is invalid: messages[${index}].content must be a string`);
+    if (typeof message.content !== "string" && !Array.isArray(message.content)) {
+      throw new Error(
+        `${context} is invalid: messages[${index}].content must be a string or LLMContentPart[]`,
+      );
     }
   }
 
@@ -151,9 +153,16 @@ export function getCheckpointLastAssistantResponse(
 ): string | undefined {
   for (let index = checkpoint.messages.length - 1; index >= 0; index--) {
     const message = checkpoint.messages[index];
-    if (message?.role === "assistant" && message.content.trim()) {
-      return message.content;
-    }
+    if (!message || message.role !== "assistant") continue;
+    // Multimodal assistant content is rare but possible; flatten to text.
+    const text =
+      typeof message.content === "string"
+        ? message.content
+        : message.content
+            .filter((p): p is { type: "text"; text: string } => p.type === "text")
+            .map((p) => p.text)
+            .join("\n");
+    if (text.trim()) return text;
   }
 
   return undefined;

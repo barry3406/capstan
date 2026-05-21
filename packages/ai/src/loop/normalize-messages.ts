@@ -1,4 +1,5 @@
 import type { LLMMessage } from "../types.js";
+import { concatContent, messageText } from "./content-helpers.js";
 
 /**
  * Normalize messages before sending to the LLM API.
@@ -15,8 +16,10 @@ export function normalizeMessages(messages: LLMMessage[]): LLMMessage[] {
   const result: LLMMessage[] = [];
 
   for (const msg of messages) {
-    // Skip empty content
-    if (!msg.content || msg.content.trim() === "") continue;
+    // Skip empty content (only check on string form — multimodal parts are
+    // never empty by construction)
+    if (typeof msg.content === "string" && msg.content.trim() === "") continue;
+    if (Array.isArray(msg.content) && msg.content.length === 0) continue;
 
     // System messages after the first get converted to user role
     // (Most LLM APIs only allow one system message at the start)
@@ -34,10 +37,19 @@ export function normalizeMessages(messages: LLMMessage[]): LLMMessage[] {
 
     // Merge consecutive same-role messages
     if (last && last.role === effectiveMsg.role) {
-      result[result.length - 1] = {
-        role: last.role,
-        content: last.content + "\n" + effectiveMsg.content,
-      };
+      // System messages must stay text-only (most providers reject image
+      // parts in system); fall back to text concat for system-system merges.
+      if (last.role === "system") {
+        result[result.length - 1] = {
+          role: last.role,
+          content: `${messageText(last.content)}\n${messageText(effectiveMsg.content)}`,
+        };
+      } else {
+        result[result.length - 1] = {
+          role: last.role,
+          content: concatContent(last.content, effectiveMsg.content),
+        };
+      }
     } else {
       result.push({ ...effectiveMsg });
     }

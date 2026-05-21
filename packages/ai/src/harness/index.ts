@@ -672,7 +672,7 @@ export async function createHarness(config: HarnessConfig): Promise<Harness> {
           tools: allTools,
           maxIterations: runConfig.maxIterations,
           ...(runConfig.systemPrompt != null
-            ? { prompt: { layers: [{ content: runConfig.systemPrompt, position: "prepend", priority: 100 }] } }
+            ? { prompt: { layers: [{ id: "harness-system-prompt", content: runConfig.systemPrompt, position: "prepend", priority: 100 }] } }
             : {}),
           hooks: {
             beforeToolCall: async (tool, args) => {
@@ -1498,6 +1498,22 @@ export async function createHarness(config: HarnessConfig): Promise<Harness> {
     ): Promise<HarnessRunResult> {
       const started = await beginRun(runConfig, options);
       return started.result;
+    },
+
+    /**
+     * Live access to a run's BrowserSandbox. Returns the sandbox both
+     * when the run is actively executing AND when it is paused (suspended
+     * by an approval pause). External callers (e.g. the worker's takeover
+     * RPC endpoints) use this to drive the same browser the agent is
+     * driving — same page, same cookies, same fingerprint.
+     *
+     * Returns undefined when the run id is unknown OR the run had no
+     * browser sandbox configured.
+     */
+    getBrowserSandbox(runId: string) {
+      const ctx =
+        activeSandboxContexts.get(runId) ?? suspendedSandboxContexts.get(runId);
+      return ctx?.browser ?? undefined;
     },
 
     async pauseRun(runId: string, access) {

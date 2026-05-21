@@ -21,15 +21,15 @@ function makeTools(count: number): AgentTool[] {
 }
 
 describe("createToolCatalog", () => {
-  it("uses inline mode when tools.length <= default threshold (15)", () => {
-    const tools = makeTools(15);
+  it("uses inline mode when tools.length <= default threshold (64)", () => {
+    const tools = makeTools(64);
     const result = createToolCatalog(tools);
     expect(result.mode).toBe("inline");
     expect(result.discoverTool).toBeUndefined();
   });
 
-  it("uses deferred mode when tools.length > default threshold (15)", () => {
-    const tools = makeTools(16);
+  it("uses deferred mode when tools.length > default threshold (64)", () => {
+    const tools = makeTools(65);
     const result = createToolCatalog(tools);
     expect(result.mode).toBe("deferred");
     expect(result.discoverTool).toBeDefined();
@@ -49,10 +49,10 @@ describe("createToolCatalog", () => {
   });
 
   it("deferred promptSection shows tool count message", () => {
-    const tools = makeTools(20);
+    const tools = makeTools(70);
     const result = createToolCatalog(tools);
     expect(result.mode).toBe("deferred");
-    expect(result.promptSection).toContain("20");
+    expect(result.promptSection).toContain("70");
     expect(result.promptSection).toContain("discover_tools");
   });
 
@@ -94,7 +94,7 @@ describe("createToolCatalog", () => {
   });
 
   it("discover_tools is marked isConcurrencySafe=true", () => {
-    const tools = makeTools(20);
+    const tools = makeTools(70);
     const result = createToolCatalog(tools);
     expect(result.discoverTool).toBeDefined();
     expect(result.discoverTool!.isConcurrencySafe).toBe(true);

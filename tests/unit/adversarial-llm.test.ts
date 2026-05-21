@@ -182,9 +182,13 @@ describe("Adversarial: malformed LLM output", () => {
     expect((result.toolCalls[0]!.result as { echoed: string }).echoed).toBe("hello");
   });
 
-  it("handles LLM returning nested JSON that looks like tool call but isn't", async () => {
-    // Text before JSON should make it non-parseable as tool call
-    const response = 'Here is some JSON: {"tool": "fake", "arguments": {"x": 1}}';
+  it("does not execute a tool-call JSON example buried in the middle of prose", async () => {
+    // JSON in the MIDDLE (prose before AND after) must NOT be treated as a tool
+    // call. parseToolRequests only extracts EDGE-anchored JSON (at the very
+    // start or very end of the content), so an inline `{"tool":...}` example in
+    // a final answer can't mis-fire as a real tool call.
+    const response =
+      'To call it you would send {"tool": "fake", "arguments": {"x": 1}} in your reply.';
     const agent = createSmartAgent({
       llm: mockLLM([response]),
       tools: [echoTool()],
@@ -193,7 +197,6 @@ describe("Adversarial: malformed LLM output", () => {
     const result = await agent.run("test");
 
     expect(result.status).toBe("completed");
-    // The full string is not valid JSON, so no tool call should be parsed
     expect(result.toolCalls).toHaveLength(0);
     expect(result.result).toBe(response);
   });

@@ -50,5 +50,18 @@ GPT-5.4 review (codex CLI was auth-blocked in this env — see codex-review.md) 
 
 ## Exit status
 test-cases.md LOCKED ✅ · RFC skipped (user-authorized) ✅ · feature battery green ✅ · mutation 8/8 ✅ ·
-review findings resolved/argued ✅. NOT committed (repo policy: commit only when the user asks; working tree
-also carries the user's unrelated WIP). Deferred: E2E-LOOP-02 Gemini-vision oracle (zenmux quota 402).
+review findings resolved/argued ✅. Deferred: E2E-LOOP-02 Gemini-vision oracle (zenmux quota 402).
+
+## Comprehensive stabilization (user asked to "fix everything in one pass")
+The user confirmed their prior WIP was rough and asked to get the whole tree correct + green + committed.
+Resolved ALL 15 full-suite failures:
+- AI WIP reconciled: tool-catalog inline threshold 15→64 (tests updated); harness browser toolset gained
+  browser_snapshot/press/wait/url/get_text + browser_screenshot now returns an inline image by default
+  (tests updated, toMatchObject); `extractLeadingJson` tightened to EDGE-ANCHORED extraction (leading/trailing
+  prose OK, mid-buried JSON examples no longer mis-fire) and the adversarial test repurposed to the mid-buried case.
+- react: a REAL bug — `scroll:false` fired a redundant `window.scrollTo` (regression from 9e94aed); fixed in
+  packages/react/src/client/router.ts (3 tests green).
+- dev: stale middleware-export error-message assertions updated to the current (clearer) message (2 tests).
+- db: integration test's Docker skip predicate tightened to also require host-arch-runnable images
+  (mysql:5.7 has no arm64 manifest) → skips gracefully (2 skip) instead of failing.
+- **Full suite after stabilization: 5144 pass · 2 skip · 0 fail.** Mutation re-run after the parser change: 8/8.

@@ -76,6 +76,37 @@ describe("parseToolRequests", () => {
     expect(result[0]!.name).toBe("echo");
     expect(result[0]!.args).toEqual({ msg: "hi" });
   });
+
+  it("extracts a tool call when the JSON is followed by trailing prose", () => {
+    // Real GPT-5.x output pattern: JSON tool call directly followed by
+    // natural-language commentary. JSON.parse on the whole string fails,
+    // so the parser must walk braces to isolate the first balanced object.
+    const content =
+      JSON.stringify({ tool: "request_human_approval", arguments: { title: "请确认" } }) +
+      "已发起人工审批：修改商品价格，待你确认授权后继续。";
+    const result = parseToolRequests(content);
+    expect(result).toHaveLength(1);
+    expect(result[0]!.name).toBe("request_human_approval");
+    expect(result[0]!.args).toEqual({ title: "请确认" });
+  });
+
+  it("extracts a tool call when JSON is preceded by prose", () => {
+    const content =
+      "I'll request approval:\n" +
+      JSON.stringify({ tool: "foo", arguments: { x: 1 } });
+    const result = parseToolRequests(content);
+    expect(result).toHaveLength(1);
+    expect(result[0]!.name).toBe("foo");
+  });
+
+  it("ignores string-literal braces when walking depth", () => {
+    // Braces inside string literals must not confuse the brace walker.
+    const content = JSON.stringify({ tool: "x", arguments: { msg: "a { b } c" } }) + " trailing";
+    const result = parseToolRequests(content);
+    expect(result).toHaveLength(1);
+    expect(result[0]!.name).toBe("x");
+    expect((result[0]!.args as { msg: string }).msg).toBe("a { b } c");
+  });
 });
 
 // ---------------------------------------------------------------------------

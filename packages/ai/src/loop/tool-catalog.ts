@@ -1,6 +1,10 @@
 import type { AgentTool, ToolCatalogConfig } from "../types.js";
 
-const DEFAULT_DEFER_THRESHOLD = 15;
+// Claude Code-style agents routinely carry 30-50 tools. Deferring anything
+// above 15 pushed the LLM into a "discover_tools" loop that wasted iterations.
+// Keep it inline up to 64 so the full parameter schema lands in the prompt
+// on first turn and the LLM can act immediately.
+const DEFAULT_DEFER_THRESHOLD = 64;
 
 export interface ToolCatalogResult {
   mode: "inline" | "deferred";
