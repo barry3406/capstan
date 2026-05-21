@@ -51,6 +51,13 @@ export interface BrowserSandboxConfig {
   accountId?: string;
   /** Guard mode: 'vision' (default) — only safety/rate-limit guards; 'hybrid' — full guards including DOM captcha detection */
   guardMode?: "vision" | "hybrid";
+  /**
+   * Optional starting URL. After launch, the sandbox driver navigates the
+   * initial page here so the agent sees the target site instead of about:blank.
+   * A failed initial goto is logged but not fatal — the agent can still call
+   * `browser_navigate` to recover.
+   */
+  initialUrl?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -781,6 +788,14 @@ export interface Harness {
   cancelRun(runId: string, access?: HarnessAccessContext): Promise<HarnessRunRecord>;
   /** Resume a paused or approval-blocked run */
   resumeRun(runId: string, options?: HarnessResumeOptions): Promise<HarnessRunResult>;
+  /**
+   * Live access to a run's BrowserSandbox (active OR paused). External
+   * callers (worker takeover RPC, observability tooling) use this to
+   * drive the same browser the agent is driving — same page, cookies,
+   * fingerprint. Returns undefined when the runId is unknown or the
+   * run had no browser sandbox configured.
+   */
+  getBrowserSandbox(runId: string): import("./types.js").BrowserSandbox | undefined;
   /** Read one persisted approval record */
   getApproval(
     approvalId: string,

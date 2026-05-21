@@ -12,6 +12,7 @@ import { createToolCatalog } from "./tool-catalog.js";
 import { composeSystemPrompt } from "./prompt-composer.js";
 import { estimateTokens, snipMessages, microcompactMessages, autocompact } from "./compaction.js";
 import { executeModelAndTools } from "./streaming-executor.js";
+import { extractImageEnvelope, buildToolResultMessageWithImage } from "./content-helpers.js";
 import { runStopHooks } from "./stop-hooks.js";
 import {
   decideContinuation,
@@ -20,7 +21,8 @@ import {
   reactiveCompact,
   type ModelOutcome,
 } from "./continuation.js";
-import { createActivateSkillTool, formatSkillDescriptions } from "../skill.js";
+import { formatSkillDescriptions } from "../skill.js";
+import { createSkillTools } from "../skill-bundle.js";
 import { memoryFreshnessText } from "./memory-age.js";
 import { normalizeMessages } from "./normalize-messages.js";
 import { LlmMemoryReconciler, reconcileAndStore } from "../memory-reconciler.js";
@@ -40,11 +42,15 @@ const MEMORY_ENRICHMENT_INTERVAL = 5;
 /* ------------------------------------------------------------------ */
 
 function formatToolResult(tool: string, result: unknown, maxChars?: number, persistDir?: string): string {
+  // Strip the inline image envelope before serialising — the bytes are huge
+  // and meaningless as JSON; the engine surfaces them via a multimodal user
+  // message instead.
+  const sanitised = stripImageEnvelopeForText(result);
   let json: string;
   try {
-    json = JSON.stringify(result, null, 2);
+    json = JSON.stringify(sanitised, null, 2);
   } catch {
-    json = `[Unserializable tool result: ${typeof result}]`;
+    json = `[Unserializable tool result: ${typeof sanitised}]`;
   }
   if (maxChars === undefined || json.length <= maxChars) {
     return `Tool "${tool}" returned:\n${json}`;
@@ -60,6 +66,28 @@ function formatToolResult(tool: string, result: unknown, maxChars?: number, pers
 
   const truncated = json.slice(0, maxChars);
   return `Tool "${tool}" returned (truncated, ${json.length} chars total):\n${truncated}\n[...${json.length - maxChars} chars omitted]${persistRef}`;
+}
+
+function stripImageEnvelopeForText(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const record = value as Record<string, unknown>;
+  if (
+    record["image"] &&
+    typeof record["image"] === "object" &&
+    !Array.isArray(record["image"])
+  ) {
+    const img = record["image"] as Record<string, unknown>;
+    if (typeof img["base64"] === "string") {
+      // Replace base64 with a length marker so the JSON stays compact.
+      const { image: _omit, ...rest } = record;
+      return {
+        ...rest,
+        image_inlined: true,
+        image_size_bytes: Math.floor((img["base64"] as string).length * 0.75),
+      };
+    }
+  }
+  return value;
 }
 
 function isContextLimitError(error: unknown): boolean {
@@ -99,6 +127,7 @@ function hashContent(content: string): string {
 function stripThinkingContent(messages: LLMMessage[]): LLMMessage[] {
   return messages.map(m => {
     if (m.role !== "assistant") return m;
+    if (typeof m.content !== "string") return m;
     const cleaned = m.content
       .replace(/<thinking>[\s\S]*?<\/thinking>/g, "")
       .replace(/<redacted_thinking>[\s\S]*?<\/redacted_thinking>/g, "")
@@ -261,7 +290,7 @@ export async function* runSmartLoopStream(
 
   // 1c. Skill injection
   if (config.skills && config.skills.length > 0) {
-    allTools.push(createActivateSkillTool(config.skills));
+    allTools.push(...createSkillTools(config.skills));
   }
 
   // 1d. Inject read_persisted_result tool when persistence is configured
@@ -787,7 +816,17 @@ export async function* runSmartLoopStream(
         }
 
         aggregateChars += formatted.length;
-        state.messages.push({ role: "user", content: formatted });
+        // Detect inline-image envelope: when present, ship a multimodal user
+        // message so providers like OpenAI deliver the actual screenshot
+        // bytes back to the model on the next turn.
+        const imageEnvelope = extractImageEnvelope(record.result);
+        if (imageEnvelope) {
+          state.messages.push(
+            buildToolResultMessageWithImage(formatted, imageEnvelope),
+          );
+        } else {
+          state.messages.push({ role: "user", content: formatted });
+        }
         state.toolCalls.push({ ...record });
 
         // Memory event hook

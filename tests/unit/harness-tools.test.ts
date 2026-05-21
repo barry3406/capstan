@@ -130,6 +130,11 @@ describe("buildHarnessTools", () => {
       "browser_type",
       "browser_scroll",
       "browser_act",
+      "browser_snapshot",
+      "browser_press",
+      "browser_wait",
+      "browser_url",
+      "browser_get_text",
     ]);
 
     await tools[0]!.execute({ url: "https://example.com" });
@@ -145,13 +150,18 @@ describe("buildHarnessTools", () => {
         metadata: { url: "https://example.com" },
       },
     ]);
-    expect(screenshot).toEqual({
+    // Default is inline: the result carries the artifact metadata AND an inline
+    // image envelope (the multimodal payload the loop surfaces to the model);
+    // toMatchObject tolerates the extra `image` field.
+    expect(screenshot).toMatchObject({
       artifactId: "artifact-1",
       path: "/tmp/artifact-1.png",
       url: "https://example.com",
       mimeType: "image/png",
       size: 4,
     });
+    expect((screenshot as { image?: { mediaType: string; base64: string } }).image)
+      .toMatchObject({ mediaType: "image/png" });
 
     await tools[2]!.execute({ x: 10, y: 20 });
     expect(browser.session.clicks).toEqual([{ x: 10, y: 20 }]);
@@ -226,6 +236,11 @@ describe("buildHarnessTools", () => {
       "browser_type",
       "browser_scroll",
       "browser_act",
+      "browser_snapshot",
+      "browser_press",
+      "browser_wait",
+      "browser_url",
+      "browser_get_text",
       "fs_read",
       "fs_write",
       "fs_list",

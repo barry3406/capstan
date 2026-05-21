@@ -393,6 +393,10 @@ const refactorSkill = defineSkill({
 
 Skills bridge the gap between low-level tool use and high-level problem-solving. They can come from developers (`source: "developer"`) or be evolved automatically from the agent's own experience (`source: "evolved"`).
 
+**Code-bearing skills.** A skill can also be a *directory* — a `SKILL.md` (guidance) plus bundled scripts/resources — loaded with `loadSkillsFrom("./skills")`. On activation the agent receives a manifest of the bundled files plus `read_skill_file` and `run_skill_script` tools to inspect and execute the bundled code (`.py`/`.sh`/`.js`/`.ts`), sandboxed to the skill directory (activation-gated, path-confined, timeout + output caps). This is the "Agent Skills" model — skills that carry executable code, not just guidance.
+
+> LLM providers come from `@zauso-ai/capstan-agent`: `openaiProvider` (Chat Completions), `anthropicProvider` (Messages), and `responsesProvider` (OpenAI **Responses API** — for reasoning models like gpt-5.x and Responses-compatible proxies).
+
 ### Durable Harness Runtime
 
 For agents that need sandboxing, persistence, and operator supervision, `createHarness()` provides a full durable execution environment:

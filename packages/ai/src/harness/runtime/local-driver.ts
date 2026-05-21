@@ -84,6 +84,21 @@ export class LocalHarnessSandboxDriver implements HarnessSandboxDriver {
         });
       }
 
+      // Navigate to the initial URL so the agent lands on the target site
+      // instead of about:blank. Failure here is non-fatal — the agent can
+      // still recover via `browser_navigate`.
+      if (browserConfig.initialUrl) {
+        try {
+          await session.goto(browserConfig.initialUrl);
+        } catch (error) {
+          console.warn(
+            `[harness] initial navigate to ${browserConfig.initialUrl} failed: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
+      }
+
       return new LocalBrowserSandbox(
         session,
         engine,

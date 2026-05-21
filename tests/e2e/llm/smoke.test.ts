@@ -162,13 +162,17 @@ describeWithLLM("Smoke — agent basics", (provider) => {
     );
 
     expect(result.status).toBe("completed");
-    // Agent should have called activate_skill
-    const skillCall = result.toolCalls.find((c) => c.tool === "activate_skill");
-    expect(skillCall).toBeDefined();
-    // The skill activation should have returned the guidance text
-    const skillResult = skillCall!.result as Record<string, unknown>;
-    expect(skillResult.skill).toBe("debugging");
-    expect(skillResult.guidance).toContain("debugging strategy");
+    // Agent should have activated the skill. A real model may fumble the arg
+    // name on the first attempt (e.g. {name} instead of {skill_name}), get a
+    // validation error, and self-correct — so assert that SOME activate_skill
+    // call succeeded, not necessarily the first one.
+    const skillCalls = result.toolCalls.filter((c) => c.tool === "activate_skill");
+    expect(skillCalls.length).toBeGreaterThan(0);
+    const skillResult = skillCalls
+      .map((c) => c.result as Record<string, unknown>)
+      .find((r) => r.skill === "debugging");
+    expect(skillResult).toBeDefined();
+    expect(skillResult!.guidance).toContain("debugging strategy");
     // Agent should also have used the check_value tool after getting guidance
     const checkCall = result.toolCalls.find((c) => c.tool === "check_value");
     expect(checkCall).toBeDefined();

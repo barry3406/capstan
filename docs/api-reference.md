@@ -238,6 +238,13 @@ interface AgentSkill {
 
   /** Arbitrary extra data. */
   metadata?: Record<string, unknown> | undefined;
+
+  /** Absolute path to the skill's bundle directory, for code-bearing skills
+   * loaded via loadSkill/loadSkillsFrom. Guidance-only skills leave it unset. */
+  bundleDir?: string | undefined;
+
+  /** Manifest of files bundled with the skill (relative to bundleDir). */
+  files?: { path: string; bytes: number; executable: boolean }[] | undefined;
 }
 ```
 
@@ -283,6 +290,35 @@ Format skill descriptions for inclusion in the system prompt. Returns a markdown
 
 ```typescript
 function formatSkillDescriptions(skills: AgentSkill[]): string
+```
+
+#### loadSkill(dir) / loadSkillsFrom(parentDir)
+
+Load **code-bearing skills** from disk. A skill directory holds a `SKILL.md` (YAML-ish frontmatter `name`/`description`/`trigger`/`tools` + a guidance body) plus any scripts/resources. `loadSkill(dir)` returns one `AgentSkill` with `bundleDir` + a `files` manifest; `loadSkillsFrom(parentDir)` loads every immediate sub-directory containing a `SKILL.md`.
+
+```typescript
+function loadSkill(dir: string): AgentSkill
+function loadSkillsFrom(parentDir: string): AgentSkill[]
+```
+
+#### createSkillTools(skills, options?)
+
+Build the skill tool-set: `activate_skill` plus — when any skill carries a bundle — `read_skill_file` and `run_skill_script`. A drop-in superset of `createActivateSkillTool` that the agent loop uses automatically when `skills` is set. Scripts run ONLY from an ACTIVATED skill's bundle, path-confined (no `..` escape), interpreter-allowlisted (`.py`→python3, `.sh`→bash, `.js`/`.mjs`/`.cjs`→node, `.ts`→bun), with a timeout (`options.scriptTimeoutMs`, default `30000`) and output caps. `read_skill_file({ skill, path })` reads a bundled file; `run_skill_script({ skill, script, args? })` executes one and returns `{ exitCode, stdout, stderr }`.
+
+```typescript
+function createSkillTools(skills: AgentSkill[], options?: { scriptTimeoutMs?: number }): AgentTool[]
+```
+
+---
+
+### LLM Providers (@zauso-ai/capstan-agent)
+
+Concrete `LLMProvider` implementations. All return an object satisfying the `LLMProvider` interface below.
+
+```typescript
+function openaiProvider(config: { apiKey: string; baseUrl?: string; model?: string }): LLMProvider      // Chat Completions; multimodal + native tools
+function anthropicProvider(config: { apiKey: string; baseUrl?: string; model?: string }): LLMProvider    // Messages API; chat + streaming, multimodal, native tools
+function responsesProvider(config: { apiKey: string; baseUrl?: string; model?: string; reasoningEffort?: string }): LLMProvider  // OpenAI Responses API (/v1/responses) — reasoning models (gpt-5.x) + Responses-compatible proxies; JSON + SSE
 ```
 
 ---

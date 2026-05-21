@@ -2,25 +2,74 @@
 // LLM provider adapter interface and built-in implementations
 // ---------------------------------------------------------------------------
 
+/**
+ * Multimodal content part. Inline base64 is preferred for images so the
+ * downstream provider has no separate fetch. A `tool_result` part carries the
+ * textual result of a prior tool call, linked by `toolUseId`.
+ *
+ * NOTE: this is a structural mirror of `@zauso-ai/capstan-ai`'s
+ * `LLMContentPart`. The agent package intentionally does NOT import from the
+ * ai package; the mirror is kept one-directionally assignable (ai → agent for
+ * inputs, agent → ai for outputs) so a provider built here satisfies
+ * `ai.LLMProvider`.
+ */
+export type LLMContentPart =
+  | { type: "text"; text: string }
+  | { type: "image"; mediaType: string; data: string }
+  | { type: "tool_result"; toolUseId: string; content: string };
+
+/**
+ * A single conversation message. Content can be a plain string (legacy /
+ * cheap path) or an array of multimodal parts (text + image + tool_result).
+ *
+ * The `role` union is intentionally WIDER than the ai package's: providers
+ * accept a `tool`-role input message (mapped to a provider tool-result message)
+ * even though the v1 loop never emits one. `toolCallId` links a `tool`-role
+ * message to the assistant tool call it answers.
+ */
 export interface LLMMessage {
-  role: "system" | "user" | "assistant";
-  content: string;
+  role: "system" | "user" | "assistant" | "tool";
+  content: string | LLMContentPart[];
+  toolCallId?: string | undefined;
 }
 
 export interface LLMResponse {
   content: string;
   model: string;
-  usage?: {
-    promptTokens: number;
-    completionTokens: number;
-    totalTokens: number;
-  } | undefined;
+  usage?:
+    | {
+        promptTokens: number;
+        completionTokens: number;
+        totalTokens: number;
+      }
+    | undefined;
   finishReason?: string | undefined;
+  /** Native tool calls parsed from the provider response. Present (possibly
+   * `[]`) ONLY when tools were advertised this turn; UNDEFINED otherwise. */
+  toolCalls?:
+    | { id: string; name: string; args: Record<string, unknown> }[]
+    | undefined;
 }
 
 export interface LLMStreamChunk {
   content: string;
   done: boolean;
+  finishReason?: string | undefined;
+  /** Terminal-only: native tool calls accumulated across the stream. Present
+   * (possibly `[]`) on the terminal chunk ONLY when tools were advertised;
+   * UNDEFINED otherwise. Non-terminal chunks MUST omit this. */
+  toolCalls?:
+    | { id: string; name: string; args: Record<string, unknown> }[]
+    | undefined;
+}
+
+/** Tool spec passed to the LLM provider. The provider can use this to
+ * advertise native function calling (OpenAI / Anthropic) so the model
+ * picks tool names from the canonical list instead of hallucinating. */
+export interface LLMToolSpec {
+  name: string;
+  description: string;
+  parameters?: Record<string, unknown> | undefined;
 }
 
 export interface LLMOptions {
@@ -29,6 +78,10 @@ export interface LLMOptions {
   maxTokens?: number;
   systemPrompt?: string;
   responseFormat?: Record<string, unknown>;
+  signal?: AbortSignal | undefined;
+  /** Tools available this turn. Native-function-call providers will present
+   * them; text-only providers may ignore. */
+  tools?: LLMToolSpec[] | undefined;
 }
 
 export interface LLMProvider {
@@ -38,11 +91,118 @@ export interface LLMProvider {
     messages: LLMMessage[],
     options?: LLMOptions,
   ): AsyncIterable<LLMStreamChunk>;
+  /** See @zauso-ai/capstan-ai LLMProvider: `"terminal"` means native tool calls
+   * are surfaced on the terminal stream chunk / chat LLMResponse, so the loop
+   * defers dispatch to stream-end for this provider. */
+  nativeToolCalls?: "terminal" | undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Shared accumulator for streamed native tool calls (per provider-local index)
+// ---------------------------------------------------------------------------
+
+interface ToolCallAccumulator {
+  id: string;
+  name: string;
+  argsBuf: string;
+}
+
+type ParsedToolCall = { id: string; name: string; args: Record<string, unknown> };
+
+/** Parse an accumulated JSON-arguments string into an object. Bad/empty JSON
+ * yields `{}` (never throws) per locked decision A-OA-01. */
+function parseToolArgs(raw: string): Record<string, unknown> {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Materialize accumulated tool-call deltas into the terminal shape, ordered
+ * by their numeric index, dropping any with empty/missing name. */
+function finalizeAccumulatedToolCalls(
+  acc: Map<number, ToolCallAccumulator>,
+): ParsedToolCall[] {
+  return [...acc.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([, v]) => v)
+    .filter((v) => v.name)
+    .map((v) => ({ id: v.id, name: v.name, args: parseToolArgs(v.argsBuf) }));
 }
 
 // ---------------------------------------------------------------------------
 // OpenAI-compatible provider
 // ---------------------------------------------------------------------------
+
+/** Serialize agent messages into OpenAI `/chat/completions` message objects.
+ * - string content → unchanged (backward compat).
+ * - `tool`-role message → `{role:"tool",tool_call_id,content}`.
+ * - part[] → text parts unchanged; image parts → `image_url` data URLs;
+ *   `tool_result` parts are hoisted into their OWN top-level `role:"tool"`
+ *   messages (OpenAI tool results are messages, not content parts). */
+function serializeOpenAIMessages(
+  messages: LLMMessage[],
+): Record<string, unknown>[] {
+  const out: Record<string, unknown>[] = [];
+  for (const m of messages) {
+    if (m.role === "tool") {
+      // A tool-role message: content is the (string) result for toolCallId.
+      out.push({
+        role: "tool",
+        tool_call_id: m.toolCallId,
+        content: typeof m.content === "string" ? m.content : "",
+      });
+      continue;
+    }
+
+    if (typeof m.content === "string") {
+      out.push({ role: m.role, content: m.content });
+      continue;
+    }
+
+    // Multimodal array: image/text stay as parts; tool_result becomes its own
+    // top-level tool message.
+    const parts: Record<string, unknown>[] = [];
+    for (const part of m.content) {
+      if (part.type === "text") {
+        parts.push({ type: "text", text: part.text });
+      } else if (part.type === "image") {
+        parts.push({
+          type: "image_url",
+          image_url: {
+            url: `data:${part.mediaType};base64,${part.data}`,
+          },
+        });
+      } else {
+        // tool_result → top-level tool message
+        out.push({
+          role: "tool",
+          tool_call_id: part.toolUseId,
+          content: part.content,
+        });
+      }
+    }
+    if (parts.length > 0) out.push({ role: m.role, content: parts });
+  }
+  return out;
+}
+
+/** Map advertised tool specs into OpenAI request `tools[]`. */
+function openAIToolsBody(tools: LLMToolSpec[]): Record<string, unknown>[] {
+  return tools.map((t) => ({
+    type: "function",
+    function: {
+      name: t.name,
+      description: t.description,
+      parameters: t.parameters,
+    },
+  }));
+}
 
 export function openaiProvider(config: {
   apiKey: string;
@@ -52,29 +212,47 @@ export function openaiProvider(config: {
   const baseUrl = config.baseUrl ?? "https://api.openai.com/v1";
   const defaultModel = config.model ?? "gpt-4o";
 
+  /** Build the shared request body for chat() and stream(). */
+  function buildBody(
+    messages: LLMMessage[],
+    options: LLMOptions | undefined,
+    streaming: boolean,
+  ): Record<string, unknown> {
+    const baseMessages: LLMMessage[] = options?.systemPrompt
+      ? [{ role: "system", content: options.systemPrompt }, ...messages]
+      : messages;
+
+    const body: Record<string, unknown> = {
+      model: options?.model ?? defaultModel,
+      messages: serializeOpenAIMessages(baseMessages),
+    };
+    if (streaming) body["stream"] = true;
+    if (options?.temperature !== undefined)
+      body["temperature"] = options.temperature;
+    if (options?.maxTokens !== undefined)
+      body["max_tokens"] = options.maxTokens;
+    if (options?.responseFormat)
+      body["response_format"] = {
+        type: "json_schema",
+        json_schema: {
+          schema: options.responseFormat,
+          name: "response",
+          strict: true,
+        },
+      };
+    if (options?.tools?.length) {
+      body["tools"] = openAIToolsBody(options.tools);
+      body["tool_choice"] = "auto";
+    }
+    return body;
+  }
+
   return {
     name: "openai",
+    nativeToolCalls: "terminal",
 
     async chat(messages, options) {
-      const body: Record<string, unknown> = {
-        model: options?.model ?? defaultModel,
-        messages: options?.systemPrompt
-          ? [{ role: "system", content: options.systemPrompt }, ...messages]
-          : messages,
-      };
-      if (options?.temperature !== undefined)
-        body["temperature"] = options.temperature;
-      if (options?.maxTokens !== undefined)
-        body["max_tokens"] = options.maxTokens;
-      if (options?.responseFormat)
-        body["response_format"] = {
-          type: "json_schema",
-          json_schema: {
-            schema: options.responseFormat,
-            name: "response",
-            strict: true,
-          },
-        };
+      const body = buildBody(messages, options, false);
 
       const res = await fetch(`${baseUrl}/chat/completions`, {
         method: "POST",
@@ -83,6 +261,7 @@ export function openaiProvider(config: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify(body),
+        ...(options?.signal ? { signal: options.signal } : {}),
       });
 
       if (!res.ok)
@@ -90,8 +269,27 @@ export function openaiProvider(config: {
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const data = (await res.json()) as any;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const message = data.choices?.[0]?.message;
+
+      const toolsAdvertised = !!options?.tools?.length;
+      let toolCalls: ParsedToolCall[] | undefined;
+      if (toolsAdvertised) {
+        const rawCalls: any[] = Array.isArray(message?.tool_calls)
+          ? message.tool_calls
+          : [];
+        toolCalls = rawCalls
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          .map((c: any) => ({
+            id: c?.id ?? "",
+            name: c?.function?.name ?? "",
+            args: parseToolArgs(c?.function?.arguments ?? ""),
+          }))
+          .filter((c) => c.name);
+      }
+
       return {
-        content: data.choices?.[0]?.message?.content ?? "",
+        content: message?.content ?? "",
         model: data.model ?? defaultModel,
         usage: data.usage
           ? {
@@ -101,21 +299,12 @@ export function openaiProvider(config: {
             }
           : undefined,
         finishReason: data.choices?.[0]?.finish_reason,
+        ...(toolCalls !== undefined ? { toolCalls } : {}),
       };
     },
 
     async *stream(messages, options) {
-      const body: Record<string, unknown> = {
-        model: options?.model ?? defaultModel,
-        messages: options?.systemPrompt
-          ? [{ role: "system", content: options.systemPrompt }, ...messages]
-          : messages,
-        stream: true,
-      };
-      if (options?.temperature !== undefined)
-        body["temperature"] = options.temperature;
-      if (options?.maxTokens !== undefined)
-        body["max_tokens"] = options.maxTokens;
+      const body = buildBody(messages, options, true);
 
       const res = await fetch(`${baseUrl}/chat/completions`, {
         method: "POST",
@@ -124,38 +313,97 @@ export function openaiProvider(config: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify(body),
+        ...(options?.signal ? { signal: options.signal } : {}),
       });
 
       if (!res.ok) throw new Error(`LLM error ${res.status}`);
       if (!res.body) throw new Error("No body");
 
+      const toolsAdvertised = !!options?.tools?.length;
+      const acc = new Map<number, ToolCallAccumulator>();
+      let finishReason: string | undefined;
+
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buf = "";
+      let terminated = false;
+
+      const finalChunk = (): LLMStreamChunk => ({
+        content: "",
+        done: true,
+        ...(finishReason !== undefined ? { finishReason } : {}),
+        ...(toolsAdvertised
+          ? { toolCalls: finalizeAccumulatedToolCalls(acc) }
+          : {}),
+      });
+
+      // Process one SSE line: yield content chunks, accumulate tool-call
+      // deltas by index, set `terminated` on [DONE]. Shared by the streaming
+      // loop and the EOF residual flush so a final newline-less frame is not
+      // dropped (real servers may close right after the last `data:` frame).
+      const handleLine = function* (line: string): Generator<LLMStreamChunk> {
+        if (!line.startsWith("data:")) return;
+        const d = line.slice(line.indexOf(":") + 1).trim();
+        if (!d) return;
+        if (d === "[DONE]") {
+          terminated = true;
+          return;
+        }
+        try {
+          const p = JSON.parse(d);
+          const choice = p.choices?.[0];
+          const delta = choice?.delta;
+          const c = delta?.content ?? "";
+          if (c) yield { content: c, done: false };
+
+          // Accumulate streamed tool-call deltas by index.
+          const deltaToolCalls = delta?.tool_calls;
+          if (Array.isArray(deltaToolCalls)) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            for (const tc of deltaToolCalls as any[]) {
+              const idx = typeof tc?.index === "number" ? tc.index : 0;
+              let entry = acc.get(idx);
+              if (!entry) {
+                entry = { id: "", name: "", argsBuf: "" };
+                acc.set(idx, entry);
+              }
+              // id + name come from the first delta that carries them.
+              if (tc?.id && !entry.id) entry.id = tc.id;
+              if (tc?.function?.name && !entry.name)
+                entry.name = tc.function.name;
+              if (typeof tc?.function?.arguments === "string")
+                entry.argsBuf += tc.function.arguments;
+            }
+          }
+
+          if (choice?.finish_reason) finishReason = choice.finish_reason;
+        } catch {
+          // skip malformed chunks
+        }
+      };
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
         buf += decoder.decode(value, { stream: true });
-        const lines = buf.split("\n");
-        buf = lines.pop() ?? "";
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          const d = line.slice(6).trim();
-          if (d === "[DONE]") {
-            yield { content: "", done: true };
+        let nl: number;
+        while ((nl = buf.indexOf("\n")) >= 0) {
+          const line = buf.slice(0, nl).replace(/\r$/, "");
+          buf = buf.slice(nl + 1);
+          for (const ch of handleLine(line)) yield ch;
+          if (terminated) {
+            yield finalChunk();
             return;
-          }
-          try {
-            const p = JSON.parse(d);
-            const c = p.choices?.[0]?.delta?.content ?? "";
-            if (c) yield { content: c, done: false };
-          } catch {
-            // skip malformed chunks
           }
         }
       }
-      yield { content: "", done: true };
+      // Flush any residual line that arrived without a trailing newline.
+      buf += decoder.decode();
+      const tail = buf.replace(/\r$/, "").trim();
+      if (tail) {
+        for (const ch of handleLine(tail)) yield ch;
+      }
+      yield finalChunk();
     },
   };
 }
@@ -163,6 +411,73 @@ export function openaiProvider(config: {
 // ---------------------------------------------------------------------------
 // Anthropic provider
 // ---------------------------------------------------------------------------
+
+/** Serialize a single message's content into Anthropic content parts. String
+ * content stays a string (backward compat); arrays map text/image/tool_result
+ * into Anthropic's content-part shapes. A `tool`-role message becomes a
+ * `user`-role message carrying a single `tool_result` part. */
+function serializeAnthropicContent(
+  content: string | LLMContentPart[],
+): string | Record<string, unknown>[] {
+  if (typeof content === "string") return content;
+  return content.map((part) => {
+    if (part.type === "text") {
+      return { type: "text", text: part.text };
+    }
+    if (part.type === "image") {
+      return {
+        type: "image",
+        source: {
+          type: "base64",
+          media_type: part.mediaType,
+          data: part.data,
+        },
+      };
+    }
+    // tool_result
+    return {
+      type: "tool_result",
+      tool_use_id: part.toolUseId,
+      content: part.content,
+    };
+  });
+}
+
+/** Map non-system messages into Anthropic request `messages[]`, translating a
+ * `tool`-role message into a `user` message with a `tool_result` part. */
+function serializeAnthropicMessages(
+  messages: LLMMessage[],
+): Record<string, unknown>[] {
+  const out: Record<string, unknown>[] = [];
+  for (const m of messages) {
+    if (m.role === "system") continue;
+    if (m.role === "tool") {
+      out.push({
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: m.toolCallId,
+            content: typeof m.content === "string" ? m.content : "",
+          },
+        ],
+      });
+      continue;
+    }
+    out.push({ role: m.role, content: serializeAnthropicContent(m.content) });
+  }
+  return out;
+}
+
+/** Map advertised tool specs into Anthropic request `tools[]`, defaulting an
+ * empty object schema when `parameters` is absent. */
+function anthropicToolsBody(tools: LLMToolSpec[]): Record<string, unknown>[] {
+  return tools.map((t) => ({
+    name: t.name,
+    description: t.description,
+    input_schema: t.parameters ?? { type: "object", properties: {} },
+  }));
+}
 
 export function anthropicProvider(config: {
   apiKey: string;
@@ -172,43 +487,83 @@ export function anthropicProvider(config: {
   const baseUrl = config.baseUrl ?? "https://api.anthropic.com/v1";
   const defaultModel = config.model ?? "claude-sonnet-4-20250514";
 
+  function buildBody(
+    messages: LLMMessage[],
+    options: LLMOptions | undefined,
+    streaming: boolean,
+  ): Record<string, unknown> {
+    const sys =
+      options?.systemPrompt ??
+      (() => {
+        const sysMsg = messages.find((m) => m.role === "system");
+        return typeof sysMsg?.content === "string"
+          ? sysMsg.content
+          : undefined;
+      })();
+
+    const body: Record<string, unknown> = {
+      model: options?.model ?? defaultModel,
+      messages: serializeAnthropicMessages(messages),
+      max_tokens: options?.maxTokens ?? 4096,
+    };
+    if (streaming) body["stream"] = true;
+    if (sys) body["system"] = sys;
+    if (options?.temperature !== undefined)
+      body["temperature"] = options.temperature;
+    if (options?.tools?.length)
+      body["tools"] = anthropicToolsBody(options.tools);
+    return body;
+  }
+
+  const headers = {
+    "x-api-key": config.apiKey,
+    "anthropic-version": "2023-06-01",
+    "Content-Type": "application/json",
+  };
+
   return {
     name: "anthropic",
+    nativeToolCalls: "terminal",
 
     async chat(messages, options) {
-      const sys =
-        options?.systemPrompt ??
-        messages.find((m) => m.role === "system")?.content;
-      const msgs = messages.filter((m) => m.role !== "system");
-      const body: Record<string, unknown> = {
-        model: options?.model ?? defaultModel,
-        messages: msgs,
-        max_tokens: options?.maxTokens ?? 4096,
-      };
-      if (sys) body["system"] = sys;
-      if (options?.temperature !== undefined)
-        body["temperature"] = options.temperature;
+      const body = buildBody(messages, options, false);
 
       const res = await fetch(`${baseUrl}/messages`, {
         method: "POST",
-        headers: {
-          "x-api-key": config.apiKey,
-          "anthropic-version": "2023-06-01",
-          "Content-Type": "application/json",
-        },
+        headers,
         body: JSON.stringify(body),
+        ...(options?.signal ? { signal: options.signal } : {}),
       });
 
       if (!res.ok)
-        throw new Error(
-          `Anthropic error ${res.status}: ${await res.text()}`,
-        );
+        throw new Error(`Anthropic error ${res.status}: ${await res.text()}`);
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const data = (await res.json()) as any;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const blocks: any[] = Array.isArray(data.content) ? data.content : [];
       const text =
-        data.content?.find((b: any) => b.type === "text")?.text ?? "";
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        blocks.find((b: any) => b.type === "text")?.text ?? "";
+
+      const toolsAdvertised = !!options?.tools?.length;
+      let toolCalls: ParsedToolCall[] | undefined;
+      if (toolsAdvertised) {
+        toolCalls = blocks
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          .filter((b: any) => b.type === "tool_use")
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          .map((b: any) => ({
+            id: b?.id ?? "",
+            name: b?.name ?? "",
+            args:
+              b?.input && typeof b.input === "object" && !Array.isArray(b.input)
+                ? (b.input as Record<string, unknown>)
+                : {},
+          }))
+          .filter((b) => b.name);
+      }
+
       return {
         content: text,
         model: data.model ?? defaultModel,
@@ -222,7 +577,268 @@ export function anthropicProvider(config: {
             }
           : undefined,
         finishReason: data.stop_reason,
+        ...(toolCalls !== undefined ? { toolCalls } : {}),
       };
+    },
+
+    async *stream(messages, options) {
+      const body = buildBody(messages, options, true);
+
+      const res = await fetch(`${baseUrl}/messages`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+        ...(options?.signal ? { signal: options.signal } : {}),
+      });
+
+      if (!res.ok) throw new Error(`Anthropic error ${res.status}`);
+      if (!res.body) throw new Error("No body");
+
+      const toolsAdvertised = !!options?.tools?.length;
+      const acc = new Map<number, ToolCallAccumulator>();
+      let finishReason: string | undefined;
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      let terminated = false;
+
+      const finalChunk = (): LLMStreamChunk => ({
+        content: "",
+        done: true,
+        ...(finishReason !== undefined ? { finishReason } : {}),
+        ...(toolsAdvertised
+          ? { toolCalls: finalizeAccumulatedToolCalls(acc) }
+          : {}),
+      });
+
+      // SSE frames are blank-line-separated `event:`/`data:` line groups. We
+      // only need the JSON `data:` payload; its top-level `type` field tells
+      // us how to interpret it, so the `event:` line is informational.
+      const handleData = function* (
+        raw: string,
+      ): Generator<LLMStreamChunk, void, undefined> {
+        let evt: any;
+        try {
+          evt = JSON.parse(raw);
+        } catch {
+          return;
+        }
+        const type = evt?.type;
+        switch (type) {
+          case "content_block_start": {
+            const block = evt.content_block;
+            if (block?.type === "tool_use") {
+              const idx = typeof evt.index === "number" ? evt.index : 0;
+              acc.set(idx, {
+                id: block.id ?? "",
+                name: block.name ?? "",
+                argsBuf: "",
+              });
+            }
+            return;
+          }
+          case "content_block_delta": {
+            const delta = evt.delta;
+            if (delta?.type === "text_delta") {
+              const text = delta.text ?? "";
+              if (text) yield { content: text, done: false };
+            } else if (delta?.type === "input_json_delta") {
+              const idx = typeof evt.index === "number" ? evt.index : 0;
+              const entry = acc.get(idx);
+              if (entry && typeof delta.partial_json === "string")
+                entry.argsBuf += delta.partial_json;
+            }
+            return;
+          }
+          case "message_delta": {
+            if (evt.delta?.stop_reason) finishReason = evt.delta.stop_reason;
+            return;
+          }
+          case "message_stop": {
+            terminated = true;
+            yield finalChunk();
+            return;
+          }
+          // message_start / content_block_stop / ping / unknown → ignore
+          default:
+            return;
+        }
+      };
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+
+        // Split off complete frames (blank-line delimited). Keep the trailing
+        // partial in `buf` so frames split across reads are reassembled.
+        // Match either \n\n or \r\n\r\n at the earliest position.
+        for (
+          let sep = nextFrameBoundary(buf);
+          sep !== -1;
+          sep = nextFrameBoundary(buf)
+        ) {
+          const frame = buf.slice(0, sep);
+          buf = buf.slice(sep + frameBoundaryLen(buf, sep));
+          for (const dataLine of extractDataPayloads(frame)) {
+            yield* handleData(dataLine);
+            if (terminated) return;
+          }
+        }
+      }
+
+      // Flush any final buffered frame without a trailing blank line.
+      if (!terminated && buf.length > 0) {
+        for (const dataLine of extractDataPayloads(buf)) {
+          yield* handleData(dataLine);
+          if (terminated) return;
+        }
+      }
+
+      if (!terminated) yield finalChunk();
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Anthropic SSE frame helpers
+// ---------------------------------------------------------------------------
+
+/** Index of the earliest frame boundary (`\n\n` or `\r\n\r\n`) in `buf`, or
+ * -1 if none is fully present yet. */
+function nextFrameBoundary(buf: string): number {
+  const lf = buf.indexOf("\n\n");
+  const crlf = buf.indexOf("\r\n\r\n");
+  if (lf === -1) return crlf;
+  if (crlf === -1) return lf;
+  return Math.min(lf, crlf);
+}
+
+/** Length of the boundary delimiter found at position `at`. */
+function frameBoundaryLen(buf: string, at: number): number {
+  return buf.startsWith("\r\n\r\n", at) ? 4 : 2;
+}
+
+/** Concatenate the `data:` lines of an SSE frame into their JSON payloads.
+ * Each frame yields at most one logical payload, but multi-line `data:` fields
+ * are concatenated per the SSE spec. */
+function extractDataPayloads(frame: string): string[] {
+  const dataParts: string[] = [];
+  for (const rawLine of frame.split("\n")) {
+    const line = rawLine.replace(/\r$/, "");
+    if (line.startsWith("data:")) {
+      // Strip the single optional leading space after the colon.
+      dataParts.push(line.slice(5).replace(/^ /, ""));
+    }
+  }
+  if (dataParts.length === 0) return [];
+  return [dataParts.join("\n")];
+}
+
+// ---------------------------------------------------------------------------
+// OpenAI Responses-API provider
+// ---------------------------------------------------------------------------
+// Talks the OpenAI Responses API (POST /v1/responses with `input` +
+// `instructions`), so it works with OpenAI and Responses-compatible proxies
+// (e.g. cocode for gpt-5.x). Text-based tool calling (the loop parses tool
+// JSON from the model text), so it deliberately does NOT set nativeToolCalls.
+// Handles both plain-JSON and SSE responses (reasoning models often stream).
+
+/** Plain-text view of message content for the Responses `input_text` block. */
+function responsesContentText(content: string | LLMContentPart[]): string {
+  if (typeof content === "string") return content;
+  return content.map((p) => (p.type === "text" ? p.text : "")).join("");
+}
+
+/** Extract assistant text from a Responses payload (plain JSON or SSE). */
+export function parseResponsesPayload(raw: string, fallbackModel: string): { content: string; model: string } {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const fromOutput = (d: any): string =>
+    d?.output_text ??
+    (Array.isArray(d?.output)
+      ? d.output
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          .filter((o: any) => o?.type === "message")
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          .flatMap((o: any) => o?.content ?? [])
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          .filter((c: any) => c?.type === "output_text")
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          .map((c: any) => c.text)
+          .join("")
+      : "");
+  if (raw.startsWith("event:")) {
+    let want = false;
+    for (const line of raw.split("\n")) {
+      if (line.startsWith("event: response.completed")) { want = true; continue; }
+      if (want && line.startsWith("data: ")) {
+        try {
+          const d = JSON.parse(line.slice(6));
+          return { content: fromOutput(d.response ?? d), model: d.response?.model ?? fallbackModel };
+        } catch { break; }
+      }
+    }
+    // Fallback: accumulate output_text deltas if no completed event was seen.
+    const acc = raw
+      .split("\n")
+      .filter((l) => l.startsWith("data: "))
+      .map((l) => { try { return JSON.parse(l.slice(6)).delta ?? ""; } catch { return ""; } })
+      .join("");
+    return { content: acc, model: fallbackModel };
+  }
+  try {
+    const d = JSON.parse(raw);
+    return { content: fromOutput(d), model: d.model ?? fallbackModel };
+  } catch {
+    return { content: "", model: fallbackModel };
+  }
+}
+
+export function responsesProvider(config: {
+  apiKey: string;
+  baseUrl?: string;
+  model?: string;
+  /** Reasoning effort for reasoning models (e.g. gpt-5.x). Only sent when set. */
+  reasoningEffort?: string;
+}): LLMProvider {
+  const root = (config.baseUrl ?? "https://api.openai.com/v1").replace(/\/+$/, "");
+  const url = root.endsWith("/v1") ? `${root}/responses` : `${root}/v1/responses`;
+  const defaultModel = config.model ?? "gpt-5.5";
+
+  return {
+    name: "openai-responses",
+    async chat(messages, options) {
+      const sys = messages
+        .filter((m) => m.role === "system")
+        .map((m) => responsesContentText(m.content))
+        .join("\n\n");
+      const input = messages
+        .filter((m) => m.role !== "system")
+        .map((m) => ({
+          role: m.role,
+          content: [{ type: m.role === "assistant" ? "output_text" : "input_text", text: responsesContentText(m.content) }],
+        }));
+      const body: Record<string, unknown> = {
+        model: options?.model ?? defaultModel,
+        input: input.length ? input : [{ role: "user", content: [{ type: "input_text", text: "(continue)" }] }],
+        instructions: sys || "You are a helpful assistant.",
+        store: false,
+        stream: false,
+      };
+      if (config.reasoningEffort) body["reasoning"] = { effort: config.reasoningEffort };
+      // Responses reasoning models reject `temperature`; only forward token cap.
+      if (options?.maxTokens !== undefined) body["max_output_tokens"] = options.maxTokens;
+
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${config.apiKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        ...(options?.signal ? { signal: options.signal } : {}),
+      });
+      const raw = await res.text();
+      if (!res.ok) throw new Error(`Responses API error ${res.status}: ${raw.slice(0, 500)}`);
+      return parseResponsesPayload(raw, options?.model ?? defaultModel);
     },
   };
 }

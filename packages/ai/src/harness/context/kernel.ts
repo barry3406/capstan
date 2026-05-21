@@ -27,6 +27,7 @@ import {
   getCheckpointToolCalls,
 } from "../runtime/checkpoint.js";
 import { summarizeHarnessResult } from "../runtime/utils.js";
+import { messageText } from "../../loop/content-helpers.js";
 
 type NormalizedContextConfig = {
   enabled: boolean;
@@ -630,7 +631,7 @@ function microcompactCheckpoint(
   const messages = getCheckpointMessages(checkpoint);
   const toolResultIndices = messages
     .map((message, index) => ({ message, index }))
-    .filter(({ message }) => isToolResultTranscriptMessage(message.content))
+    .filter(({ message }) => isToolResultTranscriptMessage(messageText(message.content)))
     .map(({ index }) => index);
 
   const keep = new Set(
@@ -641,6 +642,12 @@ function microcompactCheckpoint(
   let compactedMessages = 0;
   const nextMessages = messages.map((message, index) => {
     if (!toolResultIndices.includes(index) || keep.has(index)) {
+      return { ...message };
+    }
+
+    // Multimodal content (image parts) — pass through untouched, never
+    // collapse to text or truncate.
+    if (typeof message.content !== "string") {
       return { ...message };
     }
 
@@ -671,7 +678,7 @@ function compactCheckpointTranscript(
   maxRecentMessages: number,
 ): AgentCheckpoint {
   const messages = cloneMessages(getCheckpointMessages(checkpoint)).filter(
-    (message) => !isHarnessSummaryMessage(message.content),
+    (message) => !isHarnessSummaryMessage(messageText(message.content)),
   );
   const { prefix, bodyStart } = splitTranscriptPrefix(messages);
   const tail = selectTranscriptTail(messages.slice(bodyStart), maxRecentMessages);
@@ -844,8 +851,8 @@ function buildPreparedTranscript(
 ): LLMMessage[] {
   const filteredMessages = messages.filter(
     (message) =>
-      !isHarnessSummaryMessage(message.content) &&
-      !isRuntimeContextMessage(message.content),
+      !isHarnessSummaryMessage(messageText(message.content)) &&
+      !isRuntimeContextMessage(messageText(message.content)),
   );
 
   if (filteredMessages.length <= maxRecentMessages + 2) {
@@ -874,7 +881,7 @@ function estimateCheckpointTokens(checkpoint: AgentCheckpoint): number {
 
 function estimateMessagesTokens(messages: LLMMessage[]): number {
   return messages.reduce(
-    (total, message) => total + estimateTokens(message.content) + 8,
+    (total, message) => total + estimateTokens(messageText(message.content)) + 8,
     0,
   );
 }

@@ -528,8 +528,18 @@ export class CapstanRouter {
         }
       } else if (mode.scroll === "none") {
         const snapshot = navigation.previous.scroll;
-        restoreScrollSnapshot(snapshot);
-        if (typeof window !== "undefined" && snapshot) {
+        // scroll: false means "do not move the page". We re-pin the previous
+        // position to defeat view-transition / browser scroll resets, but only
+        // when the current position has actually drifted from where the user
+        // was. If we're already at the target position, restoring is a no-op
+        // scroll that would needlessly thrash layout and arm reapply timers.
+        const current = captureScrollPosition();
+        const needsRestore =
+          typeof window !== "undefined" &&
+          !!snapshot &&
+          (!current || current.x !== snapshot.x || current.y !== snapshot.y);
+        if (needsRestore) {
+          restoreScrollSnapshot(snapshot);
           const reapply = () => {
             restoreScrollSnapshot(snapshot);
           };

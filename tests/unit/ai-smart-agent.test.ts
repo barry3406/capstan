@@ -1257,8 +1257,8 @@ describe("createSmartAgent — tool catalog", () => {
   it("with many tools (>15), discover_tools meta-tool is added to available tools", async () => {
     const capturedMessages: LLMMessage[][] = [];
 
-    // Create 20 tools — exceeds default deferThreshold of 15
-    const tools: AgentTool[] = Array.from({ length: 20 }, (_, i) => ({
+    // Create 70 tools — exceeds default deferThreshold of 64
+    const tools: AgentTool[] = Array.from({ length: 70 }, (_, i) => ({
       name: `tool_${i}`,
       description: `Tool number ${i}`,
       async execute() {
@@ -1286,9 +1286,9 @@ describe("createSmartAgent — tool catalog", () => {
   });
 
   it("discover_tools meta-tool is executable and returns matching tools", async () => {
-    // Create 20 tools, some with "database" in the name
+    // Create 72 tools (> 64 threshold), some with "database" in the name
     const tools: AgentTool[] = [
-      ...Array.from({ length: 15 }, (_, i) => ({
+      ...Array.from({ length: 70 }, (_, i) => ({
         name: `generic_tool_${i}`,
         description: `Generic tool ${i}`,
         async execute() {
@@ -1353,7 +1353,7 @@ describe("createSmartAgent — tool catalog", () => {
   });
 
   it("discover_tools with empty query returns all tools", async () => {
-    const tools: AgentTool[] = Array.from({ length: 20 }, (_, i) => ({
+    const tools: AgentTool[] = Array.from({ length: 70 }, (_, i) => ({
       name: `tool_${i}`,
       description: `Tool ${i}`,
       async execute() {
@@ -1374,8 +1374,8 @@ describe("createSmartAgent — tool catalog", () => {
     expect(result.toolCalls.length).toBeGreaterThanOrEqual(1);
     expect(result.toolCalls[0]!.tool).toBe("discover_tools");
     const discoverResult = result.toolCalls[0]!.result as Array<{ name: string }>;
-    // Should return all 20 tools (not the discover_tools meta-tool itself)
-    expect(discoverResult.length).toBe(20);
+    // Should return all 70 tools (not the discover_tools meta-tool itself)
+    expect(discoverResult.length).toBe(70);
   });
 });
 

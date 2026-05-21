@@ -15,8 +15,33 @@ import { validateArgs } from "./validate-args.js";
 // Tool call parsing (migrated from sampler.ts)
 // ---------------------------------------------------------------------------
 
+/**
+ * Map native provider tool calls (`{id,name,args}[]`, surfaced by
+ * `LLMResponse.toolCalls` / the terminal `LLMStreamChunk.toolCalls`) to the
+ * loop's `ToolRequest` shape, using array index as the deterministic `order`.
+ *
+ * Per D1 the caller decides the *source* of tool requests: a defined (even
+ * empty) native list means the provider spoke natively and its result is used
+ * verbatim — `[]` ⇒ no tools this turn and NO text-JSON parse. Only an
+ * `undefined` native field falls back to {@link parseToolRequests}.
+ */
+export function toolRequestsFromNative(
+  calls: { id: string; name: string; args: Record<string, unknown> }[],
+): ToolRequest[] {
+  return calls.map((call, index) => ({
+    id: call.id,
+    name: call.name,
+    args: call.args,
+    order: index,
+  }));
+}
+
 export function parseToolRequests(content: string): ToolRequest[] {
-  const candidates = [content, ...extractFencedJson(content)];
+  const candidates = [
+    content,
+    ...extractFencedJson(content),
+    ...extractLeadingJson(content),
+  ];
   for (const candidate of candidates) {
     const parsed = tryParseJson(candidate);
     if (parsed === undefined) {
@@ -90,6 +115,68 @@ function extractFencedJson(content: string): string[] {
   return blocks
     .map((block) => block.replace(/^```json\s*/i, "").replace(/```$/i, "").trim())
     .filter(Boolean);
+}
+
+/**
+ * Extract well-formed JSON objects/arrays that are EDGE-ANCHORED in the content:
+ * the balanced JSON either STARTS at the first non-whitespace character (model
+ * emits the tool-call JSON then trailing commentary, e.g.
+ * `{...tool call...}已发起人工审批：...`) or ENDS at the last non-whitespace
+ * character (model emits leading prose then the tool call).
+ *
+ * JSON buried in the MIDDLE of prose — e.g. an inline `{"tool":...}` example
+ * inside a final answer — is deliberately NOT extracted, so it cannot be
+ * mis-executed as a real tool call. Returns substrings that look like balanced
+ * JSON; callers still run them through {@link tryParseJson} to confirm validity.
+ */
+function extractLeadingJson(content: string): string[] {
+  const firstNonWs = content.search(/\S/);
+  if (firstNonWs < 0) return [];
+  // Exclusive index just past the last non-whitespace character.
+  const endTrimmed = content.replace(/\s+$/, "").length;
+  const results: string[] = [];
+  let i = 0;
+  while (i < content.length) {
+    const ch = content[i];
+    if (ch === "{" || ch === "[") {
+      const open = ch;
+      const close = ch === "{" ? "}" : "]";
+      let depth = 0;
+      let inString = false;
+      let escape = false;
+      for (let j = i; j < content.length; j++) {
+        const c = content[j];
+        if (escape) {
+          escape = false;
+          continue;
+        }
+        if (c === "\\") {
+          escape = true;
+          continue;
+        }
+        if (c === '"') {
+          inString = !inString;
+          continue;
+        }
+        if (inString) continue;
+        if (c === open) depth++;
+        else if (c === close) {
+          depth--;
+          if (depth === 0) {
+            // Keep ONLY edge-anchored candidates: start at content start, or
+            // end at content end. Mid-prose JSON examples are skipped.
+            if (i === firstNonWs || j + 1 === endTrimmed) {
+              results.push(content.slice(i, j + 1));
+            }
+            i = j;
+            break;
+          }
+        }
+      }
+    }
+    i++;
+  }
+  return results;
 }
 
 // ---------------------------------------------------------------------------
@@ -366,12 +453,46 @@ export async function executeModelAndTools(
   const maxConcurrency = Math.max(1, _config?.maxConcurrency ?? 10);
   const toolMap = new Map(tools.map((t) => [t.name, t]));
 
+  // Forward the actual tool catalogue to the LLM provider so native function-
+  // calling adapters (OpenAI / Anthropic) can present them. Text-only
+  // providers ignore `options.tools` and fall back to text-JSON parsing.
+  // Only attach `tools` when there is at least one — an empty catalogue leaves
+  // the forwarded options untouched (providers omit tools/tool_choice for an
+  // absent OR empty list anyway), so a no-tool turn forwards `llmOptions` as-is.
+  const toolSpecs = tools.map((t) => ({
+    name: t.name,
+    description: t.description,
+    ...(t.parameters ? { parameters: t.parameters } : {}),
+  }));
+  const optionsWithTools: LLMOptions = {
+    ...(llmOptions ?? {}),
+    ...(toolSpecs.length > 0 ? { tools: toolSpecs } : {}),
+  };
+
   // =========================================================================
   // Streaming path — detect and dispatch concurrent-safe tools during stream
   // =========================================================================
   if (llm.stream) {
     let content = "";
     let finishReason: string | undefined;
+
+    // Whether native tools are advertised this turn. When true (the norm for
+    // agent turns) ALL tool dispatch is DEFERRED to stream-end: native tool
+    // calls only fully materialize on the terminal chunk, and per D1 a terminal
+    // `[]` must suppress text-JSON parsing. Eager mid-stream dispatch is kept
+    // for text-only providers (no native-tool capability). Gate on an EXPLICIT
+    // provider capability (`nativeToolCalls === "terminal"`), not merely on
+    // "tools advertised", so custom text-streaming providers keep mid-stream
+    // dispatch. See exit-notes "STREAMING DISPATCH GATING".
+    const deferDispatch =
+      llm.nativeToolCalls === "terminal" &&
+      (optionsWithTools.tools?.length ?? 0) > 0;
+
+    // Native tool calls captured from the terminal (`done:true`) chunk, if the
+    // provider surfaced any. `undefined` ⇒ provider gave no native signal.
+    let terminalToolCalls:
+      | { id: string; name: string; args: Record<string, unknown> }[]
+      | undefined;
 
     // Track dispatched tool request ids so we only dispatch each once
     const dispatchedIds = new Set<string>();
@@ -394,7 +515,7 @@ export async function executeModelAndTools(
     const idleTimeout = llmTimeout?.streamIdleTimeoutMs ?? 90_000;
     let lastChunkTime = Date.now();
 
-    for await (const chunk of llm.stream(messages, llmOptions)) {
+    for await (const chunk of llm.stream(messages, optionsWithTools)) {
       const gap = Date.now() - lastChunkTime;
       if (gap > idleTimeout) {
         throw new Error(`LLM stream idle timeout: no data for ${gap}ms`);
@@ -405,6 +526,16 @@ export async function executeModelAndTools(
 
       if (chunk.done) {
         finishReason = chunk.finishReason;
+        // Native tool calls are carried ONLY on the terminal chunk.
+        terminalToolCalls = chunk.toolCalls;
+      }
+
+      // Eager mid-stream dispatch is the LEGACY text path only. When native
+      // tools are advertised we defer everything to stream-end (avoids
+      // double-dispatch with terminal-native calls and honors D1's empty-`[]`
+      // suppression).
+      if (deferDispatch) {
+        continue;
       }
 
       // Try to detect complete tool calls from accumulated content
@@ -462,13 +593,25 @@ export async function executeModelAndTools(
       }
     }
 
-    // Wait for all in-flight concurrent tools to finish
-    await dispatcher.waitAll();
+    // Resolve the final tool requests for this turn.
+    // - deferDispatch (native tools advertised): D1 — terminal native calls
+    //   defined (even `[]`) win verbatim and suppress text-parse; `undefined`
+    //   ⇒ fall back to parsing the accumulated content.
+    // - legacy text path: re-parse the accumulated content (single canonical
+    //   parse), same as before.
+    const finalToolRequests = deferDispatch
+      ? terminalToolCalls !== undefined
+        ? toolRequestsFromNative(terminalToolCalls)
+        : parseToolRequests(content)
+      : parseToolRequests(content);
 
-    // Re-parse final content for the outcome (single canonical parse)
-    const finalToolRequests = parseToolRequests(content);
-
-    // Check if we missed any tool calls that only became parseable at the end
+    // Route the resolved requests through the SAME post-stream execution
+    // machinery (concurrent dispatcher + write queue + unknown-tool errors).
+    // For the deferred path this is the FIRST and ONLY dispatch — nothing ran
+    // mid-stream, so concurrency-safe tools still run concurrently here. For
+    // the legacy path this catches calls that only became parseable on the
+    // final chunk; the `dispatchedIds` dedup guarantees exactly-once (nothing
+    // already dispatched mid-stream is re-run).
     for (const req of finalToolRequests) {
       const stableKey = `pos_${req.order}`;
       if (dispatchedIds.has(stableKey)) {
@@ -491,19 +634,26 @@ export async function executeModelAndTools(
       }
 
       if (tool.isConcurrencySafe) {
-        if (!blockedApproval && !hardFailureDetected) {
-          const result = await executeSingleTool(req, tool, hooks);
+        const concurrentReq = req;
+        const concurrentTool = tool;
+        dispatcher.dispatch(async () => {
+          if (blockedApproval || hardFailureDetected) return;
+          const result = await executeSingleTool(concurrentReq, concurrentTool, hooks);
           if (result.kind === "blocked") {
             blockedApproval = result.approval;
-          } else {
-            concurrentResults.set(req.order, result.record);
-            if (result.hardFailure) hardFailureDetected = true;
+            return;
           }
-        }
+          concurrentResults.set(concurrentReq.order, result.record);
+          if (result.hardFailure) hardFailureDetected = true;
+        });
       } else {
         writeQueue.push({ request: req, tool });
       }
     }
+
+    // Wait for all in-flight concurrent tools to finish (legacy mid-stream
+    // dispatch + the post-resolution dispatch above).
+    await dispatcher.waitAll();
 
     // Build outcome using the final parse
     const normalizedFinish = normalizeFinishReason(
@@ -585,7 +735,7 @@ export async function executeModelAndTools(
   const chatTimeout = llmTimeout?.chatTimeoutMs ?? 120_000;
   let chatTimer: ReturnType<typeof setTimeout> | undefined;
   const response = await Promise.race([
-    llm.chat(messages, llmOptions),
+    llm.chat(messages, optionsWithTools),
     new Promise<never>((_, reject) => {
       chatTimer = setTimeout(() => reject(new Error(`LLM chat timeout after ${chatTimeout}ms`)), chatTimeout);
     }),
@@ -595,7 +745,13 @@ export async function executeModelAndTools(
   const finishReason = response.finishReason;
   const usage = response.usage;
 
-  const toolRequests = parseToolRequests(content);
+  // D1: a defined native `toolCalls` field (even `[]`) means the provider
+  // spoke natively — use it verbatim and DO NOT text-parse. Only `undefined`
+  // (a text-only provider that never advertised tools) falls back to text.
+  const toolRequests =
+    response.toolCalls !== undefined
+      ? toolRequestsFromNative(response.toolCalls)
+      : parseToolRequests(content);
   const normalizedFinish = normalizeFinishReason(finishReason, toolRequests.length > 0);
 
   const outcome: ModelOutcome = {

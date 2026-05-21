@@ -1,0 +1,17 @@
+{
+  "$schema": "./node_modules/@stryker-mutator/core/schema/stryker-schema.json",
+  "_comment": "M-CONFIG (provider-multimodal-tools). Stryker has no native bun:test runner; use the command runner over `bun test tests/unit`. Tests MUST import the mutated files via relative src path or mutation won't bite (fact (b)).",
+  "testRunner": "command",
+  "commandRunner": {
+    "command": "bun test tests/unit"
+  },
+  "coverageAnalysis": "off",
+  "mutate": [
+    "packages/agent/src/llm.ts",
+    "packages/ai/src/loop/streaming-executor.ts"
+  ],
+  "thresholds": {
+    "high": 90,
+    "break": 85
+  }
+}

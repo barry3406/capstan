@@ -5,6 +5,7 @@ import type {
   MicrocompactConfig,
   SnipConfig,
 } from "../types.js";
+import { messageContentLength, messageText } from "./content-helpers.js";
 
 /* ------------------------------------------------------------------ */
 /*  Token estimation                                                  */
@@ -12,12 +13,13 @@ import type {
 
 /**
  * Rough token estimate: sum all message content lengths and divide by 4.
+ * Multimodal images count as ~375 tokens each (1500 chars / 4).
  */
 export function estimateTokens(messages: LLMMessage[]): number {
   if (messages.length === 0) return 0;
   let chars = 0;
   for (const m of messages) {
-    chars += m.content.length;
+    chars += messageContentLength(m.content);
   }
   return Math.floor(chars / 4);
 }
@@ -124,6 +126,13 @@ export function microcompactMessages(
       continue;
     }
 
+    // Multimodal messages (with image parts) are passed through untouched —
+    // images are valuable signal and the engine has already paid for them.
+    if (typeof m.content !== "string") {
+      out.push(m);
+      continue;
+    }
+
     // Check if this looks like a tool result and exceeds the limit
     if (
       TOOL_RESULT_PATTERN.test(m.content) &&
@@ -219,7 +228,7 @@ export async function autocompact(
 
   try {
     const conversationText = middle
-      .map((m) => `[${m.role}]: ${m.content}`)
+      .map((m) => `[${m.role}]: ${messageText(m.content)}`)
       .join("\n\n");
 
     const response = await llm.chat(

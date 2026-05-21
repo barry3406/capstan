@@ -327,7 +327,7 @@ describe("runtime.ts — composeRouteMiddlewares", () => {
         })],
         mods,
       ),
-    ).rejects.toThrow("must export a default");
+    ).rejects.toThrow("Invalid middleware export");
   });
 
   it("invalid middleware export type throws", async () => {

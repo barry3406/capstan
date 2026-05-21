@@ -45,6 +45,7 @@ interface BrowserSandboxConfig {
   platform?: string;
   accountId?: string;
   guardMode?: 'vision' | 'hybrid';
+  initialUrl?: string;
 }
 
 interface BrowserEngine {

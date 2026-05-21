@@ -1,10 +1,53 @@
-// === LLM Types (unchanged) ===
+// === LLM Types ===
 export interface MemoryEmbedder { embed(texts: string[]): Promise<number[][]>; dimensions: number; }
-export interface LLMMessage { role: "system" | "user" | "assistant"; content: string; }
-export interface LLMResponse { content: string; model: string; usage?: { promptTokens: number; completionTokens: number; totalTokens: number } | undefined; finishReason?: string | undefined; }
-export interface LLMStreamChunk { content: string; done: boolean; finishReason?: string | undefined; }
-export interface LLMOptions { model?: string | undefined; temperature?: number | undefined; maxTokens?: number | undefined; systemPrompt?: string | undefined; responseFormat?: Record<string, unknown> | undefined; signal?: AbortSignal | undefined; }
-export interface LLMProvider { name: string; chat(messages: LLMMessage[], options?: LLMOptions): Promise<LLMResponse>; stream?(messages: LLMMessage[], options?: LLMOptions): AsyncIterable<LLMStreamChunk>; }
+
+/** Multimodal content part. Inline base64 is preferred for images so the
+ * downstream provider has no separate fetch. */
+export type LLMContentPart =
+  | { type: "text"; text: string }
+  | { type: "image"; mediaType: string; data: string };
+
+/** A single conversation message. Content can be a plain string (legacy /
+ * cheap path) or an array of multimodal parts (text + image). */
+export interface LLMMessage {
+  role: "system" | "user" | "assistant";
+  content: string | LLMContentPart[];
+}
+
+export interface LLMResponse { content: string; model: string; usage?: { promptTokens: number; completionTokens: number; totalTokens: number } | undefined; finishReason?: string | undefined; toolCalls?: { id: string; name: string; args: Record<string, unknown> }[] | undefined; }
+/** Native tool calls are carried ONLY on the terminal `done:true` chunk. */
+export interface LLMStreamChunk { content: string; done: boolean; finishReason?: string | undefined; toolCalls?: { id: string; name: string; args: Record<string, unknown> }[] | undefined; }
+
+/** Tool spec passed to the LLM provider. The provider can use this to
+ * advertise native function calling (OpenAI / Anthropic) so the model
+ * picks tool names from the canonical list instead of hallucinating. */
+export interface LLMToolSpec {
+  name: string;
+  description: string;
+  parameters?: Record<string, unknown> | undefined;
+}
+
+export interface LLMOptions {
+  model?: string | undefined;
+  temperature?: number | undefined;
+  maxTokens?: number | undefined;
+  systemPrompt?: string | undefined;
+  responseFormat?: Record<string, unknown> | undefined;
+  signal?: AbortSignal | undefined;
+  /** Tools available this turn. Native-function-call providers will
+   * present them; text-only providers may ignore. */
+  tools?: LLMToolSpec[] | undefined;
+}
+export interface LLMProvider {
+  name: string;
+  chat(messages: LLMMessage[], options?: LLMOptions): Promise<LLMResponse>;
+  stream?(messages: LLMMessage[], options?: LLMOptions): AsyncIterable<LLMStreamChunk>;
+  /** When `"terminal"`, the provider parses native tool calls and surfaces them
+   * on the terminal stream chunk's `toolCalls` (and on chat() `LLMResponse.toolCalls`).
+   * The loop uses this to DEFER tool dispatch to stream-end for native providers,
+   * while text-only providers (flag absent) keep mid-stream eager dispatch. */
+  nativeToolCalls?: "terminal" | undefined;
+}
 
 // === Think/Generate (unchanged) ===
 export interface ThinkOptions<T = unknown> { schema?: { parse: (data: unknown) => T } | undefined; model?: string | undefined; temperature?: number | undefined; maxTokens?: number | undefined; systemPrompt?: string | undefined; }
@@ -235,6 +278,15 @@ export interface LLMTimeoutConfig {
 }
 
 // === Skill Layer ===
+/** A file bundled inside a code-bearing skill directory. */
+export interface SkillFile {
+  /** Bundle-relative POSIX path (e.g. "scripts/extract.py"). */
+  path: string;
+  bytes: number;
+  /** True if the file has a Unix executable bit set. */
+  executable: boolean;
+}
+
 export interface AgentSkill {
   name: string;
   description: string;
@@ -244,6 +296,12 @@ export interface AgentSkill {
   source?: "developer" | "evolved" | undefined;
   utility?: number | undefined;
   metadata?: Record<string, unknown> | undefined;
+  /** Absolute path to the skill's bundle directory, when the skill carries
+   * code/resources (loaded via loadSkill/loadSkillsFrom). Guidance-only skills
+   * leave this undefined. */
+  bundleDir?: string | undefined;
+  /** Manifest of files bundled with the skill (relative to bundleDir). */
+  files?: SkillFile[] | undefined;
 }
 
 // === Iteration Snapshot ===
