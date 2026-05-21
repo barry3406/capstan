@@ -22,7 +22,7 @@ export type { McpTestResult } from "./testing.js";
 export { toLangChainTools, toLangChainToolSpecs } from "./langchain.js";
 export type { LangChainToolDefinition, ToLangChainOptions } from "./langchain.js";
 export type { AgentManifest, RouteRegistryEntry, AgentConfig } from "./types.js";
-export { openaiProvider, anthropicProvider } from "./llm.js";
+export { openaiProvider, anthropicProvider, responsesProvider } from "./llm.js";
 export type {
   LLMProvider,
   LLMMessage,

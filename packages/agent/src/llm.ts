@@ -735,3 +735,110 @@ function extractDataPayloads(frame: string): string[] {
   if (dataParts.length === 0) return [];
   return [dataParts.join("\n")];
 }
+
+// ---------------------------------------------------------------------------
+// OpenAI Responses-API provider
+// ---------------------------------------------------------------------------
+// Talks the OpenAI Responses API (POST /v1/responses with `input` +
+// `instructions`), so it works with OpenAI and Responses-compatible proxies
+// (e.g. cocode for gpt-5.x). Text-based tool calling (the loop parses tool
+// JSON from the model text), so it deliberately does NOT set nativeToolCalls.
+// Handles both plain-JSON and SSE responses (reasoning models often stream).
+
+/** Plain-text view of message content for the Responses `input_text` block. */
+function responsesContentText(content: string | LLMContentPart[]): string {
+  if (typeof content === "string") return content;
+  return content.map((p) => (p.type === "text" ? p.text : "")).join("");
+}
+
+/** Extract assistant text from a Responses payload (plain JSON or SSE). */
+export function parseResponsesPayload(raw: string, fallbackModel: string): { content: string; model: string } {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const fromOutput = (d: any): string =>
+    d?.output_text ??
+    (Array.isArray(d?.output)
+      ? d.output
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          .filter((o: any) => o?.type === "message")
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          .flatMap((o: any) => o?.content ?? [])
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          .filter((c: any) => c?.type === "output_text")
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          .map((c: any) => c.text)
+          .join("")
+      : "");
+  if (raw.startsWith("event:")) {
+    let want = false;
+    for (const line of raw.split("\n")) {
+      if (line.startsWith("event: response.completed")) { want = true; continue; }
+      if (want && line.startsWith("data: ")) {
+        try {
+          const d = JSON.parse(line.slice(6));
+          return { content: fromOutput(d.response ?? d), model: d.response?.model ?? fallbackModel };
+        } catch { break; }
+      }
+    }
+    // Fallback: accumulate output_text deltas if no completed event was seen.
+    const acc = raw
+      .split("\n")
+      .filter((l) => l.startsWith("data: "))
+      .map((l) => { try { return JSON.parse(l.slice(6)).delta ?? ""; } catch { return ""; } })
+      .join("");
+    return { content: acc, model: fallbackModel };
+  }
+  try {
+    const d = JSON.parse(raw);
+    return { content: fromOutput(d), model: d.model ?? fallbackModel };
+  } catch {
+    return { content: "", model: fallbackModel };
+  }
+}
+
+export function responsesProvider(config: {
+  apiKey: string;
+  baseUrl?: string;
+  model?: string;
+  /** Reasoning effort for reasoning models (e.g. gpt-5.x). Only sent when set. */
+  reasoningEffort?: string;
+}): LLMProvider {
+  const root = (config.baseUrl ?? "https://api.openai.com/v1").replace(/\/+$/, "");
+  const url = root.endsWith("/v1") ? `${root}/responses` : `${root}/v1/responses`;
+  const defaultModel = config.model ?? "gpt-5.5";
+
+  return {
+    name: "openai-responses",
+    async chat(messages, options) {
+      const sys = messages
+        .filter((m) => m.role === "system")
+        .map((m) => responsesContentText(m.content))
+        .join("\n\n");
+      const input = messages
+        .filter((m) => m.role !== "system")
+        .map((m) => ({
+          role: m.role,
+          content: [{ type: m.role === "assistant" ? "output_text" : "input_text", text: responsesContentText(m.content) }],
+        }));
+      const body: Record<string, unknown> = {
+        model: options?.model ?? defaultModel,
+        input: input.length ? input : [{ role: "user", content: [{ type: "input_text", text: "(continue)" }] }],
+        instructions: sys || "You are a helpful assistant.",
+        store: false,
+        stream: false,
+      };
+      if (config.reasoningEffort) body["reasoning"] = { effort: config.reasoningEffort };
+      // Responses reasoning models reject `temperature`; only forward token cap.
+      if (options?.maxTokens !== undefined) body["max_output_tokens"] = options.maxTokens;
+
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${config.apiKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        ...(options?.signal ? { signal: options.signal } : {}),
+      });
+      const raw = await res.text();
+      if (!res.ok) throw new Error(`Responses API error ${res.status}: ${raw.slice(0, 500)}`);
+      return parseResponsesPayload(raw, options?.model ?? defaultModel);
+    },
+  };
+}

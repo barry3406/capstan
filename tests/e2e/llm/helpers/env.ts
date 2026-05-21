@@ -1,7 +1,7 @@
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it } from "bun:test";
-import { openaiProvider, anthropicProvider } from "../../../../packages/agent/src/llm.js";
+import { openaiProvider, anthropicProvider, responsesProvider } from "../../../../packages/agent/src/llm.js";
 import type { LLMProvider } from "../../../../packages/agent/src/llm.js";
 
 export interface LLMTestConfig {
@@ -22,9 +22,11 @@ function parseEnvFile(path: string): Record<string, string> {
   return env;
 }
 
-function buildProvider(type: string, apiKey: string, baseUrl?: string, model?: string): LLMProvider | null {
+function buildProvider(type: string, apiKey: string, baseUrl?: string, model?: string, reasoningEffort?: string): LLMProvider | null {
   if (type === "openai") return openaiProvider({ apiKey, baseUrl, model });
   if (type === "anthropic") return anthropicProvider({ apiKey, baseUrl, model });
+  // OpenAI Responses API (and Responses-compatible proxies like cocode).
+  if (type === "responses" || type === "cocode") return responsesProvider({ apiKey, baseUrl, model, reasoningEffort });
   return null;
 }
 
@@ -36,11 +38,11 @@ function loadTestProviders(): LLMTestConfig[] {
   const providers: LLMTestConfig[] = [];
 
   // Primary
-  const p = buildProvider(env.LLM_PROVIDER ?? "", env.LLM_API_KEY ?? "", env.LLM_BASE_URL, env.LLM_MODEL);
+  const p = buildProvider(env.LLM_PROVIDER ?? "", env.LLM_API_KEY ?? "", env.LLM_BASE_URL, env.LLM_MODEL, env.LLM_REASONING_EFFORT);
   if (p) providers.push({ provider: p, name: `${env.LLM_PROVIDER}${env.LLM_MODEL ? ` (${env.LLM_MODEL})` : ""}` });
 
   // Secondary (optional)
-  const s = buildProvider(env.LLM_SECONDARY_PROVIDER ?? "", env.LLM_SECONDARY_API_KEY ?? "", env.LLM_SECONDARY_BASE_URL, env.LLM_SECONDARY_MODEL);
+  const s = buildProvider(env.LLM_SECONDARY_PROVIDER ?? "", env.LLM_SECONDARY_API_KEY ?? "", env.LLM_SECONDARY_BASE_URL, env.LLM_SECONDARY_MODEL, env.LLM_SECONDARY_REASONING_EFFORT);
   if (s) providers.push({ provider: s, name: `${env.LLM_SECONDARY_PROVIDER}${env.LLM_SECONDARY_MODEL ? ` (${env.LLM_SECONDARY_MODEL})` : ""}` });
 
   return providers;
