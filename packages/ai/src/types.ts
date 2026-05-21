@@ -278,6 +278,15 @@ export interface LLMTimeoutConfig {
 }
 
 // === Skill Layer ===
+/** A file bundled inside a code-bearing skill directory. */
+export interface SkillFile {
+  /** Bundle-relative POSIX path (e.g. "scripts/extract.py"). */
+  path: string;
+  bytes: number;
+  /** True if the file has a Unix executable bit set. */
+  executable: boolean;
+}
+
 export interface AgentSkill {
   name: string;
   description: string;
@@ -287,6 +296,12 @@ export interface AgentSkill {
   source?: "developer" | "evolved" | undefined;
   utility?: number | undefined;
   metadata?: Record<string, unknown> | undefined;
+  /** Absolute path to the skill's bundle directory, when the skill carries
+   * code/resources (loaded via loadSkill/loadSkillsFrom). Guidance-only skills
+   * leave this undefined. */
+  bundleDir?: string | undefined;
+  /** Manifest of files bundled with the skill (relative to bundleDir). */
+  files?: SkillFile[] | undefined;
 }
 
 // === Iteration Snapshot ===

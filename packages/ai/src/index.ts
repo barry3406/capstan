@@ -2,6 +2,9 @@
 export { createSmartAgent } from "./smart-agent.js";
 export { think, generate, thinkStream, generateStream } from "./think.js";
 export { defineSkill, createActivateSkillTool, formatSkillDescriptions } from "./skill.js";
+export { loadSkill, loadSkillsFrom, createSkillTools, parseSkillMd } from "./skill-bundle.js";
+export type { SkillToolsOptions } from "./skill-bundle.js";
+export type { SkillFile } from "./types.js";
 export { BuiltinMemoryBackend, createMemoryAccessor } from "./memory.js";
 export { SqliteMemoryBackend, createSqliteMemoryStore } from "./memory-sqlite.js";
 export type { SqliteConnection, SqliteStatement } from "./memory-sqlite.js";

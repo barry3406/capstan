@@ -21,7 +21,8 @@ import {
   reactiveCompact,
   type ModelOutcome,
 } from "./continuation.js";
-import { createActivateSkillTool, formatSkillDescriptions } from "../skill.js";
+import { formatSkillDescriptions } from "../skill.js";
+import { createSkillTools } from "../skill-bundle.js";
 import { memoryFreshnessText } from "./memory-age.js";
 import { normalizeMessages } from "./normalize-messages.js";
 import { LlmMemoryReconciler, reconcileAndStore } from "../memory-reconciler.js";
@@ -289,7 +290,7 @@ export async function* runSmartLoopStream(
 
   // 1c. Skill injection
   if (config.skills && config.skills.length > 0) {
-    allTools.push(createActivateSkillTool(config.skills));
+    allTools.push(...createSkillTools(config.skills));
   }
 
   // 1d. Inject read_persisted_result tool when persistence is configured

@@ -393,6 +393,10 @@ const refactorSkill = defineSkill({
 
 技能彌合了底層工具使用與高層問題解決之間的鴻溝。它們可以來自開發者（`source: "developer"`），也可以從 Agent 自身經驗中自動進化而來（`source: "evolved"`）。
 
+**帶程式碼的技能。** 技能還可以是一個*目錄* —— 一個 `SKILL.md`（指引文字）加上隨附的腳本/資源 —— 用 `loadSkillsFrom("./skills")` 載入。啟用時 Agent 會收到這些隨附檔案的清單，以及 `read_skill_file` 和 `run_skill_script` 兩個工具，用來檢視並執行隨附程式碼（`.py`/`.sh`/`.js`/`.ts`），並被沙箱限制在該技能目錄內（須先啟用、路徑鎖定、逾時 + 輸出截斷）。這就是 "Agent Skills" 模式 —— 技能攜帶可執行程式碼，而不只是指引文字。
+
+> LLM provider 來自 `@zauso-ai/capstan-agent`：`openaiProvider`（Chat Completions）、`anthropicProvider`（Messages）、`responsesProvider`（OpenAI **Responses API** —— 用於 gpt-5.x 等推理模型及 Responses 相容代理）。
+
 ### 持久化 Harness 執行環境
 
 需要沙箱、持久化和維運監督的 Agent，可以使用 `createHarness()` 取得完整的持久化執行環境：

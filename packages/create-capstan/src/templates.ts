@@ -2064,6 +2064,41 @@ for await (const event of agent.stream("Fix the login bug")) {
 }
 \`\`\`
 
+### LLM providers (@zauso-ai/capstan-agent)
+
+- \`openaiProvider({ apiKey, baseUrl?, model? })\` — OpenAI Chat Completions (+ compatible). Multimodal images + native function-calling.
+- \`anthropicProvider({ apiKey, baseUrl?, model? })\` — Anthropic Messages API (chat + streaming, multimodal, native tools).
+- \`responsesProvider({ apiKey, baseUrl?, model?, reasoningEffort? })\` — OpenAI **Responses API** (\`/v1/responses\`), for reasoning models (gpt-5.x) and Responses-compatible proxies. Handles plain-JSON and SSE.
+
+### Code-bearing skills (bundled scripts)
+
+A skill can be a DIRECTORY with a \`SKILL.md\` (frontmatter + guidance) plus scripts/resources the agent can read and run. Load with \`loadSkill\` / \`loadSkillsFrom\` and pass as normal skills:
+
+\`\`\`typescript
+import { loadSkillsFrom } from "@zauso-ai/capstan-ai";
+
+const skills = loadSkillsFrom("./skills"); // every subdir containing a SKILL.md
+const agent = createSmartAgent({ llm, tools, skills });
+\`\`\`
+
+\`skills/pdf-extract/SKILL.md\`:
+
+\`\`\`markdown
+---
+name: pdf-extract
+description: Extract text from PDFs.
+trigger: Use when the user needs text out of a PDF.
+---
+Run scripts/extract.py <path> to get the text, then report what it prints.
+\`\`\`
+
+(with \`skills/pdf-extract/scripts/extract.py\` alongside). On activation the agent receives the guidance + a manifest of bundled files and gains two tools:
+
+- \`read_skill_file({ skill, path })\` — read a bundled file before running it.
+- \`run_skill_script({ skill, script, args? })\` — execute a bundled script (\`.py\`→python3, \`.sh\`→bash, \`.js\`→node, \`.ts\`→bun) inside the skill directory.
+
+Security: scripts run ONLY from an ACTIVATED skill, paths are confined to the bundle (no \`..\` escape), with a timeout + output caps. Run untrusted skills inside an OS/container sandbox.
+
 ### AgentTool Definition
 
 Every tool the agent can call implements this interface:
