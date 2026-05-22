@@ -1,6 +1,6 @@
 {
   "name": "capstan",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "private": true,
   "description": "An AI Agent Native full-stack framework for building agent-operable software.",
   "packageManager": "npm@11.9.0",
