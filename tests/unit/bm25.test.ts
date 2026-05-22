@@ -12,6 +12,14 @@ describe("bm25QueryTerms", () => {
     expect(bm25QueryTerms("")).toEqual([]);
     expect(bm25QueryTerms("  !!! ??? ")).toEqual([]);
   });
+  it("keeps Unicode letters (accented, CJK) and underscores as tokens", () => {
+    // ASCII \W would corrupt "café"->"caf" and drop CJK entirely.
+    expect(bm25QueryTerms("Café_crème 机器学习, NAÏVE")).toEqual([
+      "café_crème",
+      "机器学习",
+      "naïve",
+    ]);
+  });
 });
 
 describe("bm25Scores", () => {
@@ -82,5 +90,15 @@ describe("bm25Scores", () => {
     ];
     const s = bm25Scores(["machine", "learning", "data"], docs);
     expect(s[5]).toBeGreaterThan(s[0]!); // rare "data" doc > common "machine learning" doc
+  });
+
+  it("matches CJK / accented terms that ASCII \\W tokenisation would drop", () => {
+    const cjk = bm25Scores(["机器学习"], ["机器学习 笔记", "english only"]);
+    expect(cjk[0]).toBeGreaterThan(0); // CJK doc matched (was dropped under \W)
+    expect(cjk[1]).toBeCloseTo(0, 10);
+
+    const acc = bm25Scores(["café"], ["le café est bon", "tea house"]);
+    expect(acc[0]).toBeGreaterThan(0);
+    expect(acc[1]).toBeCloseTo(0, 10);
   });
 });

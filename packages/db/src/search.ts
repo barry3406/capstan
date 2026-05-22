@@ -155,22 +155,29 @@ export function hybridSearch(
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-/** Whitespace/punctuation tokeniser: lower-cased, de-duplicated terms. */
+/**
+ * Split on runs of non-(letter|number|underscore), Unicode-aware (`u` flag +
+ * `\p{L}`/`\p{N}`): keeps accented letters and CJK runs as tokens rather than
+ * dropping them like the ASCII `\W`. ASCII text splits identically.
+ */
+const TOKEN_SPLIT = /[^\p{L}\p{N}_]+/u;
+
+/** Tokeniser: lower-cased, de-duplicated terms. */
 function tokenize(text: string): string[] {
   return [
     ...new Set(
       text
         .toLowerCase()
-        .split(/\W+/)
+        .split(TOKEN_SPLIT)
         .filter((t) => t.length > 0),
     ),
   ];
 }
 
-/** Term-frequency map for a document (lower-cased, `\W+` split; keeps counts). */
+/** Term-frequency map for a document (lower-cased; keeps counts). */
 function termCounts(text: string): Map<string, number> {
   const counts = new Map<string, number>();
-  for (const t of text.toLowerCase().split(/\W+/)) {
+  for (const t of text.toLowerCase().split(TOKEN_SPLIT)) {
     if (t.length === 0) continue;
     counts.set(t, (counts.get(t) ?? 0) + 1);
   }

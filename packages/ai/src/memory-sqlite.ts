@@ -102,23 +102,22 @@ export class SqliteMemoryBackend implements MemoryBackend {
 
     if (rows.length === 0) return [];
 
-    const queryTerms = bm25QueryTerms(text);
-
     const entries = rows.map(rowToEntry);
-    // BM25 keyword relevance over the in-scope memories (the candidate set
-    // supplies the corpus statistics — IDF, average length).
-    const scores =
-      queryTerms.length > 0
-        ? bm25Scores(queryTerms, entries.map((e) => e.content))
-        : entries.map(() => 0);
 
+    // Empty query = bulk fetch the scope (used by the reconciler to read all).
+    if (text === "") return entries.slice(0, k);
+
+    // BM25 keyword relevance over the in-scope memories (the candidate set
+    // supplies the corpus statistics — IDF, average length). A non-empty query
+    // with no usable terms (e.g. punctuation only) scores all zeros, so the
+    // `> 0` filter yields no results — matching BuiltinMemoryBackend.
+    const scores = bm25Scores(bm25QueryTerms(text), entries.map((e) => e.content));
     const scored = entries.map((entry, i) => ({ entry, score: scores[i]! }));
     scored.sort((a, b) => b.score - a.score);
-
-    // Filter zero-score entries when query terms exist (align with BuiltinMemoryBackend)
-    const filtered =
-      queryTerms.length > 0 ? scored.filter((s) => s.score > 0) : scored;
-    return filtered.slice(0, k).map((s) => s.entry);
+    return scored
+      .filter((s) => s.score > 0)
+      .slice(0, k)
+      .map((s) => s.entry);
   }
 
   async remove(id: string): Promise<boolean> {

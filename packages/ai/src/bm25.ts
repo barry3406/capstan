@@ -8,10 +8,17 @@
 // average document length) and normalised to [0, 1] by the top score, so the
 // keyword component fuses cleanly with a cosine-similarity component.
 
-/** Term-frequency map for a document (lower-cased, `\W+` split; keeps counts). */
+/**
+ * Split on runs of non-(letter|number|underscore), Unicode-aware (`u` flag +
+ * `\p{L}`/`\p{N}`). Unlike the ASCII `\W`, this keeps accented letters and CJK
+ * runs as tokens instead of dropping them; ASCII text splits identically.
+ */
+const TOKEN_SPLIT = /[^\p{L}\p{N}_]+/u;
+
+/** Term-frequency map for a document (lower-cased; keeps counts). */
 function termCounts(text: string): Map<string, number> {
   const counts = new Map<string, number>();
-  for (const t of text.toLowerCase().split(/\W+/)) {
+  for (const t of text.toLowerCase().split(TOKEN_SPLIT)) {
     if (t.length === 0) continue;
     counts.set(t, (counts.get(t) ?? 0) + 1);
   }
@@ -21,7 +28,7 @@ function termCounts(text: string): Map<string, number> {
 /** Tokenise a query into unique, lower-cased terms. */
 export function bm25QueryTerms(text: string): string[] {
   return [
-    ...new Set(text.toLowerCase().split(/\W+/).filter((t) => t.length > 0)),
+    ...new Set(text.toLowerCase().split(TOKEN_SPLIT).filter((t) => t.length > 0)),
   ];
 }
 
