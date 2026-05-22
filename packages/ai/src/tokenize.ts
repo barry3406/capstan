@@ -62,7 +62,12 @@ export function setTokenizer(tokenizer: Tokenizer = defaultTokenizer): void {
   active = tokenizer;
 }
 
-/** Tokenise text with the active tokeniser (default: `Intl.Segmenter`). */
+/**
+ * Tokenise text with the active tokeniser (default: `Intl.Segmenter`). Empty
+ * tokens are dropped here so a custom tokeniser that emits `""` (e.g. a naive
+ * `split(" ")` on runs of whitespace) can't poison BM25 term counts, document
+ * lengths, or let a blank query self-match.
+ */
 export function tokenize(text: string): string[] {
-  return active(text);
+  return active(text).filter((t) => t.length > 0);
 }

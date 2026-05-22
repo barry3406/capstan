@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { bm25Scores, bm25QueryTerms } from "../../packages/ai/src/bm25.ts";
 import { setTokenizer } from "../../packages/ai/src/tokenize.ts";
 
@@ -119,7 +119,8 @@ describe("bm25Scores", () => {
 });
 
 describe("pluggable tokenizer", () => {
-  afterEach(() => setTokenizer()); // restore the Intl.Segmenter default
+  beforeEach(() => setTokenizer()); // start from the default
+  afterEach(() => setTokenizer()); // and restore it (no leak to other test files)
 
   it("setTokenizer swaps the tokeniser used by bm25QueryTerms", () => {
     setTokenizer((t) => t.toLowerCase().split("/").filter(Boolean));
@@ -130,5 +131,15 @@ describe("pluggable tokenizer", () => {
     setTokenizer((t) => [t]); // whole-string tokeniser
     setTokenizer(); // reset
     expect(bm25QueryTerms("机器学习")).toEqual(["机器", "学习"]);
+  });
+
+  it("drops empty tokens from a custom tokeniser (no BM25 poisoning)", () => {
+    // A naive whitespace split emits "" on leading/trailing/double spaces.
+    setTokenizer((t) => t.toLowerCase().split(" "));
+    expect(bm25QueryTerms("  alpha   beta ")).toEqual(["alpha", "beta"]);
+    // A space-only query has no usable terms => matches nothing (no "" term).
+    expect(
+      bm25Scores(bm25QueryTerms("   "), ["alpha  beta", "gamma"]),
+    ).toEqual([0, 0]);
   });
 });
