@@ -752,7 +752,30 @@ function responsesContentText(content: string | LLMContentPart[]): string {
 }
 
 /** Extract assistant text from a Responses payload (plain JSON or SSE). */
-export function parseResponsesPayload(raw: string, fallbackModel: string): { content: string; model: string } {
+/** 从 Responses 输出数组里提取原生 function_call(工具调用)。 */
+function extractResponsesToolCalls(
+  d: unknown,
+): { id: string; name: string; args: Record<string, unknown> }[] | undefined {
+  const out = (d as { output?: unknown })?.output;
+  if (!Array.isArray(out)) return undefined;
+  const calls = out
+    .filter(
+      (o): o is Record<string, unknown> =>
+        !!o && typeof o === "object" && (o as Record<string, unknown>).type === "function_call",
+    )
+    .map((o) => {
+      let args: Record<string, unknown> = {};
+      try {
+        args = o.arguments ? (JSON.parse(String(o.arguments)) as Record<string, unknown>) : {};
+      } catch {
+        args = {};
+      }
+      return { id: String(o.call_id ?? o.id ?? o.name), name: String(o.name), args };
+    });
+  return calls.length ? calls : undefined;
+}
+
+export function parseResponsesPayload(raw: string, fallbackModel: string): { content: string; model: string; toolCalls?: { id: string; name: string; args: Record<string, unknown> }[] | undefined } {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const fromOutput = (d: any): string =>
     d?.output_text ??
@@ -775,7 +798,8 @@ export function parseResponsesPayload(raw: string, fallbackModel: string): { con
       if (want && line.startsWith("data: ")) {
         try {
           const d = JSON.parse(line.slice(6));
-          return { content: fromOutput(d.response ?? d), model: d.response?.model ?? fallbackModel };
+          const rr = d.response ?? d;
+          return { content: fromOutput(rr), model: rr?.model ?? fallbackModel, toolCalls: extractResponsesToolCalls(rr) };
         } catch { break; }
       }
     }
@@ -789,7 +813,7 @@ export function parseResponsesPayload(raw: string, fallbackModel: string): { con
   }
   try {
     const d = JSON.parse(raw);
-    return { content: fromOutput(d), model: d.model ?? fallbackModel };
+    return { content: fromOutput(d), model: d.model ?? fallbackModel, toolCalls: extractResponsesToolCalls(d) };
   } catch {
     return { content: "", model: fallbackModel };
   }
@@ -808,6 +832,9 @@ export function responsesProvider(config: {
 
   return {
     name: "openai-responses",
+    // Responses API 原生支持 function tools;工具调用在终态响应里返回,
+    // 交给 smart-agent loop 在 stream-end 统一派发。
+    nativeToolCalls: "terminal",
     async chat(messages, options) {
       const sys = messages
         .filter((m) => m.role === "system")
@@ -829,6 +856,15 @@ export function responsesProvider(config: {
       if (config.reasoningEffort) body["reasoning"] = { effort: config.reasoningEffort };
       // Responses reasoning models reject `temperature`; only forward token cap.
       if (options?.maxTokens !== undefined) body["max_output_tokens"] = options.maxTokens;
+      // 原生 function tools(Responses API 的扁平 function 形态)。
+      if (options?.tools && options.tools.length > 0) {
+        body["tools"] = options.tools.map((t) => ({
+          type: "function",
+          name: t.name,
+          description: t.description,
+          parameters: t.parameters ?? { type: "object", properties: {} },
+        }));
+      }
 
       const res = await fetch(url, {
         method: "POST",
@@ -838,7 +874,17 @@ export function responsesProvider(config: {
       });
       const raw = await res.text();
       if (!res.ok) throw new Error(`Responses API error ${res.status}: ${raw.slice(0, 500)}`);
-      return parseResponsesPayload(raw, options?.model ?? defaultModel);
+      const parsed = parseResponsesPayload(raw, options?.model ?? defaultModel);
+      // Honour the toolCalls contract: present (possibly []) only when tools
+      // were advertised this turn, undefined otherwise — this drives the smart
+      // loop's defer-gating (undefined => text-parse fallback, [] => no call).
+      const toolsAdvertised = !!options?.tools?.length;
+      const toolCalls = toolsAdvertised ? (parsed.toolCalls ?? []) : undefined;
+      return {
+        content: parsed.content,
+        model: parsed.model,
+        ...(toolCalls !== undefined ? { toolCalls } : {}),
+      };
     },
   };
 }

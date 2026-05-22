@@ -103,3 +103,68 @@ describe("responsesProvider — response parsing", () => {
     await expect(p.chat([{ role: "user", content: "hi" }])).rejects.toThrow("Responses API error 429");
   });
 });
+
+describe("responsesProvider — native function-calling", () => {
+  const TOOL_JSON = JSON.stringify({
+    model: "gpt-5.5",
+    output: [
+      { type: "function_call", call_id: "call_1", name: "get_weather", arguments: '{"city":"sf"}' },
+    ],
+  });
+  const weatherTool = { name: "get_weather", description: "Get weather", parameters: { type: "object", properties: { city: { type: "string" } } } };
+
+  it("parseResponsesPayload extracts function_call tool calls (JSON)", () => {
+    expect(parseResponsesPayload(TOOL_JSON, "m").toolCalls).toEqual([
+      { id: "call_1", name: "get_weather", args: { city: "sf" } },
+    ]);
+  });
+
+  it("parseResponsesPayload extracts tool calls from an SSE completed event", () => {
+    const inner = JSON.stringify({
+      response: {
+        model: "m",
+        output: [{ type: "function_call", call_id: "c2", name: "search", arguments: JSON.stringify({ q: "x" }) }],
+      },
+    });
+    const sse = `event: response.completed\ndata: ${inner}\n\n`;
+    expect(parseResponsesPayload(sse, "m").toolCalls).toEqual([
+      { id: "c2", name: "search", args: { q: "x" } },
+    ]);
+  });
+
+  it("parseResponsesPayload returns undefined toolCalls for a plain-text payload", () => {
+    expect(parseResponsesPayload(JSON_OK, "m").toolCalls).toBeUndefined();
+  });
+
+  it("advertises tools in the Responses flat function format + sets nativeToolCalls", async () => {
+    const cap: { body?: any } = {};
+    globalThis.fetch = captureResponses(JSON_OK, cap as any);
+    const p = responsesProvider({ apiKey: "sk" });
+    expect(p.nativeToolCalls).toBe("terminal");
+    await p.chat([{ role: "user", content: "hi" }], { tools: [weatherTool] });
+    expect(cap.body.tools).toEqual([
+      { type: "function", name: "get_weather", description: "Get weather", parameters: { type: "object", properties: { city: { type: "string" } } } },
+    ]);
+  });
+
+  it("returns the model's tool calls when tools were advertised", async () => {
+    globalThis.fetch = captureResponses(TOOL_JSON, {});
+    const p = responsesProvider({ apiKey: "sk" });
+    const r = await p.chat([{ role: "user", content: "weather?" }], { tools: [weatherTool] });
+    expect(r.toolCalls).toEqual([{ id: "call_1", name: "get_weather", args: { city: "sf" } }]);
+  });
+
+  it("toolCalls is [] (not undefined) when tools advertised but none called", async () => {
+    globalThis.fetch = captureResponses(JSON_OK, {}); // plain text, no function_call
+    const p = responsesProvider({ apiKey: "sk" });
+    const r = await p.chat([{ role: "user", content: "hi" }], { tools: [weatherTool] });
+    expect(r.toolCalls).toEqual([]); // contract: advertised => present (possibly [])
+  });
+
+  it("omits toolCalls (undefined) when no tools were advertised", async () => {
+    globalThis.fetch = captureResponses(JSON_OK, {});
+    const p = responsesProvider({ apiKey: "sk" });
+    const r = await p.chat([{ role: "user", content: "hi" }]);
+    expect(r.toolCalls).toBeUndefined();
+  });
+});
