@@ -66,9 +66,23 @@ import type { HmrCoordinator, HmrTransport } from "./hmr.js";
 let _hmrCoordinator: HmrCoordinator | null = null;
 let _hmrTransport: HmrTransport | null = null;
 const DEV_SRC_DIR = path.dirname(fileURLToPath(import.meta.url));
-const REACT_SRC_DIR = path.resolve(DEV_SRC_DIR, "..", "..", "react", "src");
-const REACT_BROWSER_ENTRY = path.join(REACT_SRC_DIR, "browser.ts");
-const REACT_CLIENT_ENTRY = path.join(REACT_SRC_DIR, "client", "index.ts");
+// capstan-react supplies the browser/client/hydrate entries that each route's
+// hydration bundle is built from. In the monorepo we bundle its TypeScript
+// sources (packages/react/src). When capstan-dev is installed from npm,
+// capstan-react ships only compiled `dist` (.js) — its package `files` is
+// ["dist"] — so resolve the installed package and use its dist there instead
+// of assuming the monorepo's sibling `../../react/src` layout (in-repo only).
+function resolveCapstanReactEntryDir(): { dir: string; ext: string } {
+  const monorepoSrc = path.resolve(DEV_SRC_DIR, "..", "..", "react", "src");
+  if (existsSync(path.join(monorepoSrc, "browser.ts"))) {
+    return { dir: monorepoSrc, ext: ".ts" };
+  }
+  const pkgJsonPath = createRequire(import.meta.url).resolve("@zauso-ai/capstan-react/package.json");
+  return { dir: path.join(path.dirname(pkgJsonPath), "dist"), ext: ".js" };
+}
+const { dir: REACT_SRC_DIR, ext: REACT_ENTRY_EXT } = resolveCapstanReactEntryDir();
+const REACT_BROWSER_ENTRY = path.join(REACT_SRC_DIR, `browser${REACT_ENTRY_EXT}`);
+const REACT_CLIENT_ENTRY = path.join(REACT_SRC_DIR, "client", `index${REACT_ENTRY_EXT}`);
 const SHARED_REACT_MODULE = "/_capstan/client/vendor/react.js";
 const SHARED_REACT_DOM_MODULE = "/_capstan/client/vendor/react-dom.js";
 const SHARED_REACT_DOM_CLIENT_MODULE = "/_capstan/client/vendor/react-dom-client.js";
@@ -179,8 +193,8 @@ async function buildHydrationModule(
     const rel = path.relative(appRoot, filePath).replace(/\\/g, "/");
     return rel.startsWith(".") ? rel : `./${rel}`;
   };
-  const reactClientEntryImport = relativeImport(path.join(REACT_SRC_DIR, "client", "entry.ts"));
-  const reactHydrateImport = relativeImport(path.join(REACT_SRC_DIR, "hydrate.ts"));
+  const reactClientEntryImport = relativeImport(path.join(REACT_SRC_DIR, "client", `entry${REACT_ENTRY_EXT}`));
+  const reactHydrateImport = relativeImport(path.join(REACT_SRC_DIR, `hydrate${REACT_ENTRY_EXT}`));
   const layoutImports = route.layouts.map((layoutPath, index) => ({
     name: `Layout${index}`,
     importPath: relativeImport(layoutPath),
