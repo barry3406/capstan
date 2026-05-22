@@ -1,4 +1,5 @@
 import type { MemoryBackend, MemoryEntry, MemoryScope } from "./types.js";
+import { bm25Scores, bm25QueryTerms } from "./bm25.js";
 
 /**
  * Minimal SQLite connection interface.
@@ -101,23 +102,22 @@ export class SqliteMemoryBackend implements MemoryBackend {
 
     if (rows.length === 0) return [];
 
-    const queryTerms = text
-      .toLowerCase()
-      .split(/\W+/)
-      .filter((t) => t.length > 0);
+    const queryTerms = bm25QueryTerms(text);
 
-    const scored = rows.map((row) => {
-      const entry = rowToEntry(row);
-      const score = keywordOverlap(queryTerms, entry.content);
-      return { entry, score };
-    });
+    const entries = rows.map(rowToEntry);
+    // BM25 keyword relevance over the in-scope memories (the candidate set
+    // supplies the corpus statistics — IDF, average length).
+    const scores =
+      queryTerms.length > 0
+        ? bm25Scores(queryTerms, entries.map((e) => e.content))
+        : entries.map(() => 0);
 
+    const scored = entries.map((entry, i) => ({ entry, score: scores[i]! }));
     scored.sort((a, b) => b.score - a.score);
 
     // Filter zero-score entries when query terms exist (align with BuiltinMemoryBackend)
-    const filtered = queryTerms.length > 0
-      ? scored.filter((s) => s.score > 0)
-      : scored;
+    const filtered =
+      queryTerms.length > 0 ? scored.filter((s) => s.score > 0) : scored;
     return filtered.slice(0, k).map((s) => s.entry);
   }
 
@@ -163,21 +163,6 @@ function rowToEntry(row: RawRow): MemoryEntry {
     try { entry.metadata = JSON.parse(row.metadata) as Record<string, unknown>; } catch { /* corrupted — skip */ }
   }
   return entry;
-}
-
-/** Compute keyword overlap between query terms and a document string. */
-function keywordOverlap(queryTerms: string[], text: string): number {
-  const docTokens = new Set(
-    text
-      .toLowerCase()
-      .split(/\W+/)
-      .filter((t) => t.length > 0),
-  );
-  let hits = 0;
-  for (const term of queryTerms) {
-    if (docTokens.has(term)) hits++;
-  }
-  return queryTerms.length > 0 ? hits / queryTerms.length : 0;
 }
 
 /**

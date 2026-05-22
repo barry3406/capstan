@@ -8,6 +8,7 @@ import type {
   MemoryBackend,
   MemoryEmbedder,
 } from "./types.js";
+import { bm25Scores, bm25QueryTerms } from "./bm25.js";
 
 /** Compute a deterministic scope key */
 function scopeKey(scope: MemoryScope): string {
@@ -87,16 +88,15 @@ export class BuiltinMemoryBackend implements MemoryBackend {
     // If we have an embedder, do hybrid search
     if (this.embedder) {
       const [queryVec] = await this.embedder.embed([text]);
-      const scored = entries.map((e) => {
-        let score = 0;
-        if (e.embedding) {
-          score = 1 - cosineDistanceSimple(queryVec!, e.embedding);
-        }
-        // Keyword boost
-        const queryTerms = text.toLowerCase().split(/\W+/).filter((t) => t.length > 0);
-        const contentTerms = e.content.toLowerCase().split(/\W+/).filter((t) => t.length > 0);
-        const overlap = queryTerms.filter((t) => contentTerms.includes(t)).length;
-        score = score * 0.7 + (overlap / Math.max(queryTerms.length, 1)) * 0.3;
+      // BM25 keyword relevance over the candidate set (normalised to [0,1]),
+      // fused with vector cosine similarity (0.7 vector / 0.3 keyword).
+      const queryTerms = bm25QueryTerms(text);
+      const kw = bm25Scores(queryTerms, entries.map((e) => e.content));
+      const scored = entries.map((e, i) => {
+        const vec = e.embedding
+          ? 1 - cosineDistanceSimple(queryVec!, e.embedding)
+          : 0;
+        const score = vec * 0.7 + kw[i]! * 0.3;
         return { entry: e, score };
       });
       scored.sort((a, b) => b.score - a.score);
@@ -107,14 +107,11 @@ export class BuiltinMemoryBackend implements MemoryBackend {
       return results;
     }
 
-    // Keyword-only fallback
-    const queryTerms = text.toLowerCase().split(/\W+/).filter((t) => t.length > 0);
+    // Keyword-only fallback (BM25).
+    const queryTerms = bm25QueryTerms(text);
+    const kw = bm25Scores(queryTerms, entries.map((e) => e.content));
     const scored = entries
-      .map((e) => {
-        const contentTerms = e.content.toLowerCase().split(/\W+/).filter((t) => t.length > 0);
-        const overlap = queryTerms.filter((t) => contentTerms.includes(t)).length;
-        return { entry: e, score: overlap / Math.max(queryTerms.length, 1) };
-      })
+      .map((e, i) => ({ entry: e, score: kw[i]! }))
       .filter((s) => s.score > 0);
     scored.sort((a, b) => b.score - a.score);
     return scored.slice(0, k).map((s) => s.entry);
