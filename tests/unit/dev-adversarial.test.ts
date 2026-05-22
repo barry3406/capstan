@@ -157,6 +157,9 @@ describe("adversarial — Concurrent requests", () => {
     }
   });
 
+  // 50 concurrent requests through the full dev build + fetch path is heavy;
+  // give generous headroom over Bun's 5s default so it doesn't flake under
+  // machine load (it takes ~5-6s on a busy machine).
   it("handles mix of success and error concurrent requests", async () => {
     const mods = {
       "/tmp/app/routes/ok.api.ts": {
@@ -183,7 +186,7 @@ describe("adversarial — Concurrent requests", () => {
     const statuses = responses.map((r) => r.status);
     expect(statuses.filter((s) => s === 200).length).toBe(25);
     expect(statuses.filter((s) => s === 500).length).toBe(25);
-  });
+  }, 15000);
 });
 
 // ===================================================================
