@@ -8,6 +8,8 @@ export type { SkillFile } from "./types.js";
 export { BuiltinMemoryBackend, createMemoryAccessor } from "./memory.js";
 export { SqliteMemoryBackend, createSqliteMemoryStore } from "./memory-sqlite.js";
 export type { SqliteConnection, SqliteStatement } from "./memory-sqlite.js";
+export { setTokenizer, defaultTokenizer } from "./tokenize.js";
+export type { Tokenizer } from "./tokenize.js";
 export { LlmMemoryReconciler, reconcileAndStore, parseReconcileResponse } from "./memory-reconciler.js";
 
 // === Types (export type only) ===

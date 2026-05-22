@@ -252,19 +252,20 @@ describe("hybridSearch", () => {
   });
 
   it("pure keyword search (vectorWeight: 0, keywordWeight: 1)", () => {
-    // Only keyword matters. "algorithms" appears in doc1 and doc3.
+    // Only keyword matters. "algorithms" appears in doc1 (3 words) and doc3
+    // (4 words); BM25 length-normalisation ranks the shorter doc1 above doc3.
     const results = hybridSearch("algorithms", [1, 0, 0], items, {
       k: 4,
       keywordWeight: 1,
       vectorWeight: 0,
     });
-    // doc1 and doc3 should have score 1.0, others 0
     const doc1 = results.find((r) => r.id === "doc1")!;
     const doc3 = results.find((r) => r.id === "doc3")!;
     const doc2 = results.find((r) => r.id === "doc2")!;
-    expect(doc1.score).toBeCloseTo(1.0, 10);
-    expect(doc3.score).toBeCloseTo(1.0, 10);
-    expect(doc2.score).toBeCloseTo(0, 10);
+    expect(doc1.score).toBeCloseTo(1.0, 10); // top match -> normalised to 1.0
+    expect(doc3.score).toBeGreaterThan(0);
+    expect(doc1.score).toBeGreaterThan(doc3.score);
+    expect(doc2.score).toBeCloseTo(0, 10); // no "algorithms"
   });
 
   it("pure vector search (keywordWeight: 0, vectorWeight: 1)", () => {
@@ -312,19 +313,21 @@ describe("hybridSearch", () => {
     expect(doc1.score).toBeCloseTo(1.0, 10);
   });
 
-  it("partial keyword overlap gives proportional score", () => {
-    // "machine learning data" => 3 terms
-    // doc1 "machine learning algorithms" matches 2/3
-    // doc3 "algorithms and data structures" matches 1/3
-    const results = hybridSearch("machine learning data", [0, 0, 0], items, {
+  it("more matching query terms rank higher (BM25 term coverage)", () => {
+    // "machine learning": doc1 & doc4 match both terms; doc2 matches only
+    // "learning"; doc3 matches neither. (Both query terms have similar IDF, so
+    // coverage decides — unlike a rare term that can dominate on its own.)
+    const results = hybridSearch("machine learning", [0, 0, 0], items, {
       k: 4,
       keywordWeight: 1,
       vectorWeight: 0,
     });
     const doc1 = results.find((r) => r.id === "doc1")!;
+    const doc2 = results.find((r) => r.id === "doc2")!;
     const doc3 = results.find((r) => r.id === "doc3")!;
-    expect(doc1.score).toBeCloseTo(2 / 3, 10);
-    expect(doc3.score).toBeCloseTo(1 / 3, 10);
+    expect(doc1.score).toBeGreaterThan(doc2.score); // 2 terms beats 1
+    expect(doc2.score).toBeGreaterThan(0); // matches "learning"
+    expect(doc3.score).toBeCloseTo(0, 10); // matches neither
   });
 
   it("case-insensitive keyword matching", () => {
@@ -407,5 +410,95 @@ describe("hybridSearch", () => {
     // "automatique" matches u1
     expect(results[0]!.id).toBe("u1");
     expect(results[0]!.score).toBeCloseTo(1.0, 10);
+  });
+
+  it("segments CJK so a query matches by shared word", () => {
+    const items: HybridItem[] = [
+      { id: "c1", text: "机器学习很有趣", vector: [1, 0] },
+      { id: "c2", text: "今天天气不错", vector: [0, 1] },
+    ];
+    // "机器学习" segments to 机器/学习 (ICU); c1 shares both words, c2 none.
+    const results = hybridSearch("机器学习", [1, 0], items, {
+      k: 2,
+      keywordWeight: 1,
+      vectorWeight: 0,
+    });
+    expect(results[0]!.id).toBe("c1");
+    expect(results[0]!.score).toBeCloseTo(1.0, 10);
+    expect(results.find((r) => r.id === "c2")!.score).toBeCloseTo(0, 10);
+  });
+
+  it("splits dotted identifiers so a query for a part matches", () => {
+    const items: HybridItem[] = [
+      { id: "f1", text: "see config.yaml for settings", vector: [1, 0] },
+      { id: "f2", text: "nothing relevant here", vector: [0, 1] },
+    ];
+    // "config.yaml" -> config / yaml, so a "config" query matches f1.
+    const results = hybridSearch("config", [1, 0], items, {
+      k: 2,
+      keywordWeight: 1,
+      vectorWeight: 0,
+    });
+    expect(results[0]!.id).toBe("f1");
+    expect(results[0]!.score).toBeCloseTo(1.0, 10);
+    expect(results.find((r) => r.id === "f2")!.score).toBeCloseTo(0, 10);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// hybridSearch — BM25 keyword properties
+// ---------------------------------------------------------------------------
+
+describe("hybridSearch — BM25 keyword properties", () => {
+  const kwOnly = { k: 10, keywordWeight: 1, vectorWeight: 0 };
+
+  it("term-frequency saturation: more occurrences score higher, sub-linearly", () => {
+    // Equal-length docs (4 tokens) so length-normalisation is identical;
+    // only tf("x") varies: 1, 2, 3.
+    const docs: HybridItem[] = [
+      { id: "tf1", text: "x f1 f2 f3", vector: [1, 0] },
+      { id: "tf2", text: "x x f4 f5", vector: [1, 0] },
+      { id: "tf3", text: "x x x f6", vector: [1, 0] },
+    ];
+    const r = hybridSearch("x", [1, 0], docs, kwOnly);
+    const s = (id: string) => r.find((x) => x.id === id)!.score;
+    // monotonic increasing in tf
+    expect(s("tf3")).toBeGreaterThan(s("tf2"));
+    expect(s("tf2")).toBeGreaterThan(s("tf1"));
+    // but saturating: each extra occurrence adds less than the previous
+    expect(s("tf2") - s("tf1")).toBeGreaterThan(s("tf3") - s("tf2"));
+  });
+
+  it("IDF: a rare query term outweighs a common one", () => {
+    // "common" is in 3/4 docs, "rare" in 1/4; same tf and length per doc.
+    const docs: HybridItem[] = [
+      { id: "rare", text: "rare aa bb", vector: [1, 0] },
+      { id: "c1", text: "common cc dd", vector: [1, 0] },
+      { id: "c2", text: "common ee ff", vector: [1, 0] },
+      { id: "c3", text: "common gg hh", vector: [1, 0] },
+    ];
+    const r = hybridSearch("rare common", [1, 0], docs, kwOnly);
+    const rare = r.find((x) => x.id === "rare")!.score;
+    const common = r.find((x) => x.id === "c1")!.score;
+    expect(rare).toBeGreaterThan(common); // rarer term carries more weight
+    expect(common).toBeGreaterThan(0);
+  });
+
+  it("b controls document-length normalisation (b=0 disables it)", () => {
+    const docs: HybridItem[] = [
+      { id: "short", text: "term aa", vector: [1, 0] },
+      { id: "long", text: "term bb cc dd ee", vector: [1, 0] },
+    ];
+    // Default b=0.75: the shorter doc is favoured for the same single match.
+    const def = hybridSearch("term", [1, 0], docs, kwOnly);
+    expect(def.find((x) => x.id === "short")!.score).toBeGreaterThan(
+      def.find((x) => x.id === "long")!.score,
+    );
+    // b=0: length is ignored, so same tf/IDF => equal scores.
+    const b0 = hybridSearch("term", [1, 0], docs, { ...kwOnly, bm25: { b: 0 } });
+    expect(b0.find((x) => x.id === "short")!.score).toBeCloseTo(
+      b0.find((x) => x.id === "long")!.score,
+      10,
+    );
   });
 });

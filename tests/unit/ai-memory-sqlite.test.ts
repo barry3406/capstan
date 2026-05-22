@@ -173,13 +173,21 @@ describe("SqliteMemoryBackend", () => {
     expect(results.length).toBe(100);
   });
 
-  it("empty query string returns entries", async () => {
+  it("empty query string returns all entries (bulk fetch up to k)", async () => {
     await backend.store({ content: "alpha", scope });
     await backend.store({ content: "beta", scope });
+    // text === "" is the reconciler's bulk-fetch path: return everything up to k.
     const results = await backend.query(scope, "", 10);
-    // Empty query has zero-length terms, so keywordOverlap returns 0 for all entries.
-    // All entries get equal score (0), so all are returned up to k.
     expect(results.length).toBe(2);
+  });
+
+  it("punctuation-only query (no usable terms) returns no results", async () => {
+    await backend.store({ content: "alpha", scope });
+    await backend.store({ content: "beta", scope });
+    // Non-empty but tokenises to zero terms => matches nothing => [] (distinct
+    // from the empty-string bulk-fetch case; aligns with BuiltinMemoryBackend).
+    const results = await backend.query(scope, "??? !!!", 10);
+    expect(results).toEqual([]);
   });
 
   it("very long content is stored correctly (10KB+)", async () => {

@@ -2266,8 +2266,21 @@ function generateDrizzleSchema(models: ModelDefinition[], provider: DbProvider):
 function defineEmbedding(modelName: string, config: { dimensions: number; adapter: EmbeddingAdapter }): EmbeddingInstance
 function openaiEmbeddings(opts: { apiKey: string; model?: string; baseUrl?: string }): EmbeddingAdapter
 function cosineDistance(a: number[], b: number[]): number
-function findNearest(items: { id: string; vector: number[] }[], query: number[], k?: number): { id: string; score: number }[]
-function hybridSearch(items: { id: string; vector: number[]; text: string }[], query: { vector: number[]; text: string }, k?: number): { id: string; score: number }[]
+function findNearest(query: number[], items: { id: string; vector: number[] }[], k: number): { id: string; score: number }[]
+function hybridSearch(query: string, queryVector: number[], items: { id: string; text: string; vector: number[] }[], opts?: HybridSearchOptions): { id: string; score: number }[]
+// HybridSearchOptions: { k?: number; keywordWeight?: number; vectorWeight?: number; bm25?: { k1?: number; b?: number } }
+function setTokenizer(tokenizer?: (text: string) => string[]): void  // override the keyword tokeniser; call with no arg to reset
+type Tokenizer = (text: string) => string[]
+```
+
+`hybridSearch` fuses **Okapi BM25** keyword relevance with vector cosine similarity. The keyword component is real BM25 — term-frequency saturation (`k1`, default 1.5), document-length normalisation (`b`, default 0.75), and probabilistic IDF computed over the candidate `items` — normalised to [0, 1] and combined via `keywordWeight` / `vectorWeight` (default 0.3 / 0.7).
+
+**Tokenisation.** The keyword side tokenises with the runtime's built-in `Intl.Segmenter` (ICU word segmentation): it segments CJK / Japanese / Thai by dictionary (`机器学习` → `机器` / `学习`) as well as space-delimited languages, keeps numbers, and splits code identifiers / filenames on internal punctuation (`config.yaml` → `config` / `yaml`) — no extra dependency. To use a dictionary segmenter such as jieba, call `setTokenizer` once at startup (the same hook is exported from `@zauso-ai/capstan-ai` for memory recall):
+
+```typescript
+import { setTokenizer } from "@zauso-ai/capstan-db";
+import { cut } from "@node-rs/jieba";
+setTokenizer((text) => cut(text.toLowerCase(), true)); // HMM segmentation
 ```
 
 ### Data Preparation

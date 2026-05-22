@@ -24,6 +24,8 @@ export { defineEmbedding, openaiEmbeddings } from "./embedding.js";
 export type { EmbeddingAdapter, EmbeddingConfig, OpenAIEmbeddingOptions } from "./embedding.js";
 export { cosineDistance, findNearest, hybridSearch } from "./search.js";
 export type { VectorItem, ScoredResult, HybridItem, HybridSearchOptions } from "./search.js";
+export { setTokenizer, defaultTokenizer } from "./tokenize.js";
+export type { Tokenizer } from "./tokenize.js";
 export { prepareCreateData, prepareUpdateData } from "./write.js";
 export type { PrepareWriteOptions } from "./write.js";
 export type {
