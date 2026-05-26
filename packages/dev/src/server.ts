@@ -112,6 +112,7 @@ interface CachedBundle { code: string; etag: string }
 const __hydrateCache = new Map<string, CachedBundle>();
 let __vendorCache: CachedBundle | null = null;
 const __sharedShimCache = new Map<string, CachedBundle>();
+const __routeModuleCache = new Map<string, CachedBundle>();
 
 function makeEtag(code: string): string {
   return `W/"${createHash("sha1").update(code).digest("hex").slice(0, 16)}"`;
@@ -419,6 +420,93 @@ async function buildVendorBootstrap(): Promise<CachedBundle> {
   const code = result.outputFiles[0]?.text ?? "";
   __vendorCache = { code, etag: makeEtag(code) };
   return __vendorCache;
+}
+
+/**
+ * Per-route lazy module:导出该 route 的 Page default,不带 hydrate bootstrap。
+ * 给宿主应用做客户端导航用 —— digital_staff 的 admin pane routing 是
+ * `await import("/_capstan/client/route-module.js?path=<path>")` 然后 swap
+ * `mod.default`,SSR shell 不变。
+ *
+ * 与 hydrate-current.js 的差异:hydrate 入口 + 调 bootstrapClient/hydrateCapstanPage;
+ * 这里只 re-export Page,体积更小。React 走 SHARED_* shim,vendor bootstrap 也
+ * 副作用 import 保险一下(实际 _layout 已 hydrate 完时 window.__CAPSTAN_SHARED_*__
+ * 早就在,bootstrap 第二次 import 走浏览器 module cache 不再执行)。
+ */
+async function buildRouteModule(
+  route: RouteEntry,
+  appRoot: string,
+): Promise<CachedBundle> {
+  const cacheKey = IS_PRODUCTION
+    ? `${route.filePath}:${(() => { try { return statSync(route.filePath).mtimeMs; } catch { return 0; } })()}`
+    : null;
+  if (cacheKey) {
+    const hit = __routeModuleCache.get(cacheKey);
+    if (hit) return hit;
+  }
+
+  const esbuild = await import("esbuild");
+  const relativeImport = (filePath: string): string => {
+    const rel = path.relative(appRoot, filePath).replace(/\\/g, "/");
+    return rel.startsWith(".") ? rel : `./${rel}`;
+  };
+
+  const contents = [
+    `import ${JSON.stringify(`${VENDOR_BOOTSTRAP_MODULE}?v=${VENDOR_VERSION}`)};`,
+    `import Page from ${JSON.stringify(relativeImport(route.filePath))};`,
+    `export default Page;`,
+  ].join("\n");
+
+  const sharedReactExternalResolver: import("esbuild").Plugin = {
+    name: "capstan-route-module-shared-react-external",
+    setup(build) {
+      build.onResolve({ filter: /^\/_capstan\/client\// }, (args) => ({ path: args.path, external: true }));
+      build.onResolve({ filter: /^react$/ }, () => ({ path: SHARED_REACT_MODULE, external: true }));
+      build.onResolve({ filter: /^react-dom$/ }, () => ({ path: SHARED_REACT_DOM_MODULE, external: true }));
+      build.onResolve({ filter: /^react-dom\/client$/ }, () => ({ path: SHARED_REACT_DOM_CLIENT_MODULE, external: true }));
+      build.onResolve({ filter: /^react\/jsx-runtime$/ }, () => ({ path: SHARED_REACT_JSX_RUNTIME_MODULE, external: true }));
+      build.onResolve({ filter: /^react\/jsx-dev-runtime$/ }, () => ({ path: SHARED_REACT_JSX_RUNTIME_MODULE, external: true }));
+      build.onResolve({ filter: /^@zauso-ai\/capstan-react$/ }, () => ({ path: REACT_BROWSER_ENTRY }));
+      build.onResolve({ filter: /^@zauso-ai\/capstan-react\/client$/ }, () => ({ path: REACT_CLIENT_ENTRY }));
+      build.onResolve({ filter: /^(\.|\.\.\/|\/).*\.js$/ }, (args) => {
+        const resolved = path.isAbsolute(args.path)
+          ? args.path
+          : path.resolve(args.resolveDir, args.path);
+        if (existsSync(resolved)) return { path: resolved };
+        for (const ext of [".ts", ".tsx", ".js", ".jsx", ".mjs"]) {
+          const candidate = resolved.slice(0, -3) + ext;
+          if (existsSync(candidate)) return { path: candidate };
+        }
+        return null;
+      });
+    },
+  };
+
+  const result = await esbuild.build({
+    stdin: {
+      contents,
+      resolveDir: appRoot,
+      sourcefile: "__capstan_route_module_entry__.tsx",
+      loader: "tsx",
+    },
+    bundle: true,
+    write: false,
+    format: "esm",
+    platform: "browser",
+    target: "es2022",
+    jsx: "automatic",
+    jsxDev: !IS_PRODUCTION,
+    minify: IS_PRODUCTION,
+    sourcemap: IS_PRODUCTION ? false : "inline",
+    legalComments: "none",
+    define: { "process.env.NODE_ENV": JSON.stringify(process.env.NODE_ENV ?? "development") },
+    plugins: [sharedReactExternalResolver],
+  });
+
+  const code = result.outputFiles[0]?.text ?? "";
+  const bundle: CachedBundle = { code, etag: makeEtag(code) };
+  if (cacheKey) __routeModuleCache.set(cacheKey, bundle);
+  return bundle;
 }
 
 async function buildSharedReactModule(): Promise<string> {
@@ -1871,6 +1959,30 @@ export async function buildRuntimeApp(
         const message = error instanceof Error ? error.message : String(error);
         console.error("[capstan] Failed to build hydration module:", message);
         return errorResponse(`Failed to build hydration module: ${message}`);
+      }
+    }
+
+    // ── 1b. route-module.js:per-route lazy Page export(供宿主 client-side
+    //        pane routing dynamic import),内存 cache + ETag 304 短路 ──
+    if (c.req.path === "/_capstan/client/route-module.js") {
+      const url = new URL(c.req.url);
+      const requestedPath = url.searchParams.get("path") || "/";
+      const matched = matchRoute(manifest, "GET", requestedPath);
+      if (!matched || matched.route.type !== "page") {
+        return new Response("Not Found", { status: 404 });
+      }
+      try {
+        const { code, etag } = await buildRouteModule(
+          matched.route,
+          config.rootDir ?? process.cwd(),
+        );
+        const notModified = conditionalGet(c, etag);
+        if (notModified) return notModified;
+        return new Response(code, { status: 200, headers: revalidateJsHeaders(etag) });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error("[capstan] Failed to build route module:", message);
+        return errorResponse(`Failed to build route module: ${message}`);
       }
     }
 
