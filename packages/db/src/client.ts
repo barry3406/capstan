@@ -173,7 +173,20 @@ async function createPostgresDatabase(url: string): Promise<DatabaseInstance> {
     );
   }
 
-  const pool = new Pool({ connectionString: url });
+  // pg pool 必须显式 tune,默认 max=10 在 prod 高并发或 SSH 隧道场景下问题大:
+  //   - 隧道 / NAT / 防火墙杀空闲连接 → 下次请求 1-3s 重连阻塞(keepAlive 防)
+  //   - max=10 高并发直接 pool 耗尽 → 请求排队
+  //   - 没 statement_timeout 时跑飞的查询拖死整个 pool
+  // 用户可通过 DATABASE_POOL_MAX / DATABASE_STATEMENT_TIMEOUT_MS 等 env 覆盖。
+  const pool = new Pool({
+    connectionString: url,
+    max: Number(process.env.DATABASE_POOL_MAX ?? 30),
+    idleTimeoutMillis: Number(process.env.DATABASE_IDLE_TIMEOUT_MS ?? 30_000),
+    connectionTimeoutMillis: Number(process.env.DATABASE_CONNECTION_TIMEOUT_MS ?? 5_000),
+    statement_timeout: Number(process.env.DATABASE_STATEMENT_TIMEOUT_MS ?? 10_000),
+    keepAlive: true,
+    keepAliveInitialDelayMillis: 10_000,
+  });
 
   const db = drizzle({ client: pool });
   const rootAdapter: SqlRuntimeAdapter = {

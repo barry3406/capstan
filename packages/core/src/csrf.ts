@@ -102,11 +102,18 @@ export function csrfProtection() {
 
       // Set the cookie and header after downstream handlers have run so that
       // the response object already exists.
-      c.header(CSRF_HEADER_NAME, token);
-      c.header(
-        "Set-Cookie",
-        `${CSRF_COOKIE_NAME}=${token}; Path=/; SameSite=Lax`,
-      );
+      // 兼容路径:c.res 已存在(已 await next() 走完)时直接走 Headers API,
+      // 否则回落 c.header({append:true})。曾在 Hono 早期 c.header append 被
+      // finalize-clone 路径吃掉的实际事故(用户 Dockerfile sed 修过这块)再发
+      // 一次,这次上游用最稳的做法。
+      const csrfCookie = `${CSRF_COOKIE_NAME}=${token}; Path=/; SameSite=Lax`;
+      if (c.res?.headers) {
+        c.res.headers.set(CSRF_HEADER_NAME, token);
+        c.res.headers.append("Set-Cookie", csrfCookie);
+      } else {
+        c.header(CSRF_HEADER_NAME, token);
+        c.header("Set-Cookie", csrfCookie, { append: true });
+      }
     }
   };
 }

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { matchRoute } from "@zauso-ai/capstan-router/runtime";
@@ -235,16 +236,26 @@ function cloneBufferSource(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
 
 async function serveProvidedAsset(
   asset: RuntimeAssetRecord | null,
+  c?: { req: { header: (k: string) => string | undefined } },
 ): Promise<Response | null> {
   if (!asset) {
     return null;
   }
-
-  return new Response(cloneBufferSource(await materializeAsset(asset)), {
+  const body = cloneBufferSource(await materializeAsset(asset));
+  const etag = `W/"${createHash("sha1").update(new Uint8Array(body)).digest("hex").slice(0, 16)}"`;
+  const inm = c?.req.header("if-none-match");
+  if (inm && inm === etag) {
+    return new Response(null, {
+      status: 304,
+      headers: { ETag: etag, "Cache-Control": "public, max-age=0, must-revalidate" },
+    });
+  }
+  return new Response(body, {
     status: 200,
     headers: {
       "Content-Type": asset.contentType ?? "application/octet-stream",
-      "Cache-Control": "no-cache",
+      "Cache-Control": "public, max-age=0, must-revalidate",
+      ETag: etag,
     },
   });
 }
@@ -1210,12 +1221,22 @@ export async function buildPortableRuntimeApp(
     void ops.recordHealthSnapshot(healthSnapshotInput).catch(() => void 0);
   }
 
-  app.get("/_capstan/client.js", () => {
+  // capstan client bootstrap 是模块级静态字符串,ETag 算一次永久 cache
+  const __clientBootstrapEtag = `W/"${createHash("sha1").update(CAPSTAN_CLIENT_BOOTSTRAP).digest("hex").slice(0, 16)}"`;
+  app.get("/_capstan/client.js", (c) => {
+    const inm = c.req.header("if-none-match");
+    if (inm === __clientBootstrapEtag) {
+      return new Response(null, {
+        status: 304,
+        headers: { ETag: __clientBootstrapEtag, "Cache-Control": "public, max-age=0, must-revalidate" },
+      });
+    }
     return new Response(CAPSTAN_CLIENT_BOOTSTRAP, {
       status: 200,
       headers: {
         "Content-Type": "application/javascript; charset=utf-8",
-        "Cache-Control": "no-cache",
+        "Cache-Control": "public, max-age=0, must-revalidate",
+        ETag: __clientBootstrapEtag,
       },
     });
   });
@@ -1223,7 +1244,7 @@ export async function buildPortableRuntimeApp(
   app.get("/_capstan/client/*", async (c) => {
     const assetPath = c.req.path.slice("/_capstan/client/".length);
     const asset = await config.assetProvider?.readClientAsset?.(assetPath);
-    return (await serveProvidedAsset(asset ?? null)) ?? new Response("Not Found", { status: 404 });
+    return (await serveProvidedAsset(asset ?? null, c)) ?? new Response("Not Found", { status: 404 });
   });
 
   app.get("/.well-known/capstan.json", (c) => {
@@ -1414,7 +1435,7 @@ export async function buildPortableRuntimeApp(
   app.get("*", async (c) => {
     const urlPath = new URL(c.req.url).pathname;
     const publicAsset = await config.assetProvider?.readPublicAsset?.(urlPath);
-    const assetResponse = await serveProvidedAsset(publicAsset ?? null);
+    const assetResponse = await serveProvidedAsset(publicAsset ?? null, c);
     if (assetResponse) {
       return assetResponse;
     }

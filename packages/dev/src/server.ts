@@ -1,5 +1,6 @@
 import { access, readFile } from "node:fs/promises";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -87,6 +88,59 @@ const SHARED_REACT_MODULE = "/_capstan/client/vendor/react.js";
 const SHARED_REACT_DOM_MODULE = "/_capstan/client/vendor/react-dom.js";
 const SHARED_REACT_DOM_CLIENT_MODULE = "/_capstan/client/vendor/react-dom-client.js";
 const SHARED_REACT_JSX_RUNTIME_MODULE = "/_capstan/client/vendor/react-jsx-runtime.js";
+const VENDOR_BOOTSTRAP_MODULE = "/_capstan/client/vendor/bootstrap.js";
+
+// 生产模式 flag。控制 esbuild minify / sourcemap / jsxDev,以及客户端 bundle
+// 是否走 React production.js(否则永远打 development 包 ~990KB)。
+const IS_PRODUCTION = (process.env.NODE_ENV ?? "development") === "production";
+
+// vendor bootstrap 内容只随 capstan-dev 版本 + NODE_ENV 变化,URL 带
+// ?v=<VENDOR_VERSION> 后可 immutable cache 一年。
+const VENDOR_VERSION = ((): string => {
+  try {
+    const pkgPath = path.resolve(DEV_SRC_DIR, "..", "package.json");
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as { version?: string };
+    return `${pkg.version ?? "0"}.${process.env.NODE_ENV ?? "dev"}`;
+  } catch {
+    return `unknown.${process.env.NODE_ENV ?? "dev"}`;
+  }
+})();
+
+// Hydration / vendor / shim bundle 的内存 cache —— 避免每请求都重跑 esbuild
+// (之前每请求 100-800ms,prod 流量上来直接打爆 CPU)。
+interface CachedBundle { code: string; etag: string }
+const __hydrateCache = new Map<string, CachedBundle>();
+let __vendorCache: CachedBundle | null = null;
+const __sharedShimCache = new Map<string, CachedBundle>();
+
+function makeEtag(code: string): string {
+  return `W/"${createHash("sha1").update(code).digest("hex").slice(0, 16)}"`;
+}
+
+/** 浏览器 If-None-Match 命中 → 304 短路,不再传 body。 */
+function conditionalGet(c: { req: { header: (k: string) => string | undefined } }, etag: string): Response | null {
+  const inm = c.req.header("if-none-match");
+  if (inm && inm === etag) {
+    return new Response(null, {
+      status: 304,
+      headers: { ETag: etag, "Cache-Control": "public, max-age=0, must-revalidate" },
+    });
+  }
+  return null;
+}
+
+const JS_CONTENT_TYPE = "application/javascript; charset=utf-8";
+const IMMUTABLE_JS_HEADERS = {
+  "Content-Type": JS_CONTENT_TYPE,
+  "Cache-Control": "public, max-age=31536000, immutable",
+};
+function revalidateJsHeaders(etag: string): Record<string, string> {
+  return {
+    "Content-Type": JS_CONTENT_TYPE,
+    "Cache-Control": "public, max-age=0, must-revalidate",
+    ETag: etag,
+  };
+}
 
 function getHmrScript(port: number): string {
   if (_hmrCoordinator) {
@@ -184,10 +238,40 @@ function injectManifest(html: string, manifest: RouteManifest): string {
   return html + script;
 }
 
+/**
+ * Per-route hydration bundle:加载当前 route 的 Page + Layouts + capstan-react
+ * client。React / react-dom / jsx-runtime 走 SHARED_*_MODULE shim **external**,
+ * 从浏览器已加载的 vendor bootstrap re-export(见 buildVendorBootstrap)—— 不再
+ * 把整份 React 打进每个 hydrate.js,跨 route 共享一份(浏览器缓存命中即 0 下载)。
+ *
+ * 内存 cache 按 route.filePath + 所有 layout 的 mtime 失效,避免每请求都重跑
+ * esbuild(之前每请求 100-800ms,prod 流量上来 CPU 100%)。HMR / 文件变化时
+ * mtime 变 → cache key 变 → 重 build。
+ */
 async function buildHydrationModule(
   route: RouteEntry,
   appRoot: string,
-): Promise<string> {
+): Promise<CachedBundle> {
+  // dev 模式不 cache:user 改组件深层 import 的文件(非 layout 的子组件)mtime
+  // 变化进不了 cache key,会让浏览器永远看到 stale bundle、HMR 失效;dev 期
+  // 每请求 ~100-500ms 重 build 也可接受。prod 没有 HMR + 文件稳定 → cache 安全
+  // 且必要(否则每请求重 build 直接 CPU 100%)。
+  const cacheKey = IS_PRODUCTION
+    ? [route.filePath, ...route.layouts]
+        .map((p) => {
+          try {
+            return `${p}:${statSync(p).mtimeMs}`;
+          } catch {
+            return p;
+          }
+        })
+        .join("|")
+    : null;
+  if (cacheKey) {
+    const hit = __hydrateCache.get(cacheKey);
+    if (hit) return hit;
+  }
+
   const esbuild = await import("esbuild");
   const relativeImport = (filePath: string): string => {
     const rel = path.relative(appRoot, filePath).replace(/\\/g, "/");
@@ -200,68 +284,45 @@ async function buildHydrationModule(
     importPath: relativeImport(layoutPath),
   }));
   const contents = [
-    `import * as SharedReact from "react";`,
-    `import * as SharedReactDom from "react-dom";`,
-    `import * as SharedReactDomClient from "react-dom/client";`,
-    `import * as SharedJsxRuntime from "react/jsx-runtime";`,
+    // 副作用 import:先拉 vendor bootstrap(它 inline React + 写 window),
+    // 之后下面的 react / react-dom 解析走 SHARED_*_MODULE shim,从 window
+    // re-export。URL 含 ?v=<VENDOR_VERSION>,可 immutable cache 一年。
+    `import ${JSON.stringify(`${VENDOR_BOOTSTRAP_MODULE}?v=${VENDOR_VERSION}`)};`,
     `import { bootstrapClient } from ${JSON.stringify(reactClientEntryImport)};`,
     `import { hydrateCapstanPage } from ${JSON.stringify(reactHydrateImport)};`,
     `import Page from ${JSON.stringify(relativeImport(route.filePath))};`,
     ...layoutImports.map(({ name, importPath }) => `import ${name} from ${JSON.stringify(importPath)};`),
     `bootstrapClient();`,
-    `window.__CAPSTAN_SHARED_REACT__ ??= SharedReact;`,
-    `window.__CAPSTAN_SHARED_REACT_DOM__ ??= SharedReactDom;`,
-    `window.__CAPSTAN_SHARED_REACT_DOM_CLIENT__ ??= SharedReactDomClient;`,
-    `window.__CAPSTAN_SHARED_JSX_RUNTIME__ ??= SharedJsxRuntime;`,
     `const root = document.getElementById("capstan-root") ?? (document.querySelector("[data-capstan-layout], [data-capstan-outlet]") ? document : null);`,
     `const data = window.__CAPSTAN_DATA__;`,
     `if (root && data) hydrateCapstanPage(root, Page, [${layoutImports.map(({ name }) => name).join(", ")}], data);`,
   ].join("\n");
 
-  const jsExtensionResolver: import("esbuild").Plugin = {
-    name: "capstan-js-extension-resolver",
+  // react / react-dom / jsx-runtime 走 external SHARED_*_MODULE shim
+  // (浏览器单文件 + immutable cache 跨路由共享)。capstan-react 内部模块仍
+  // inline(项目代码量小,跨 route 重叠小,inline 简单)。
+  const sharedReactExternalResolver: import("esbuild").Plugin = {
+    name: "capstan-hydration-shared-react-external",
     setup(build) {
-      build.onResolve({ filter: /^react$/ }, () => ({
-        path: FRAMEWORK_BROWSER_REACT_ENTRY,
-      }));
-
-      build.onResolve({ filter: /^react-dom$/ }, () => ({
-        path: FRAMEWORK_BROWSER_REACT_DOM_ENTRY,
-      }));
-
-      build.onResolve({ filter: /^react-dom\/client$/ }, () => ({
-        path: FRAMEWORK_BROWSER_REACT_DOM_CLIENT_ENTRY,
-      }));
-
-      build.onResolve({ filter: /^react\/jsx-runtime$/ }, () => ({
-        path: FRAMEWORK_BROWSER_REACT_JSX_RUNTIME_ENTRY,
-      }));
-
-      build.onResolve({ filter: /^react\/jsx-dev-runtime$/ }, () => ({
-        path: FRAMEWORK_BROWSER_REACT_JSX_DEV_RUNTIME_ENTRY,
-      }));
-
-      build.onResolve({ filter: /^@zauso-ai\/capstan-react$/ }, () => ({
-        path: REACT_BROWSER_ENTRY,
-      }));
-
-      build.onResolve({ filter: /^@zauso-ai\/capstan-react\/client$/ }, () => ({
-        path: REACT_CLIENT_ENTRY,
-      }));
-
+      // 任何 /_capstan/client/... URL(如 vendor bootstrap 副作用 import)→ external,
+      // 让浏览器直接去 fetch,不让 esbuild 尝试当文件路径解析。
+      build.onResolve({ filter: /^\/_capstan\/client\// }, (args) => ({ path: args.path, external: true }));
+      build.onResolve({ filter: /^react$/ }, () => ({ path: SHARED_REACT_MODULE, external: true }));
+      build.onResolve({ filter: /^react-dom$/ }, () => ({ path: SHARED_REACT_DOM_MODULE, external: true }));
+      build.onResolve({ filter: /^react-dom\/client$/ }, () => ({ path: SHARED_REACT_DOM_CLIENT_MODULE, external: true }));
+      build.onResolve({ filter: /^react\/jsx-runtime$/ }, () => ({ path: SHARED_REACT_JSX_RUNTIME_MODULE, external: true }));
+      build.onResolve({ filter: /^react\/jsx-dev-runtime$/ }, () => ({ path: SHARED_REACT_JSX_RUNTIME_MODULE, external: true }));
+      build.onResolve({ filter: /^@zauso-ai\/capstan-react$/ }, () => ({ path: REACT_BROWSER_ENTRY }));
+      build.onResolve({ filter: /^@zauso-ai\/capstan-react\/client$/ }, () => ({ path: REACT_CLIENT_ENTRY }));
       build.onResolve({ filter: /^(\.|\.\.\/|\/).*\.js$/ }, (args) => {
         const resolved = path.isAbsolute(args.path)
           ? args.path
           : path.resolve(args.resolveDir, args.path);
         if (existsSync(resolved)) return { path: resolved };
-
         for (const ext of [".ts", ".tsx", ".js", ".jsx", ".mjs"]) {
           const candidate = resolved.slice(0, -3) + ext;
-          if (existsSync(candidate)) {
-            return { path: candidate };
-          }
+          if (existsSync(candidate)) return { path: candidate };
         }
-
         return null;
       });
     },
@@ -280,98 +341,84 @@ async function buildHydrationModule(
     platform: "browser",
     target: "es2022",
     jsx: "automatic",
-    sourcemap: "inline",
-    plugins: [jsExtensionResolver],
+    // dev 保留 jsx-dev-runtime(组件栈、key warning);prod 切到 jsx-runtime。
+    jsxDev: !IS_PRODUCTION,
+    // prod minify(标识符短化 + 死代码消除,bundle 砍 60-70%)。
+    minify: IS_PRODUCTION,
+    // prod 不内嵌 source map(否则 base64 内嵌 ~翻 2x 体积);dev 仍用 inline 方便定位。
+    sourcemap: IS_PRODUCTION ? false : "inline",
+    legalComments: "none",
+    // 注入 NODE_ENV 让 esbuild 把 React CJS 内 `if (process.env.NODE_ENV !== "production")`
+    // dead-code 消除:prod → production.js(~100KB);dev → development.js(带 warnings)。
+    define: { "process.env.NODE_ENV": JSON.stringify(process.env.NODE_ENV ?? "development") },
+    plugins: [sharedReactExternalResolver],
   });
 
-  return result.outputFiles[0]?.text ?? "";
+  const code = result.outputFiles[0]?.text ?? "";
+  const bundle: CachedBundle = { code, etag: makeEtag(code) };
+  if (cacheKey) __hydrateCache.set(cacheKey, bundle);
+  return bundle;
 }
 
-async function buildRouteModule(
-  route: RouteEntry,
-  appRoot: string,
-): Promise<string> {
+/**
+ * Vendor bootstrap bundle:inline React + react-dom + react-dom/client +
+ * jsx-runtime(prod 走 production.js),bundle 末把它们挂到
+ * window.__CAPSTAN_SHARED_*__。之后 hydrate.js 通过 SHARED_*_MODULE shim 从
+ * window re-export,跨所有 route 共享一份(浏览器只下载一次,首页之后零成本)。
+ *
+ * 内容只随 capstan-dev 版本 + NODE_ENV 变化 → 模块级 cache,URL 加
+ * ?v=<VENDOR_VERSION>,immutable cache 一年。
+ */
+async function buildVendorBootstrap(): Promise<CachedBundle> {
+  if (__vendorCache) return __vendorCache;
   const esbuild = await import("esbuild");
-  const relativeImport = (filePath: string): string => {
-    const rel = path.relative(appRoot, filePath).replace(/\\/g, "/");
-    return rel.startsWith(".") ? rel : `./${rel}`;
-  };
 
-  const jsExtensionResolver: import("esbuild").Plugin = {
-    name: "capstan-route-module-resolver",
+  const contents = [
+    `import * as SharedReact from "react";`,
+    `import * as SharedReactDom from "react-dom";`,
+    `import * as SharedReactDomClient from "react-dom/client";`,
+    `import * as SharedJsxRuntime from "react/jsx-runtime";`,
+    `window.__CAPSTAN_SHARED_REACT__ = SharedReact;`,
+    `window.__CAPSTAN_SHARED_REACT_DOM__ = SharedReactDom;`,
+    `window.__CAPSTAN_SHARED_REACT_DOM_CLIENT__ = SharedReactDomClient;`,
+    `window.__CAPSTAN_SHARED_JSX_RUNTIME__ = SharedJsxRuntime;`,
+  ].join("\n");
+
+  // 这里把 react/react-dom inline 进 bundle(走 capstan-dev 自己的 node_modules
+  // 解析,与 hydrate.js 外置 shim 互补)。
+  const inlineReactResolver: import("esbuild").Plugin = {
+    name: "capstan-vendor-inline-react",
     setup(build) {
-      build.onResolve({ filter: /^react$/ }, () => ({
-        path: SHARED_REACT_MODULE,
-        external: true,
-      }));
-
-      build.onResolve({ filter: /^react-dom$/ }, () => ({
-        path: SHARED_REACT_DOM_MODULE,
-        external: true,
-      }));
-
-      build.onResolve({ filter: /^react\/jsx-runtime$/ }, () => ({
-        path: SHARED_REACT_JSX_RUNTIME_MODULE,
-        external: true,
-      }));
-
-      build.onResolve({ filter: /^react\/jsx-dev-runtime$/ }, () => ({
-        path: SHARED_REACT_JSX_RUNTIME_MODULE,
-        external: true,
-      }));
-
-      build.onResolve({ filter: /^react-dom\/client$/ }, () => ({
-        path: SHARED_REACT_DOM_CLIENT_MODULE,
-        external: true,
-      }));
-
-      build.onResolve({ filter: /^@zauso-ai\/capstan-react$/ }, () => ({
-        path: REACT_BROWSER_ENTRY,
-      }));
-
-      build.onResolve({ filter: /^@zauso-ai\/capstan-react\/client$/ }, () => ({
-        path: REACT_CLIENT_ENTRY,
-      }));
-
-      build.onResolve({ filter: /^(\.|\.\.\/|\/).*\.js$/ }, (args) => {
-        const resolved = path.isAbsolute(args.path)
-          ? args.path
-          : path.resolve(args.resolveDir, args.path);
-        if (existsSync(resolved)) return { path: resolved };
-
-        for (const ext of [".ts", ".tsx", ".js", ".jsx", ".mjs"]) {
-          const candidate = resolved.slice(0, -3) + ext;
-          if (existsSync(candidate)) {
-            return { path: candidate };
-          }
-        }
-
-        return null;
-      });
+      build.onResolve({ filter: /^react$/ }, () => ({ path: FRAMEWORK_BROWSER_REACT_ENTRY }));
+      build.onResolve({ filter: /^react-dom$/ }, () => ({ path: FRAMEWORK_BROWSER_REACT_DOM_ENTRY }));
+      build.onResolve({ filter: /^react-dom\/client$/ }, () => ({ path: FRAMEWORK_BROWSER_REACT_DOM_CLIENT_ENTRY }));
+      build.onResolve({ filter: /^react\/jsx-runtime$/ }, () => ({ path: FRAMEWORK_BROWSER_REACT_JSX_RUNTIME_ENTRY }));
+      build.onResolve({ filter: /^react\/jsx-dev-runtime$/ }, () => ({ path: FRAMEWORK_BROWSER_REACT_JSX_DEV_RUNTIME_ENTRY }));
     },
   };
 
   const result = await esbuild.build({
     stdin: {
-      contents: [
-        `import Page from ${JSON.stringify(relativeImport(route.filePath))};`,
-        `export default Page;`,
-      ].join("\n"),
-      resolveDir: appRoot,
-      sourcefile: "__capstan_route_entry__.tsx",
-      loader: "tsx",
+      contents,
+      resolveDir: DEV_SRC_DIR,
+      sourcefile: "__capstan_vendor_bootstrap__.ts",
+      loader: "ts",
     },
     bundle: true,
     write: false,
     format: "esm",
     platform: "browser",
     target: "es2022",
-    jsx: "automatic",
-    sourcemap: "inline",
-    plugins: [jsExtensionResolver],
+    minify: IS_PRODUCTION,
+    sourcemap: IS_PRODUCTION ? false : "inline",
+    legalComments: "none",
+    define: { "process.env.NODE_ENV": JSON.stringify(process.env.NODE_ENV ?? "development") },
+    plugins: [inlineReactResolver],
   });
 
-  return result.outputFiles[0]?.text ?? "";
+  const code = result.outputFiles[0]?.text ?? "";
+  __vendorCache = { code, etag: makeEtag(code) };
+  return __vendorCache;
 }
 
 async function buildSharedReactModule(): Promise<string> {
@@ -696,15 +743,25 @@ function cloneBufferSource(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
 async function serveReactClientAssetFromConfig(
   assetPath: string,
   config: Pick<RuntimeAppConfig, "assetProvider" | "clientDir">,
+  c?: { req: { header: (k: string) => string | undefined } },
 ): Promise<Response> {
   if (config.assetProvider?.readClientAsset) {
     const provided = await config.assetProvider.readClientAsset(assetPath);
     if (provided) {
-      return new Response(cloneBufferSource(await materializeAsset(provided)), {
+      // capstan-react 自己的 dist/client/* — 内容随包版本固定;让浏览器走
+      // long-cache + ETag 验证(配 nginx etag 缓存效果一样)。
+      const body = cloneBufferSource(await materializeAsset(provided));
+      const etag = `W/"${createHash("sha1").update(new Uint8Array(body)).digest("hex").slice(0, 16)}"`;
+      if (c) {
+        const notModified = conditionalGet(c, etag);
+        if (notModified) return notModified;
+      }
+      return new Response(body, {
         status: 200,
         headers: {
           "Content-Type": provided.contentType ?? "application/octet-stream",
-          "Cache-Control": "no-cache",
+          "Cache-Control": "public, max-age=0, must-revalidate",
+          ETag: etag,
         },
       });
     }
@@ -734,11 +791,17 @@ async function serveReactClientAssetFromConfig(
     const ext = path.extname(resolved).toLowerCase();
     const contentType = MIME_TYPES[ext] ?? "application/octet-stream";
 
+    const etag = `W/"${createHash("sha1").update(content).digest("hex").slice(0, 16)}"`;
+    if (c) {
+      const notModified = conditionalGet(c, etag);
+      if (notModified) return notModified;
+    }
     return new Response(content, {
       status: 200,
       headers: {
         "Content-Type": contentType,
-        "Cache-Control": "no-cache",
+        "Cache-Control": "public, max-age=0, must-revalidate",
+        ETag: etag,
       },
     });
   } catch {
@@ -1782,6 +1845,13 @@ export async function buildRuntimeApp(
   });
 
   app.get("/_capstan/client/*", async (c) => {
+    const errorResponse = (msg: string): Response =>
+      new Response(`throw new Error(${JSON.stringify(msg)});`, {
+        status: 500,
+        headers: { "Content-Type": JS_CONTENT_TYPE, "Cache-Control": "no-cache" },
+      });
+
+    // ── 1. hydrate-current.js:per-route bundle,内存 cache + ETag 304 短路 ──
     if (c.req.path === "/_capstan/client/hydrate-current.js") {
       const url = new URL(c.req.url);
       const requestedPath = url.searchParams.get("path") || "/";
@@ -1789,173 +1859,69 @@ export async function buildRuntimeApp(
       if (!matched || matched.route.type !== "page") {
         return new Response("Not Found", { status: 404 });
       }
-
       try {
-        const code = await buildHydrationModule(
+        const { code, etag } = await buildHydrationModule(
           matched.route,
           config.rootDir ?? process.cwd(),
         );
-        return new Response(code, {
-          status: 200,
-          headers: {
-            "Content-Type": "application/javascript; charset=utf-8",
-            "Cache-Control": "no-cache",
-          },
-        });
+        const notModified = conditionalGet(c, etag);
+        if (notModified) return notModified;
+        return new Response(code, { status: 200, headers: revalidateJsHeaders(etag) });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         console.error("[capstan] Failed to build hydration module:", message);
-        return new Response(
-          `throw new Error(${JSON.stringify(`Failed to build hydration module: ${message}`)});`,
-          {
-            status: 500,
-            headers: {
-              "Content-Type": "application/javascript; charset=utf-8",
-              "Cache-Control": "no-cache",
-            },
-          },
-        );
+        return errorResponse(`Failed to build hydration module: ${message}`);
       }
     }
 
-    if (c.req.path === SHARED_REACT_MODULE) {
+    // ── 2. vendor/bootstrap.js:inline React,跨 route 共享一份,immutable ──
+    if (c.req.path === VENDOR_BOOTSTRAP_MODULE) {
       try {
-        const code = await buildSharedReactModule();
-        return new Response(code, {
-          status: 200,
-          headers: {
-            "Content-Type": "application/javascript; charset=utf-8",
-            "Cache-Control": "no-cache",
-          },
-        });
+        const { code, etag } = await buildVendorBootstrap();
+        const notModified = conditionalGet(c, etag);
+        if (notModified) return notModified;
+        const url = new URL(c.req.url);
+        const versioned = url.searchParams.has("v");
+        // URL 含 ?v=<VENDOR_VERSION> → immutable cache 一年;裸 URL fallback ETag 验证。
+        const headers = versioned
+          ? { ...IMMUTABLE_JS_HEADERS, ETag: etag }
+          : revalidateJsHeaders(etag);
+        return new Response(code, { status: 200, headers });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        return new Response(
-          `throw new Error(${JSON.stringify(`Failed to build shared react module: ${message}`)});`,
-          {
-            status: 500,
-            headers: {
-              "Content-Type": "application/javascript; charset=utf-8",
-              "Cache-Control": "no-cache",
-            },
-          },
-        );
+        console.error("[capstan] Failed to build vendor bootstrap:", message);
+        return errorResponse(`Failed to build vendor bootstrap: ${message}`);
       }
     }
 
-    if (c.req.path === SHARED_REACT_DOM_CLIENT_MODULE) {
+    // ── 3. SHARED_* shim 模块:从 window 拿已 inline 的 React,内容随版本稳定 ──
+    const shimBuilders: Record<string, () => Promise<string>> = {
+      [SHARED_REACT_MODULE]: buildSharedReactModule,
+      [SHARED_REACT_DOM_MODULE]: buildSharedReactDomModule,
+      [SHARED_REACT_DOM_CLIENT_MODULE]: buildSharedReactDomClientModule,
+      [SHARED_REACT_JSX_RUNTIME_MODULE]: buildSharedReactJsxRuntimeModule,
+    };
+    const shimBuilder = shimBuilders[c.req.path];
+    if (shimBuilder) {
       try {
-        const code = await buildSharedReactDomClientModule();
-        return new Response(code, {
-          status: 200,
-          headers: {
-            "Content-Type": "application/javascript; charset=utf-8",
-            "Cache-Control": "no-cache",
-          },
-        });
+        let cached = __sharedShimCache.get(c.req.path);
+        if (!cached) {
+          const code = await shimBuilder();
+          cached = { code, etag: makeEtag(code) };
+          __sharedShimCache.set(c.req.path, cached);
+        }
+        const notModified = conditionalGet(c, cached.etag);
+        if (notModified) return notModified;
+        return new Response(cached.code, { status: 200, headers: revalidateJsHeaders(cached.etag) });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        return new Response(
-          `throw new Error(${JSON.stringify(`Failed to build shared react-dom/client module: ${message}`)});`,
-          {
-            status: 500,
-            headers: {
-              "Content-Type": "application/javascript; charset=utf-8",
-              "Cache-Control": "no-cache",
-            },
-          },
-        );
+        return errorResponse(`Failed to build shared module: ${message}`);
       }
     }
 
-    if (c.req.path === SHARED_REACT_DOM_MODULE) {
-      try {
-        const code = await buildSharedReactDomModule();
-        return new Response(code, {
-          status: 200,
-          headers: {
-            "Content-Type": "application/javascript; charset=utf-8",
-            "Cache-Control": "no-cache",
-          },
-        });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        return new Response(
-          `throw new Error(${JSON.stringify(`Failed to build shared react-dom module: ${message}`)});`,
-          {
-            status: 500,
-            headers: {
-              "Content-Type": "application/javascript; charset=utf-8",
-              "Cache-Control": "no-cache",
-            },
-          },
-        );
-      }
-    }
-
-    if (c.req.path === SHARED_REACT_JSX_RUNTIME_MODULE) {
-      try {
-        const code = await buildSharedReactJsxRuntimeModule();
-        return new Response(code, {
-          status: 200,
-          headers: {
-            "Content-Type": "application/javascript; charset=utf-8",
-            "Cache-Control": "no-cache",
-          },
-        });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        return new Response(
-          `throw new Error(${JSON.stringify(`Failed to build shared react/jsx-runtime module: ${message}`)});`,
-          {
-            status: 500,
-            headers: {
-              "Content-Type": "application/javascript; charset=utf-8",
-              "Cache-Control": "no-cache",
-            },
-          },
-        );
-      }
-    }
-
-    if (c.req.path === "/_capstan/client/route-module.js") {
-      const url = new URL(c.req.url);
-      const requestedPath = url.searchParams.get("path") || "/";
-      const matched = matchRoute(manifest, "GET", requestedPath);
-      if (!matched || matched.route.type !== "page") {
-        return new Response("Not Found", { status: 404 });
-      }
-
-      try {
-        const code = await buildRouteModule(
-          matched.route,
-          config.rootDir ?? process.cwd(),
-        );
-        return new Response(code, {
-          status: 200,
-          headers: {
-            "Content-Type": "application/javascript; charset=utf-8",
-            "Cache-Control": "no-cache",
-          },
-        });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        console.error("[capstan] Failed to build route module:", message);
-        return new Response(
-          `throw new Error(${JSON.stringify(`Failed to build route module: ${message}`)});`,
-          {
-            status: 500,
-            headers: {
-              "Content-Type": "application/javascript; charset=utf-8",
-              "Cache-Control": "no-cache",
-            },
-          },
-        );
-      }
-    }
-
+    // ── 4. 静态 client asset(react/dist/client/*.js 等)→ ETag + revalidate ──
     const assetPath = c.req.path.slice("/_capstan/client/".length);
-    return serveReactClientAssetFromConfig(assetPath, config);
+    return serveReactClientAssetFromConfig(assetPath, config, c);
   });
 
   // --- Image optimization endpoint ------------------------------------------
