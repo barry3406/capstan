@@ -204,6 +204,122 @@ function openAIToolsBody(tools: LLMToolSpec[]): Record<string, unknown>[] {
   }));
 }
 
+// ---------------------------------------------------------------------------
+// Resilient fetch for LLM providers
+// ---------------------------------------------------------------------------
+//
+// LLM 网关常是跨境/高 RTT 入口:冷连接 TCP 1-2s、TLS 偶发抖到 7s+,单次建连能
+// 逼近 undici 默认 10s connect-timeout → `fetch failed` → agent run 直接 fatal。
+// 这里给所有 provider 的出站调用统一加固:
+//   1. keep-alive dispatcher —— 跨 agent iteration 复用连接,把 TCP+TLS 成本从
+//      "每轮一次" 摊到 "整个 run 基本一次"(高 iteration 的 run 提速最明显);
+//   2. connect timeout 抬到 20s —— 兜住境外网关 TLS 握手抖动,慢但能连上的不再被砍;
+//   3. 瞬时网络错(connect timeout / socket reset / DNS 抖)+ 429/5xx 自动重试,
+//      指数退避,尊重调用方 AbortSignal —— 把单点抖动对用户的可见失败抹平。
+//
+// 注:只在 fetch 抛错(连接没建起、还没拿到响应)或收到可重试状态码时重试;一旦
+// 拿到成功响应(含 stream)就交回调用方,绝不重发,避免重复副作用 / 双流。
+type FetchInitWithDispatcher = RequestInit & { dispatcher?: unknown };
+
+let __llmDispatcher: unknown | undefined;
+let __llmDispatcherResolved = false;
+async function getLlmDispatcher(): Promise<unknown | undefined> {
+  if (__llmDispatcherResolved) return __llmDispatcher;
+  __llmDispatcherResolved = true;
+  try {
+    const { Agent } = (await import("undici")) as { Agent: new (opts: unknown) => unknown };
+    __llmDispatcher = new Agent({
+      keepAliveTimeout: 60_000, // 空闲连接保活 60s,跨 iteration 复用
+      keepAliveMaxTimeout: 600_000,
+      connect: { timeout: 20_000 }, // TCP+TLS 上限 20s(默认 10s 对境外网关太紧)
+      headersTimeout: 600_000, // 慢推理模型上限交给调用方 signal,undici 不抢先砍
+      bodyTimeout: 600_000,
+      connections: 128,
+    });
+  } catch {
+    __llmDispatcher = undefined; // undici 不可用 → 退回全局 fetch,仅靠重试兜底
+  }
+  return __llmDispatcher;
+}
+
+const RETRYABLE_STATUS = new Set([408, 409, 429, 500, 502, 503, 504]);
+const RETRYABLE_CODES = new Set([
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_SOCKET",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "ETIMEDOUT",
+  "EAI_AGAIN",
+  "ENETUNREACH",
+  "EHOSTUNREACH",
+  "EPIPE",
+]);
+
+function isRetryableError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const e = err as { name?: string; message?: string; code?: string; cause?: { code?: string } };
+  if (e.name === "AbortError") return false; // 调用方主动取消 → 不重试
+  const code = e.cause?.code ?? e.code;
+  if (code && RETRYABLE_CODES.has(code)) return true;
+  // fetch() 对底层网络错统一抛 TypeError("fetch failed"),cause 不一定带 code。
+  return /fetch failed|network|socket|terminated/i.test(e.message ?? "");
+}
+
+function backoffMs(attempt: number): number {
+  return Math.min(500 * 2 ** attempt, 4_000); // 0.5s,1s,2s…(上限 4s)
+}
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const t = setTimeout(resolve, ms);
+    signal?.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(t);
+        resolve();
+      },
+      { once: true },
+    );
+  });
+}
+
+/**
+ * fetch + keep-alive dispatcher + 指数退避重试。signal 从 init 读取(既驱动在途
+ * fetch 的取消,也用于重试/退避的提前中止)。retries=2 → 最多 3 次尝试。
+ */
+async function resilientFetch(
+  url: string,
+  init: FetchInitWithDispatcher,
+  retries = 2,
+): Promise<Response> {
+  const signal = init.signal ?? undefined;
+  const dispatcher = await getLlmDispatcher();
+  const finalInit: FetchInitWithDispatcher = dispatcher ? { ...init, dispatcher } : init;
+  let lastErr: unknown;
+  for (let attempt = 0; ; attempt++) {
+    if (signal?.aborted) throw new DOMException("The operation was aborted.", "AbortError");
+    try {
+      const res = await fetch(url, finalInit as RequestInit);
+      if (RETRYABLE_STATUS.has(res.status) && attempt < retries) {
+        await res.text().catch(() => {}); // 释放连接以便 keep-alive 复用
+        await sleep(backoffMs(attempt), signal);
+        continue;
+      }
+      return res;
+    } catch (err) {
+      lastErr = err;
+      if (attempt < retries && !signal?.aborted && isRetryableError(err)) {
+        await sleep(backoffMs(attempt), signal);
+        continue;
+      }
+      throw err;
+    }
+  }
+  // 不可达:循环要么 return res 要么 throw;留作类型收尾。
+  throw lastErr;
+}
+
 export function openaiProvider(config: {
   apiKey: string;
   baseUrl?: string;
@@ -254,7 +370,7 @@ export function openaiProvider(config: {
     async chat(messages, options) {
       const body = buildBody(messages, options, false);
 
-      const res = await fetch(`${baseUrl}/chat/completions`, {
+      const res = await resilientFetch(`${baseUrl}/chat/completions`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${config.apiKey}`,
@@ -306,7 +422,7 @@ export function openaiProvider(config: {
     async *stream(messages, options) {
       const body = buildBody(messages, options, true);
 
-      const res = await fetch(`${baseUrl}/chat/completions`, {
+      const res = await resilientFetch(`${baseUrl}/chat/completions`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${config.apiKey}`,
@@ -528,7 +644,7 @@ export function anthropicProvider(config: {
     async chat(messages, options) {
       const body = buildBody(messages, options, false);
 
-      const res = await fetch(`${baseUrl}/messages`, {
+      const res = await resilientFetch(`${baseUrl}/messages`, {
         method: "POST",
         headers,
         body: JSON.stringify(body),
@@ -584,7 +700,7 @@ export function anthropicProvider(config: {
     async *stream(messages, options) {
       const body = buildBody(messages, options, true);
 
-      const res = await fetch(`${baseUrl}/messages`, {
+      const res = await resilientFetch(`${baseUrl}/messages`, {
         method: "POST",
         headers,
         body: JSON.stringify(body),
@@ -866,7 +982,7 @@ export function responsesProvider(config: {
         }));
       }
 
-      const res = await fetch(url, {
+      const res = await resilientFetch(url, {
         method: "POST",
         headers: { Authorization: `Bearer ${config.apiKey}`, "Content-Type": "application/json" },
         body: JSON.stringify(body),
