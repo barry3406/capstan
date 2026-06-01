@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { createEngineState, buildCheckpoint } from "./state.js";
 import { createToolCatalog } from "./tool-catalog.js";
 import { composeSystemPrompt } from "./prompt-composer.js";
-import { estimateTokens, snipMessages, microcompactMessages, autocompact } from "./compaction.js";
+import { estimateTokens, snipMessages, microcompactMessages, clearStaleToolResults, autocompact } from "./compaction.js";
 import { executeModelAndTools } from "./streaming-executor.js";
 import { extractImageEnvelope, buildToolResultMessageWithImage } from "./content-helpers.js";
 import { runStopHooks } from "./stop-hooks.js";
@@ -392,16 +392,31 @@ export async function* runSmartLoopStream(
         yield { type: "compression" as const, strategy: "snip" as const, tokensBefore, tokensAfter: estimateTokens(state.messages), timestamp: Date.now() };
       }
 
+      // Tool result clearing(默认,参考 Anthropic clear_tool_uses):保留最近 keep 个
+      // 工具结果完整,更早的剔成占位符。比旧的「截断到 N 字符」回收更多 context。
+      // `toolClear.enabled: false` 退回旧的 microcompact 截断行为。
+      const toolClearEnabled = config.compaction?.toolClear?.enabled !== false;
       const preMicroTokens = estimateTokens(state.messages);
-      const microResult = microcompactMessages(state.messages, {
-        maxToolResultChars: config.compaction?.microcompact?.maxToolResultChars ?? 2000,
-        protectedTail: config.compaction?.microcompact?.protectedTail ?? 6,
-      }, state.microcompactCache);
-      state.messages = microResult.messages;
-
-      const postMicroTokens = estimateTokens(state.messages);
-      if (postMicroTokens < preMicroTokens) {
-        yield { type: "compression" as const, strategy: "microcompact" as const, tokensBefore: preMicroTokens, tokensAfter: postMicroTokens, timestamp: Date.now() };
+      if (toolClearEnabled) {
+        const clearResult = clearStaleToolResults(
+          state.messages,
+          config.compaction?.toolClear?.keep ?? 3,
+        );
+        state.messages = clearResult.messages;
+        const postClearTokens = estimateTokens(state.messages);
+        if (clearResult.clearedCount > 0) {
+          yield { type: "compression" as const, strategy: "tool_clear" as const, tokensBefore: preMicroTokens, tokensAfter: postClearTokens, timestamp: Date.now() };
+        }
+      } else {
+        const microResult = microcompactMessages(state.messages, {
+          maxToolResultChars: config.compaction?.microcompact?.maxToolResultChars ?? 2000,
+          protectedTail: config.compaction?.microcompact?.protectedTail ?? 6,
+        }, state.microcompactCache);
+        state.messages = microResult.messages;
+        const postMicroTokens = estimateTokens(state.messages);
+        if (postMicroTokens < preMicroTokens) {
+          yield { type: "compression" as const, strategy: "microcompact" as const, tokensBefore: preMicroTokens, tokensAfter: postMicroTokens, timestamp: Date.now() };
+        }
       }
 
       // Re-estimate after snip + microcompact to avoid stale threshold checks

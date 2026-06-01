@@ -249,6 +249,13 @@ export interface SmartAgentMemoryConfig {
 export interface SnipConfig { preserveTail: number; }
 export interface MicrocompactConfig { maxToolResultChars: number; protectedTail: number; }
 export interface AutocompactConfig { threshold: number; maxFailures: number; bufferTokens?: number | undefined; }
+/**
+ * Tool result clearing(参考 Anthropic `clear_tool_uses_20250919`):压缩时保留最近
+ * `keep` 个工具结果完整,更早的工具结果消息内容替换成占位符(只剔返回结果,不动工具
+ * 调用本身)。默认启用、keep=3,对齐 Anthropic 官方默认。`enabled: false` 退回旧的
+ * microcompact 截断行为。
+ */
+export interface ToolClearConfig { keep?: number | undefined; enabled?: boolean | undefined; }
 
 // === Streaming Config ===
 export interface StreamingExecutorConfig { maxConcurrency: number; }
@@ -335,7 +342,7 @@ export interface SmartAgentConfig {
   stopHooks?: StopHook[] | undefined;
   maxIterations?: number | undefined;
   contextWindowSize?: number | undefined;
-  compaction?: Partial<{ snip: SnipConfig; microcompact: MicrocompactConfig; autocompact: AutocompactConfig }> | undefined;
+  compaction?: Partial<{ snip: SnipConfig; microcompact: MicrocompactConfig; autocompact: AutocompactConfig; toolClear: ToolClearConfig }> | undefined;
   streaming?: StreamingExecutorConfig | undefined;
   toolCatalog?: ToolCatalogConfig | undefined;
   hooks?: SmartAgentHooks | undefined;
@@ -369,7 +376,7 @@ export type AgentEvent =
   | { type: "tool_call_start"; tool: string; args: unknown; iteration: number; timestamp: number }
   | { type: "tool_call_end"; tool: string; args: unknown; result: unknown; status: "success" | "error"; durationMs?: number; iteration: number; timestamp: number }
   | { type: "skill_activated"; skill: string; iteration: number; timestamp: number }
-  | { type: "compression"; strategy: "snip" | "microcompact" | "autocompact" | "reactive"; tokensBefore: number; tokensAfter: number; timestamp: number }
+  | { type: "compression"; strategy: "snip" | "microcompact" | "autocompact" | "reactive" | "tool_clear"; tokensBefore: number; tokensAfter: number; timestamp: number }
   | { type: "memory_enrichment"; memoriesInjected: number; iteration: number; timestamp: number }
   | { type: "token_budget_warning"; usedPercent: number; iteration: number; timestamp: number }
   | { type: "model_fallback"; primaryError: string; fallbackModel: string; timestamp: number }

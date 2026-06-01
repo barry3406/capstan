@@ -170,6 +170,63 @@ export function microcompactMessages(
 }
 
 /* ------------------------------------------------------------------ */
+/*  Tool result clearing — Anthropic clear_tool_uses_20250919 风格      */
+/* ------------------------------------------------------------------ */
+
+/** 被清理的工具结果占位符(保留 `Tool "x" returned:` 前缀,只剔数据本体)。 */
+export const CLEARED_TOOL_RESULT_NOTICE = "[旧工具结果已清理 — 如需可重新调用对应工具获取]";
+
+export interface ToolClearResult {
+  messages: LLMMessage[];
+  clearedCount: number;
+  charsFreed: number;
+}
+
+/**
+ * Tool result clearing(参考 Anthropic `clear_tool_uses_20250919`):保留最近
+ * `keep` 个工具结果完整,更早的工具结果消息把数据本体替换成占位符(保留
+ * `Tool "x" returned:` 前缀让模型知道是哪个工具的结果被清了)。
+ *
+ * 只动工具结果消息(`Tool "..." returned:`),不碰 system / 用户消息 / 助手的工具
+ * 调用文本 —— 对齐 Anthropic「默认只剔返回结果,保留工具调用可见」。当轮 UI 仍显示
+ * 完整结果,只有进了压缩历史才被清。幂等:已清理过的、或清了反而更长的,跳过。
+ */
+export function clearStaleToolResults(messages: LLMMessage[], keep: number): ToolClearResult {
+  // 收集所有工具结果消息的下标(按时间先后)
+  const toolIdx: number[] = [];
+  for (let i = 0; i < messages.length; i++) {
+    const m = messages[i]!;
+    if (
+      m.role !== "system" &&
+      typeof m.content === "string" &&
+      TOOL_RESULT_PATTERN.test(m.content) &&
+      m.content.includes("returned:")
+    ) {
+      toolIdx.push(i);
+    }
+  }
+  // 最近 keep 个不清,更早的清
+  const keepFrom = Math.max(0, toolIdx.length - Math.max(0, keep));
+  const clearSet = new Set(toolIdx.slice(0, keepFrom));
+
+  let clearedCount = 0;
+  let charsFreed = 0;
+  const out = messages.map((m, i) => {
+    if (!clearSet.has(i)) return m;
+    const orig = m.content as string;
+    if (orig.includes(CLEARED_TOOL_RESULT_NOTICE)) return m; // 幂等:已清理
+    const prefixMatch = orig.match(/^Tool "[^"]*" returned[^:]*:/);
+    const prefix = prefixMatch ? prefixMatch[0] : "Tool returned:";
+    const cleared = `${prefix} ${CLEARED_TOOL_RESULT_NOTICE}`;
+    if (cleared.length >= orig.length) return m; // 清了不省反增 → 不动
+    clearedCount++;
+    charsFreed += orig.length - cleared.length;
+    return { role: m.role, content: cleared };
+  });
+  return { messages: out, clearedCount, charsFreed };
+}
+
+/* ------------------------------------------------------------------ */
 /*  Autocompact — LLM-driven summarization                           */
 /* ------------------------------------------------------------------ */
 
