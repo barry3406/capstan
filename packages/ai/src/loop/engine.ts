@@ -68,6 +68,18 @@ function formatToolResult(tool: string, result: unknown, maxChars?: number, pers
   return `Tool "${tool}" returned (truncated, ${json.length} chars total):\n${truncated}\n[...${json.length - maxChars} chars omitted]${persistRef}`;
 }
 
+/**
+ * 稳定序列化(key 排序),用于 loop guard 的调用签名:同一 (tool, args) 不因 key 顺序
+ * 不同被当成两次。
+ */
+function stableStringify(v: unknown): string {
+  if (v === null || typeof v !== "object") return JSON.stringify(v) ?? "null";
+  if (Array.isArray(v)) return `[${v.map(stableStringify).join(",")}]`;
+  const obj = v as Record<string, unknown>;
+  const keys = Object.keys(obj).sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(obj[k])}`).join(",")}}`;
+}
+
 function stripImageEnvelopeForText(value: unknown): unknown {
   if (!value || typeof value !== "object" || Array.isArray(value)) return value;
   const record = value as Record<string, unknown>;
@@ -869,6 +881,51 @@ export async function* runSmartLoopStream(
           role: "user",
           content: `[TOOL_RETRY] ${retryHint}\nPlease retry these tool calls.`,
         });
+      }
+
+      // --- Loop guard(防呆):同一 (tool, args) 完全相同重复调用、无进展时,先注入
+      // [LOOP_GUARD] 提醒让模型自纠,到硬上限再强制收尾。只认完全相同参数,合法批量
+      // (每次参数不同)/分页(page 变)不会误伤。 ---
+      const lg = config.loopGuard;
+      if (lg?.enabled !== false) {
+        const nudgeAt = lg?.repeatThreshold ?? 3;
+        const stopAt = lg?.hardStopThreshold ?? 5;
+        for (const record of toolRecords) {
+          const sig = `${record.tool}:${stableStringify(record.args)}`;
+          const seen = (state.callSignatures.get(sig) ?? 0) + 1;
+          state.callSignatures.set(sig, seen);
+
+          if (seen >= stopAt) {
+            const detail = `工具「${record.tool}」用完全相同的参数重复调用了 ${seen} 次仍无进展,自动停止以免空转。`;
+            yield { type: "error_recovery" as const, strategy: "loop_guard", details: detail, timestamp: Date.now() };
+            const finalText = `${detail}\n可能是这次请求本就无法满足(例如查询条件与已有数据不匹配),请换一种方式或检查参数后再试。`;
+            state.messages.push({ role: "assistant", content: finalText });
+            await saveSessionSummary(config, state.goal, state.iterations, "completed");
+            const loopResult: AgentRunResult = {
+              result: finalText,
+              iterations: state.iterations,
+              toolCalls: state.toolCalls,
+              taskCalls: state.taskCalls,
+              status: "completed",
+              checkpoint: buildCheckpoint(state, "completed"),
+            };
+            finalResultYielded = true;
+            yield { type: "run_end" as const, result: loopResult, durationMs: Date.now() - state.runStartTime, timestamp: Date.now() };
+            return loopResult;
+          }
+
+          if (seen === nudgeAt && !state.loopNudged.has(sig)) {
+            state.loopNudged.add(sig);
+            yield { type: "error_recovery" as const, strategy: "loop_guard", details: `工具「${record.tool}」已用相同参数调用 ${seen} 次,结果未变化。`, timestamp: Date.now() };
+            state.messages.push({
+              role: "user",
+              content:
+                `[LOOP_GUARD] 你已用完全相同的参数调用「${record.tool}」${seen} 次,结果没有变化。` +
+                `停止重复同一调用 —— 要么换不同的参数/工具,要么如实告诉用户当前无法完成及原因` +
+                `(例如查询条件与已有数据不匹配)。不要再重复这次失败的调用。`,
+            });
+          }
+        }
       }
 
       // If halted by hard failure, clear continuation and let LLM see the error

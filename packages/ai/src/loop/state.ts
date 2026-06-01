@@ -35,6 +35,10 @@ export interface EngineState {
   microcompactCache: Map<string, string>;
   /** Retry counts for tool error withholding — toolRequestId → retry count */
   toolRetries: Map<string, number>;
+  /** Loop guard:`tool:argsHash` → 本轮该签名被调用的次数(防呆,运行态、不进 checkpoint) */
+  callSignatures: Map<string, number>;
+  /** Loop guard:已对哪些签名发过 [LOOP_GUARD] 提醒(每签名只提醒一次) */
+  loopNudged: Set<string>;
 }
 
 export function createEngineState(
@@ -62,6 +66,8 @@ export function createEngineState(
       seenMemoryHashes: new Set(),
       microcompactCache: new Map(),
       toolRetries: new Map(),
+      callSignatures: new Map(),
+      loopNudged: new Set(),
     };
     // If resuming with a new message, append it
     if (resumeMessage) {
@@ -92,6 +98,8 @@ export function createEngineState(
     seenMemoryHashes: new Set(),
     microcompactCache: new Map(),
     toolRetries: new Map(),
+    callSignatures: new Map(),
+    loopNudged: new Set(),
   };
 }
 

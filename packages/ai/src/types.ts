@@ -352,6 +352,13 @@ export interface SmartAgentConfig {
   skills?: AgentSkill[] | undefined;
   evolution?: import("./evolution/types.js").EvolutionConfig | undefined;
   llmTimeout?: LLMTimeoutConfig | undefined;
+  /**
+   * Loop guard(防呆):同一工具用**完全相同的参数**重复调用、未取得进展时,先注入
+   * 一条 `[LOOP_GUARD]` 提醒让模型自纠,再到硬上限强制收尾 —— 防止"查不到↔已存在"这类
+   * 矛盾把 agent 拖进几十轮空转。只认完全相同参数,合法批量(每次参数不同)/分页不误伤。
+   * 默认启用,repeatThreshold=3(提醒)、hardStopThreshold=5(强制收尾)。
+   */
+  loopGuard?: { enabled?: boolean | undefined; repeatThreshold?: number | undefined; hardStopThreshold?: number | undefined } | undefined;
 }
 
 // === Agent Run Result ===
